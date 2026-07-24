@@ -8,10 +8,12 @@ The current public baseline contains the editing runtime and two architecture ch
 
 - The agent layer translates an editing request into calls to registered skills.
 - Each skill validates its input with a Pydantic model and performs one bounded editing operation.
-- `TimelineManager` owns the in-memory declarative timeline.
+- `TimelineManager` persists the active declarative timeline in the local workspace.
 - `TimelineRenderer` is responsible for producing media from that timeline.
 
 The intended architecture keeps creative planning separate from execution: a Director Agent produces a structured plan for user confirmation, an Editing Agent validates and executes that confirmed plan, and only atomic tools mutate timeline or media state. The current implementation is a prototype and does not yet implement every part of that target contract.
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the implemented runtime, binding responsibility contracts, compatibility exceptions, and current-to-target gap register.
 
 ## Requirements
 

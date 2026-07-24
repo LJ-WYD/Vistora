@@ -16,6 +16,11 @@ version: 1.0.0
 
 # Chapter 02 - Overall Architecture
 
+> This chapter describes the long-term conceptual architecture. See
+> [`/ARCHITECTURE.md`](../ARCHITECTURE.md) for the implemented runtime,
+> binding responsibility contracts, compatibility exceptions, and gap
+> register.
+
 ## Design Goals
 
 This chapter defines the stable architecture of Vistora. The
