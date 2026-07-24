@@ -38,6 +38,9 @@ src/
   agent/
     llm_client.py            OpenAI-compatible model client
     operator_agent.py        Current hybrid conversational/tool-calling agent
+  contracts/
+    models.py                Versioned plan, confirmation, execution,
+                              project, and atomic tool envelopes
   core/
     timeline.py              Timeline models and MoviePy/FFmpeg renderer
     timeline_manager.py      Persistence for the active timeline
@@ -51,6 +54,8 @@ tests/
   run_validation.py          Synthetic end-to-end timeline/render validation
   test_architecture_boundaries.py
                               Static agent-boundary and registry checks
+  test_contracts.py           Versioning, confirmation, compatibility,
+                              serialization, and envelope checks
 ```
 
 There is no frontend application, browser UI, desktop GUI, API server, or UI state store in the repository. The only user interface is the command line.
@@ -89,9 +94,24 @@ Registration is hard-coded. There is no plugin discovery, registry version, capa
 5. It immediately parses and executes those calls, up to ten iterations.
 6. It returns tool results to the LLM and finally to the user.
 
-This flow validates individual tool arguments through `BaseSkill.execute`, but it has no separate Director Agent, structured creative-plan model, plan identifier, confirmation state, confirmation gate, or constrained Editing Agent. Therefore `OperatorAgent` MUST be treated as a legacy prototype/hybrid, not as proof that the target agent contracts are implemented.
+This flow validates individual tool arguments through `BaseSkill.execute`, but it has no separate Director Agent, runtime confirmation gate, or constrained Editing Agent. It does not construct or consume the versioned contract models described below. Therefore `OperatorAgent` MUST be treated as a legacy prototype/hybrid, not as proof that the target agent contracts are enforced.
 
 `LLMClient` is an OpenAI-compatible transport configured by `LLM_API_KEY`, `LLM_BASE_URL`, and `LLM_MODEL`. It is not a Director or Editing Agent by itself.
+
+### Versioned contract infrastructure
+
+`src/contracts/` implements schema infrastructure without changing the current runtime flow. All top-level envelopes use schema version `1.0.0`, reject unknown fields and unsupported versions, and carry stable IDs or references.
+
+| Contract | Schema name | Implemented guarantee |
+| --- | --- | --- |
+| `DirectorPlan` | `vistora.director-plan` | Versioned creative intent, ordered proposed atomic operations, and a canonical SHA-256 digest. |
+| `UserConfirmationRecord` | `vistora.user-confirmation` | Immutable decision referencing an exact plan ID, version, and digest. |
+| `EditingExecutionPlan` | `vistora.editing-execution-plan` | Rejects missing, rejected, mismatched, incomplete, duplicate, or creatively drifted plan steps. |
+| `TimelineProjectDocument` | `vistora.timeline-project` | Adds project ID, revision, and schema metadata while deterministically wrapping legacy timeline JSON. |
+| `AtomicToolRequestEnvelope` | `vistora.atomic-tool-request` | Traces one confirmed execution step and validates arguments with the existing registered skill input model. |
+| `AtomicToolResultEnvelope` | `vistora.atomic-tool-result` | Correlates a result to its request/execution/step and enforces consistent success/error state. |
+
+These contracts are not wired into `OperatorAgent`, the CLI, `TimelineManager`, or tool execution yet. Their presence does not create a Director Agent or Editing Agent and does not authorize execution.
 
 ### Timeline state and rendering
 
@@ -102,6 +122,8 @@ This flow validates individual tool arguments through `BaseSkill.execute`, but i
 - `TimelineConfig`: output dimensions, frame rate, and a mapping of tracks.
 
 `TimelineManager` persists one active timeline at `.workspace/current_timeline.json`. It creates default video and audio tracks, loads and validates existing JSON, saves the full model, and deletes the file when reset. It has no project identifier, transaction boundary, concurrency control, revision check, history, or rollback.
+
+`TimelineProjectDocument` is an opt-in versioned envelope around the existing `TimelineConfig`. An unwrapped legacy dictionary containing `width`, `height`, `fps`, and `tracks` remains valid for `TimelineConfig` and can also be parsed by `TimelineProjectDocument`; the wrapper assigns revision `1`, records `legacy.timeline.v0`, and derives a deterministic `project_legacy_*` ID from canonical timeline content. Current timeline persistence is intentionally unchanged.
 
 `TimelineRenderer` consumes a `TimelineConfig` and writes media. It selects single-clip and multi-clip FFmpeg fast paths where possible and falls back to a MoviePy composite path. Hardware/color/proxy helpers live under `src/utils/`.
 
@@ -121,7 +143,7 @@ The implemented mutation ownership is:
 
 These are the only registered atomic mutation entry points. Tests may reset state directly as test-fixture setup. The CLI `render` command remains a documented nonconforming compatibility exception.
 
-Tool result dictionaries and exceptions are not yet governed by one versioned result/error schema. Atomicity currently means a bounded operation exposed as one skill; it does not yet guarantee transactional rollback, idempotency, or crash recovery.
+Versioned atomic request/result envelopes now define the target boundary and can validate request arguments against the existing registry. Current skills still return their existing dictionaries or raise exceptions; the runtime does not wrap them yet. Atomicity currently means a bounded operation exposed as one skill; it does not yet guarantee transactional rollback, idempotency, or crash recovery.
 
 ### Validation today
 
@@ -133,6 +155,8 @@ Tool result dictionaries and exceptions are not yet governed by one versioned re
 - every object in the public registry is a `BaseSkill` with a unique, object-shaped JSON schema whose exported name matches its registry key.
 
 This lightweight check does not claim that the missing Director, confirmation gate, or Editing Agent exists.
+
+`tests/test_contracts.py` covers schema/version rejection, plan digests and confirmation mismatches, prohibition of unconfirmed execution, creative-step drift, JSON round trips, deterministic legacy timeline migration, existing registry/schema validation, and consistent tool result states. These are contract tests, not end-to-end Director or Editing Agent tests.
 
 ## Target contracts
 
@@ -152,29 +176,29 @@ The Director Agent MUST NOT execute atomic editing tools, mutate timelines, writ
 
 ### Structured creative plan
 
-A future executable plan MUST be versioned and include at least:
+The implemented `DirectorPlan` contract includes:
 
 ```text
-plan_id
+schema_name
 schema_version
-status: draft | confirmed | rejected
+plan_id
+plan_version
+created_at
 objective
 requirements
 assumptions[]
 creative_direction
 operations[]:
-  step_id
+  operation_id
   tool_name
   arguments
   rationale
   expected_effect
 outputs[]
 risks[]
-confirmed_by
-confirmed_at
 ```
 
-Only `status: confirmed` is executable. Confirmation MUST bind to an immutable plan version or digest so later edits invalidate the confirmation. Free-form prose alone is not an executable plan.
+`UserConfirmationRecord` separately records `confirmed` or `rejected` and binds to `plan_id`, `plan_version`, and the plan's canonical SHA-256 digest. Only an `EditingExecutionPlan` carrying a matching `confirmed` record is valid. Later plan edits change the digest and invalidate the handoff. Free-form prose alone is not an executable plan.
 
 ### Editing Agent
 
@@ -206,14 +230,14 @@ Mutation-capable utilities and core objects are implementation details behind to
 | ID | Gap | Evidence today | Required future outcome |
 | --- | --- | --- | --- |
 | G-01 | Director Agent absent | No Director class, prompt, plan model, or Director tests. | Add the general-capability Director without mutation authority. |
-| G-02 | No structured plan or confirmation gate | Tool calls execute immediately from the LLM response. | Add a versioned plan contract and immutable user confirmation binding. |
+| G-02 | Contracts are not wired into a confirmation gate | Versioned plan/confirmation/execution models exist, but current tool calls execute immediately from the LLM response. | Make the future runtime produce these contracts and gate execution on the confirmed handoff. |
 | G-03 | Operator combines incompatible roles | `OperatorAgent` owns dialogue, planning, and execution. | Separate/retire the hybrid behind Director and Editing contracts. |
 | G-04 | Editing Agent absent | No constrained plan executor exists. | Add an executor that accepts only confirmed structured plans. |
-| G-05 | Registry is hard-coded and unversioned | `SKILLS` is defined in `src/main.py`. | Provide a reusable registry contract with schema/version metadata. |
+| G-05 | Registry is hard-coded and unversioned | `SKILLS` is defined in `src/main.py`; request envelopes can validate against it but do not replace it. | Provide a reusable registry contract with schema/version metadata. |
 | G-06 | Direct CLI render bypass | `render` instantiates `TimelineRenderer` directly. | Route mutations through an explicit atomic tool or clearly isolated maintenance interface. |
 | G-07 | Timeline state lacks production safeguards | One JSON file; no revision, transaction, history, or rollback. | Add explicit project/revision and recovery semantics. |
-| G-08 | Tool outputs and side effects are not standardized | Each skill returns an ad hoc dictionary or raises. | Define versioned result, error, and side-effect contracts. |
+| G-08 | Tool envelopes are not wired into execution | Versioned request/result/error models exist, but each skill still returns an ad hoc dictionary or raises. | Wrap runtime dispatch and declare side effects without breaking skill schemas. |
 | G-09 | No frontend/UI | Repository contains only a CLI. | Design UI state around draft, confirmation, execution, and result phases. |
-| G-10 | Tests do not cover target gates | Current test covers a successful editing/render path only. | Add Director/plan/confirmation/Editing tests as those components are implemented. |
+| G-10 | Runtime tests do not cover target gates | Contract tests cover confirmation rules; no Director or Editing runtime exists to exercise end-to-end. | Add agent-level gate tests as those components are implemented. |
 
 This gap register is descriptive. Closing any gap is a separate implementation task and is outside the scope of this architecture-audit step.
