@@ -10,6 +10,7 @@ The current public baseline contains the editing runtime and two architecture ch
 - Each skill validates its input with a Pydantic model and performs one bounded editing operation.
 - `TimelineManager` persists the active declarative timeline in the local workspace.
 - `TimelineRenderer` is responsible for producing media from that timeline.
+- `TimelineSnapshotService` exposes detached, immutable read models for inspection without changing timeline or media state.
 
 The intended architecture keeps creative planning separate from execution: a Director Agent produces a structured plan for user confirmation, an Editing Agent validates and executes that confirmed plan, and only atomic tools mutate timeline or media state. The current implementation is a prototype and does not yet implement every part of that target contract.
 
@@ -57,6 +58,17 @@ Run one skill directly:
 ```powershell
 python src/main.py run-skill --name VideoClearTimelineSkill --params "{}"
 ```
+
+Read the current timeline without changing it:
+
+```python
+from timeline_query import TimelineSnapshotService
+
+snapshot = TimelineSnapshotService.snapshot_current()
+print(snapshot.model_dump_json(indent=2))
+```
+
+The `vistora.timeline-snapshot` output is versioned and deterministic. It includes project/revision identity, configured tracks and clips, source references, declared timing, and aggregate duration/count fields. The service accepts a current `TimelineConfig`, legacy timeline JSON, or a versioned `TimelineProjectDocument`. It does not probe media, save state, render, or expose mutable source models. Add `src` to `PYTHONPATH` when invoking this library directly from the repository root.
 
 ## Validation
 

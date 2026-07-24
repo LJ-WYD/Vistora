@@ -41,6 +41,9 @@ src/
   contracts/
     models.py                Versioned plan, confirmation, execution,
                               project, and atomic tool envelopes
+  timeline_query/
+    models.py                Immutable, versioned timeline read models
+    service.py               Deterministic read-only snapshot construction
   core/
     timeline.py              Timeline models and MoviePy/FFmpeg renderer
     timeline_manager.py      Persistence for the active timeline
@@ -58,6 +61,8 @@ tests/
   test_contracts.py           Versioning, confirmation, compatibility,
                               serialization, and envelope checks
   test_reference_workflow.py  Repeatability, traceability, and media checks
+  test_timeline_snapshot.py   Read isolation, stability, compatibility,
+                              reference, and boundary checks
 ```
 
 There is no frontend application, browser UI, desktop GUI, API server, or UI state store in the repository. The only user interface is the command line.
@@ -127,6 +132,33 @@ These contracts are not wired into `OperatorAgent`, the CLI, `TimelineManager`, 
 
 `TimelineProjectDocument` is an opt-in versioned envelope around the existing `TimelineConfig`. An unwrapped legacy dictionary containing `width`, `height`, `fps`, and `tracks` remains valid for `TimelineConfig` and can also be parsed by `TimelineProjectDocument`; the wrapper assigns revision `1`, records `legacy.timeline.v0`, and derives a deterministic `project_legacy_*` ID from canonical timeline content. Current timeline persistence is intentionally unchanged.
 
+### Read-only timeline boundary
+
+`src/timeline_query/` is the stable library boundary for future timeline/player visualization. `TimelineSnapshotService.snapshot` accepts a `TimelineConfig`, legacy timeline dictionary, or `TimelineProjectDocument`; `snapshot_current` delegates only to `TimelineManager.get_current_timeline`. Neither method saves, resets, renders, executes a skill, probes media, or writes files.
+
+The returned `vistora.timeline-snapshot` schema is version `1.0.0`. Its frozen, recursively detached read models expose:
+
+- snapshot, project, revision, source-schema, migration, and timeline-digest identity;
+- output width, height, and frame rate;
+- every configured track with its mapping key, model ID, current kind, order, clips, count, and derived duration;
+- every clip with its configured ID, source reference, trim, placement, speed-adjusted duration, audio flags, volume, reversal, and rotation;
+- aggregate track/clip/video/audio counts, timeline duration, and empty state.
+
+Track mapping order is deterministic: the exact `video` key, the exact `audio` key, then other keys lexicographically. Clip-list order is preserved because it is part of the current timeline's editing semantics. Vistora currently supports a mapping of arbitrary tracks in its data model, while rendering has special behavior only for the exact `video` and `audio` keys. Other tracks are therefore reported accurately as `other`; the read layer does not invent lanes, compositing rules, transitions, thumbnails, waveforms, or availability state.
+
+Legacy timelines receive the existing content-derived `project_legacy_*` identity and revision `1`. A native `TimelineProjectDocument` retains its explicit project ID and revision. Consumers that need optimistic consistency can supply a `TimelineSnapshotReference`; a mismatched project or revision fails before data is returned. Configured source paths are stable references only and are not checked for existence, keeping repeated snapshots independent of machine and filesystem state.
+
+Example:
+
+```python
+from timeline_query import TimelineSnapshotService
+
+snapshot = TimelineSnapshotService.snapshot_current()
+payload = snapshot.model_dump(mode="json")
+```
+
+This boundary is suitable for Director read context or a future UI, but it is not a mutation API. The Director and Editing Agent contracts remain unchanged: the Director may inspect this data, the Editing Agent validates and dispatches a confirmed plan, and only registered atomic tools may mutate timeline or media.
+
 `TimelineRenderer` consumes a `TimelineConfig` and writes media. It selects single-clip and multi-clip FFmpeg fast paths where possible and falls back to a MoviePy composite path. Hardware/color/proxy helpers live under `src/utils/`.
 
 ### Atomic skill contract today
@@ -159,6 +191,8 @@ Versioned atomic request/result envelopes now define the target boundary and can
 This lightweight check does not claim that the missing Director, confirmation gate, or Editing Agent exists.
 
 `tests/test_contracts.py` covers schema/version rejection, plan digests and confirmation mismatches, prohibition of unconfirmed execution, creative-step drift, JSON round trips, deterministic legacy timeline migration, existing registry/schema validation, and consistent tool result states. These are contract tests, not end-to-end Director or Editing Agent tests.
+
+`tests/test_timeline_snapshot.py` proves deterministic ordering/serialization, derived summaries, immutable detachment, legacy and versioned compatibility, project/revision guard failures, clear invalid-reference/timing failures, persistence read isolation, and the absence of mutation/media-engine calls from the query package. The existing static agent-import test continues to prevent agent modules from importing mutation engines.
 
 ### Reference main-workflow regression
 
@@ -270,9 +304,10 @@ Mutation-capable utilities and core objects are implementation details behind to
 | G-04 | Editing Agent absent | No constrained plan executor exists. | Add an executor that accepts only confirmed structured plans. |
 | G-05 | Registry is hard-coded and unversioned | `SKILLS` is defined in `src/main.py`; request envelopes can validate against it but do not replace it. | Provide a reusable registry contract with schema/version metadata. |
 | G-06 | Direct CLI render bypass | `render` instantiates `TimelineRenderer` directly. | Route mutations through an explicit atomic tool or clearly isolated maintenance interface. |
-| G-07 | Timeline state lacks production safeguards | One JSON file; no revision, transaction, history, or rollback. | Add explicit project/revision and recovery semantics. |
+| G-07 | Timeline persistence lacks production safeguards | One legacy JSON file; the opt-in project document and read snapshot expose revision metadata, but current persistence has no transaction, revision enforcement, history, or rollback. | Add explicit versioned persistence and recovery semantics without weakening the read boundary. |
 | G-08 | Tool envelopes are not wired into execution | Versioned request/result/error models exist, but each skill still returns an ad hoc dictionary or raises. | Wrap runtime dispatch and declare side effects without breaking skill schemas. |
 | G-09 | No frontend/UI | Repository contains only a CLI. | Design UI state around draft, confirmation, execution, and result phases. |
 | G-10 | Production agent gates remain untested | The reference harness covers contract confirmation, atomic dispatch, traceability, and media output, but no Director or Editing runtime exists. | Add agent-level gate tests as those components are implemented. |
+| G-11 | No visualization consumer | A stable read-only snapshot exists, but no frontend, player, server, thumbnails, or waveforms exist. | Build future visualization against `vistora.timeline-snapshot` without importing mutation engines. |
 
 This gap register is descriptive. Closing any gap requires a separate approved implementation task.
