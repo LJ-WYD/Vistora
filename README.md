@@ -1,6 +1,6 @@
-# AetherEdit
+# Vistora
 
-AetherEdit is an early-stage, agent-driven video editing prototype. It represents edits as a declarative timeline and applies them through small, schema-validated editing skills backed by MoviePy and FFmpeg.
+Vistora is an early-stage, agent-driven video editing prototype. It represents edits as a declarative timeline and applies them through small, schema-validated editing skills backed by MoviePy and FFmpeg.
 
 The current public baseline contains the editing runtime and two architecture chapters. Generated media, local workspaces, model weights, credentials, and machine-specific investigation scripts are intentionally excluded.
 
@@ -68,7 +68,13 @@ Generated validation media and local runtime state are ignored by Git.
 
 ## Project status
 
-AetherEdit is pre-alpha. Interfaces, schemas, rendering behavior, and hardware acceleration support may change. Review generated timelines and outputs before relying on them.
+Vistora is pre-alpha. Interfaces, schemas, rendering behavior, and hardware acceleration support may change. Review generated timelines and outputs before relying on them.
+
+## Naming and compatibility
+
+The product and public repository are named Vistora. Existing checkouts may still use an `AetherEdit` directory name; the directory name is not part of the runtime contract and does not need to be changed.
+
+This naming release intentionally keeps existing Python module paths, `OperatorAgent`, and atomic skill identifiers such as `VideoAddClipSkill` unchanged. They are technical compatibility surfaces or domain terms rather than public product branding.
 
 ## Security and privacy
 

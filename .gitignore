@@ -18,7 +18,7 @@ venv/
 .env.*
 !.env.example
 
-# AetherEdit runtime workspaces and generated output
+# Vistora runtime workspaces and generated output
 .workspace/
 video/
 output/

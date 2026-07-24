@@ -5,7 +5,7 @@ from skills.base import BaseSkill
 
 class OperatorAgent:
     """
-    Video OS 操作层 Agent。
+    Vistora 操作层 Agent。
     动态读取已注册的原子 Skill，利用 LLM 的 Tool Calling 机制自主规划剪辑步骤并调度物理层执行。
     """
     def __init__(self, skills: Dict[str, BaseSkill]):
@@ -23,7 +23,7 @@ class OperatorAgent:
 
         # 构建 Agent 的系统级提示词，设定其行为规范与智能人设
         self.system_prompt = (
-            "你是一个 Video OS 视频智能操作系统的大脑助手（Agent）。\n"
+            "你是 Vistora 视频智能操作系统的大脑助手（Agent）。\n"
             "你可以使用下方的各种视频处理技能（Skills）来帮助用户处理视频剪辑任务。\n"
             "当用户向你下达视频编辑、裁剪、拼接、变速、倒放、延时摄影合成等任务时，"
             "你需要根据当前已注册的 Skills 及其描述和参数定义，自主拆解用户意图，并规划调用这些工具。\n"

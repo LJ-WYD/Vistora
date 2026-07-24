@@ -10,7 +10,7 @@ design_principles:
 - Replaceable Provider
 last_updated: 2026-06-27
 status: Draft
-title: Video OS Software Architecture Specification
+title: Vistora Software Architecture Specification
 version: 1.0.0
 ---
 
@@ -18,7 +18,7 @@ version: 1.0.0
 
 ## Design Goals
 
-This chapter defines the stable architecture of Video OS. The
+This chapter defines the stable architecture of Vistora. The
 architecture is designed to remain stable while AI models, providers,
 workflows, and infrastructure evolve over time.
 

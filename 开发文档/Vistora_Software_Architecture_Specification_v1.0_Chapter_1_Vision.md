@@ -1,4 +1,4 @@
-# Video OS Software Architecture Specification
+# Vistora Software Architecture Specification
 
 **Version:** v1.0
 
@@ -8,7 +8,7 @@
 
 ### Product Name
 
-**Video OS**
+**Vistora**
 
 ### Slogan
 
@@ -16,21 +16,21 @@
 
 ### One Sentence
 
-> Video OS is an AI-native operating system for understanding, planning,
+> Vistora is an AI-native operating system for understanding, planning,
 > editing, learning, and continuously optimizing video content.
 
 ### 中文定义
 
-Video OS 并不是一个视频剪辑软件，也不是一个 AI
+Vistora 并不是一个视频剪辑软件，也不是一个 AI
 剪辑工具，而是围绕视频理解（Understanding）、认知（Cognition）、知识（Knowledge）和持续学习（Learning）构建的视频智能操作系统。
 
-Video OS 将视频从一种"媒体文件（Media
+Vistora 将视频从一种"媒体文件（Media
 File）"，转变为一种"可理解、可推理、可学习、可持续优化的知识资产（Knowledge
 Asset）"。
 
 ------------------------------------------------------------------------
 
-## 1.2 Why Video OS
+## 1.2 Why Vistora
 
 ### 传统视频软件
 
@@ -56,7 +56,7 @@ Export
 
 本质上仍然是在操作视频。
 
-### Video OS
+### Vistora
 
 ``` text
 Video
@@ -74,7 +74,7 @@ Learning
 Optimization
 ```
 
-Video OS 操作的是 Knowledge，而不是 Video。
+Vistora 操作的是 Knowledge，而不是 Video。
 
 Video Editing 只是整个系统中的一个 Skill。
 
@@ -106,7 +106,7 @@ Video Editing 只是整个系统中的一个 Skill。
 
 ## 1.4 Product Goal
 
-Video OS 的长期目标不是帮助用户"剪视频"，而是帮助用户创造更好的视频。
+Vistora 的长期目标不是帮助用户"剪视频"，而是帮助用户创造更好的视频。
 
 系统应该能够：
 
@@ -122,13 +122,13 @@ Video OS 的长期目标不是帮助用户"剪视频"，而是帮助用户创造
 
 ## 1.5 Product Boundary
 
-### Video OS 不负责
+### Vistora 不负责
 
 -   视频播放器
 -   视频托管平台
 -   社交平台
 
-### Video OS 负责
+### Vistora 负责
 
 -   视频理解
 -   内容策划
@@ -165,7 +165,7 @@ Everything is Replaceable
 
 ## 1.7 Long-term Vision
 
-未来，Video OS 将成为真正意义上的 **AI Director**。
+未来，Vistora 将成为真正意义上的 **AI Director**。
 
 用户只需要描述目标：
 

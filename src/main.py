@@ -77,7 +77,7 @@ def chat_loop():
     from agent.operator_agent import OperatorAgent
     agent = OperatorAgent(SKILLS)
     print("==========================================================")
-    print("🎬 Video OS AI 操作层 Agent 对话交互终端启动成功！")
+    print("🎬 Vistora AI 操作层 Agent 对话交互终端启动成功！")
     print("您可以直接使用口语指令控制视频进行裁剪、拼接、倒放、变速或延时合成。")
     print("输入 'exit' 或 'quit' 可随时退出。")
     print("==========================================================")
@@ -88,7 +88,7 @@ def chat_loop():
             if not prompt.strip():
                 continue
             if prompt.strip().lower() in ("exit", "quit", "q"):
-                print("退出成功。感谢使用 Video OS！")
+                print("退出成功。感谢使用 Vistora！")
                 break
             
             response = agent.run(prompt)
@@ -100,7 +100,7 @@ def chat_loop():
             print(f"\n❌ 对话执行异常: {e}")
 
 def main():
-    parser = argparse.ArgumentParser(description="Video OS 命令行交互入口")
+    parser = argparse.ArgumentParser(description="Vistora 命令行交互入口")
     subparsers = parser.add_subparsers(dest="command", help="可选子命令")
     
     # 1. list-skills 子命令
