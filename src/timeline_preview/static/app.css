@@ -807,7 +807,7 @@ h3 {
   height: calc(var(--lane-height) - 20px);
   min-width: 28px;
   overflow: hidden;
-  padding: 8px 10px;
+  padding: 0;
   border: 1px solid rgb(255 255 255 / 18%);
   border-radius: 9px;
   color: white;
@@ -818,6 +818,76 @@ h3 {
   cursor: pointer;
   text-align: left;
   touch-action: manipulation;
+}
+
+.thumbnail-strip,
+.waveform,
+.analysis-placeholder {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.thumbnail-strip {
+  display: flex;
+  background: #151a24;
+}
+
+.thumbnail-strip img {
+  min-width: 0;
+  flex: 1 1 0;
+  object-fit: cover;
+  opacity: 0.78;
+  filter: saturate(0.88) contrast(1.06);
+}
+
+.waveform {
+  background:
+    linear-gradient(180deg, transparent 49%, rgb(255 255 255 / 20%) 50%, transparent 51%),
+    linear-gradient(135deg, rgb(47 164 150 / 25%), transparent);
+}
+
+.waveform path {
+  fill: none;
+  stroke: #9cf8e8;
+  stroke-width: 0.75;
+  vector-effect: non-scaling-stroke;
+}
+
+.analysis-placeholder {
+  display: grid;
+  place-items: center;
+  padding: 6px;
+  color: rgb(255 255 255 / 66%);
+  background:
+    repeating-linear-gradient(
+      -45deg,
+      rgb(255 255 255 / 4%) 0,
+      rgb(255 255 255 / 4%) 7px,
+      transparent 7px,
+      transparent 14px
+    );
+  font-size: 0.57rem;
+  line-height: 1.25;
+  text-align: center;
+}
+
+.clip-copy {
+  position: absolute;
+  z-index: 2;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 12px 8px 5px;
+  background: linear-gradient(transparent, rgb(5 8 14 / 88%));
+  gap: 8px;
+  pointer-events: none;
 }
 
 .clip.audio {
@@ -844,14 +914,24 @@ h3 {
 }
 
 .clip strong {
-  margin-bottom: 5px;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  margin: 0;
   font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.clip span {
+.clip-copy > span {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
   color: rgb(255 255 255 / 75%);
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 0.6rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .playhead {

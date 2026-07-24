@@ -51,6 +51,8 @@ const state = {
   selected: null,
   animationFrame: null,
   capabilities: {},
+  analysis: {},
+  analysisState: "idle",
   draftEdits: [],
   draftHistory: [],
   proposalId: null,
@@ -117,6 +119,35 @@ function detailRow(label, value) {
     textElement("dd", "", value),
   );
   return row;
+}
+
+function analysisKey(trackKey, clipId) {
+  return `${trackKey}\n${clipId}`;
+}
+
+function analysisFor(track, clip) {
+  return state.analysis[analysisKey(track.track_key, clip.clip_id)] || null;
+}
+
+function analysisStatusLabel(result) {
+  if (!result) {
+    return state.analysisState === "loading"
+      ? "Analysis loading"
+      : "Analysis unavailable";
+  }
+  if (result.status === "ready" && result.media_kind === "video") {
+    return `Ready · ${result.thumbnails.length} deterministic frames`;
+  }
+  if (result.status === "ready" && result.media_kind === "audio") {
+    return `Ready · ${result.waveform.length} aligned peak bins`;
+  }
+  const labels = {
+    source_unavailable: "Source missing, unreadable, or not allowlisted",
+    unsupported_media_type: "Unsupported media type",
+    media_kind_mismatch: "Media type does not match the track",
+    analysis_failed: "Media decoding failed",
+  };
+  return labels[result.status_code] || "Analysis unavailable";
 }
 
 function newStableId(prefix) {
@@ -353,9 +384,14 @@ function renderSummary() {
 
 function showDetails(track, clip) {
   const availability = state.media[clip.source.source_id];
+  const analysis = analysisFor(track, clip);
   ui.clipDetails.replaceChildren(
     detailRow("Clip ID", clip.clip_id),
     detailRow("Track", `${track.track_key} · ${track.kind}`),
+    detailRow(
+      "Media type",
+      availability?.content_type || `${track.kind} · unavailable`,
+    ),
     detailRow(
       "Timeline",
       `${formatSeconds(clip.timeline_start_seconds)} → ` +
@@ -385,6 +421,7 @@ function showDetails(track, clip) {
         ? `Allowlisted · ${availability.content_type}`
         : "Unavailable or outside allowlisted roots",
     ),
+    detailRow("Visualization", analysisStatusLabel(analysis)),
   );
 }
 
@@ -508,6 +545,66 @@ function clipLabel(clip) {
   );
 }
 
+function analysisPlaceholder(result) {
+  const placeholder = document.createElement("div");
+  placeholder.className = "analysis-placeholder";
+  placeholder.textContent = analysisStatusLabel(result);
+  return placeholder;
+}
+
+function videoThumbnailStrip(result) {
+  if (!result || result.status !== "ready") {
+    return analysisPlaceholder(result);
+  }
+  const strip = document.createElement("div");
+  strip.className = "thumbnail-strip";
+  for (const thumbnail of result.thumbnails) {
+    const image = document.createElement("img");
+    image.alt = "";
+    image.draggable = false;
+    image.loading = "lazy";
+    image.src =
+      `/analysis/thumbnail/${result.analysis_id}/` +
+      thumbnail.artifact_id;
+    strip.append(image);
+  }
+  return strip;
+}
+
+function audioWaveform(result) {
+  if (!result || result.status !== "ready") {
+    return analysisPlaceholder(result);
+  }
+  const namespace = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(namespace, "svg");
+  svg.classList.add("waveform");
+  svg.setAttribute("viewBox", "0 0 100 40");
+  svg.setAttribute("preserveAspectRatio", "none");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS(namespace, "path");
+  const count = Math.max(1, result.waveform.length);
+  const commands = result.waveform.map((peak, index) => {
+    const x = ((index + 0.5) / count) * 100;
+    const top = 20 - Math.max(-1, Math.min(1, peak.maximum)) * 17;
+    const bottom = 20 - Math.max(-1, Math.min(1, peak.minimum)) * 17;
+    return `M${x.toFixed(3)} ${top.toFixed(3)}V${bottom.toFixed(3)}`;
+  });
+  path.setAttribute("d", commands.join(""));
+  svg.append(path);
+  return svg;
+}
+
+function clipVisualization(track, clip) {
+  const result = analysisFor(track, clip);
+  if (track.kind === "video") {
+    return videoThumbnailStrip(result);
+  }
+  if (track.kind === "audio") {
+    return audioWaveform(result);
+  }
+  return analysisPlaceholder(null);
+}
+
 function renderTimeline() {
   const snapshot = state.snapshot;
   const isEmpty = snapshot.empty;
@@ -571,10 +668,13 @@ function renderTimeline() {
         "aria-label",
         `${clip.clip_id}, ${track.kind} clip, ${clipLabel(clip)}`,
       );
-      block.append(
+      const copy = document.createElement("span");
+      copy.className = "clip-copy";
+      copy.append(
         textElement("strong", "", clip.source.display_name),
         textElement("span", "", clipLabel(clip)),
       );
+      block.append(clipVisualization(track, clip), copy);
       if (
         state.selected?.track.track_key === track.track_key &&
         state.selected?.clip.clip_id === clip.clip_id
@@ -603,6 +703,57 @@ function renderTimeline() {
     updatePlayhead();
   };
   updatePlayhead();
+}
+
+async function loadAnalysis() {
+  const expectedSnapshotId = state.snapshot?.snapshot_id;
+  if (!expectedSnapshotId) {
+    return;
+  }
+  state.analysis = {};
+  state.analysisState = "loading";
+  renderTimeline();
+  try {
+    const response = await fetch("/api/analysis", {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    });
+    const payload = await response.json();
+    if (
+      !response.ok ||
+      payload.schema_name !== "vistora.media-analysis-collection" ||
+      payload.schema_version !== "1.0.0" ||
+      payload.snapshot_id !== expectedSnapshotId ||
+      !Array.isArray(payload.results)
+    ) {
+      throw new Error("The media analysis response was invalid.");
+    }
+    if (state.snapshot?.snapshot_id !== expectedSnapshotId) {
+      return;
+    }
+    const next = {};
+    for (const result of payload.results) {
+      if (
+        result.snapshot_id !== expectedSnapshotId ||
+        !["video", "audio"].includes(result.media_kind)
+      ) {
+        throw new Error("A media analysis result was invalid.");
+      }
+      next[analysisKey(result.track_key, result.clip_id)] = result;
+    }
+    state.analysis = next;
+    state.analysisState = "ready";
+  } catch (error) {
+    state.analysis = {};
+    state.analysisState = "error";
+    console.warn(
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+  renderTimeline();
+  if (state.selected) {
+    showDetails(state.selected.track, state.selected.clip);
+  }
 }
 
 function updatePlayhead() {
@@ -657,6 +808,8 @@ async function loadPreview({ preserveSuccess = false } = {}) {
     state.snapshot = payload.snapshot;
     state.media = payload.media || {};
     state.capabilities = payload.capabilities || {};
+    state.analysis = {};
+    state.analysisState = "idle";
     ui.modeBadgeLabel.textContent = state.capabilities.manual_edit_apply === true
       ? "Review + confirm"
       : "Read only";
@@ -683,6 +836,9 @@ async function loadPreview({ preserveSuccess = false } = {}) {
     ui.previewStatus.textContent = state.snapshot.empty
       ? "This snapshot is empty. No media preview is available."
       : "Select a video clip to preview allowlisted local media.";
+    if (!state.snapshot.empty && state.capabilities.media_analysis === true) {
+      await loadAnalysis();
+    }
   } catch (error) {
     showFatal(error instanceof Error ? error.message : String(error));
   }

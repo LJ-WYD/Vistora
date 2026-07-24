@@ -13,6 +13,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
+from media_analysis import (
+    MediaAnalysisCollection,
+    MediaAnalysisRequest,
+    MediaAnalysisService,
+)
 from timeline_query import TimelineSnapshot, TimelineSnapshotService
 
 from .manual_edits import (
@@ -125,9 +130,11 @@ class PreviewApplication:
         *,
         skill_registry: Mapping[str, Any] | None = None,
         manual_edits_enabled: bool = False,
+        analysis_service: MediaAnalysisService | None = None,
     ) -> None:
         self._snapshot_provider = snapshot_provider
         self.media_resolver = MediaResolver(media_roots)
+        self.media_analysis = analysis_service or MediaAnalysisService()
         if manual_edits_enabled and skill_registry is None:
             raise PreviewConfigurationError(
                 "Manual editing requires an explicit atomic skill registry"
@@ -203,11 +210,14 @@ class PreviewApplication:
         return {
             "api_version": PREVIEW_API_VERSION,
             "read_only": True,
-            "snapshot": snapshot.model_dump(mode="json"),
+            "snapshot": self._browser_safe_snapshot(snapshot),
             "media": media,
             "capabilities": {
                 "snapshot_reads": True,
                 "media_range_requests": True,
+                "media_analysis": True,
+                "video_thumbnails": True,
+                "audio_waveforms": True,
                 "timeline_mutation": False,
                 "direct_timeline_mutation": False,
                 "agent_execution": False,
@@ -218,6 +228,79 @@ class PreviewApplication:
                 "confirmed_manual_dispatch": self.manual_edits is not None,
             },
         }
+
+    @staticmethod
+    def _browser_safe_snapshot(
+        snapshot: TimelineSnapshot,
+    ) -> dict[str, Any]:
+        """Redact configured paths while preserving snapshot structure."""
+
+        payload = snapshot.model_dump(mode="json")
+        for track in payload["tracks"]:
+            for clip in track["clips"]:
+                source = clip["source"]
+                source["reference_type"] = "opaque_preview_reference"
+                source["value"] = f"media:{source['source_id']}"
+        return payload
+
+    def analysis_payload(self) -> dict[str, Any]:
+        """Analyze visible video/audio clip ranges without mutating sources."""
+
+        snapshot = self.snapshot()
+        references = self._source_references(snapshot)
+        results = []
+        for track in snapshot.tracks:
+            if track.kind not in {"video", "audio"}:
+                continue
+            for clip in track.clips:
+                request = MediaAnalysisRequest(
+                    snapshot_id=snapshot.snapshot_id,
+                    source_id=clip.source.source_id,
+                    clip_id=clip.clip_id,
+                    track_key=track.track_key,
+                    media_kind=track.kind,
+                    source_start_seconds=clip.trim_in_seconds,
+                    source_end_seconds=clip.trim_out_seconds,
+                    timeline_start_seconds=clip.timeline_start_seconds,
+                    timeline_end_seconds=clip.timeline_end_seconds,
+                    reverse=clip.reverse,
+                    rotate_degrees=clip.rotate_degrees,
+                )
+                source = references.get(clip.source.source_id)
+                if source is None:
+                    result = self.media_analysis.unavailable(request)
+                elif Path(source).suffix.lower() not in MEDIA_TYPES:
+                    result = self.media_analysis.unavailable(
+                        request,
+                        status="unsupported",
+                        status_code="unsupported_media_type",
+                    )
+                else:
+                    resolved = self.media_resolver.resolve(source)
+                    if resolved is None:
+                        result = self.media_analysis.unavailable(request)
+                    else:
+                        result = self.media_analysis.analyze(
+                            request,
+                            resolved.path,
+                            resolved.content_type,
+                        )
+                results.append(result)
+        collection = MediaAnalysisCollection(
+            snapshot_id=snapshot.snapshot_id,
+            results=tuple(results),
+        )
+        return collection.model_dump(mode="json")
+
+    def analysis_artifact(
+        self,
+        analysis_id: str,
+        artifact_id: str,
+    ):
+        return self.media_analysis.get_artifact(
+            analysis_id,
+            artifact_id,
+        )
 
 
 def _parse_range(value: str, size: int) -> tuple[int, int] | None:
@@ -361,6 +444,45 @@ def _handler_class(
                 return
             self._send_json(HTTPStatus.OK, payload, head_only=head_only)
 
+        def _serve_analysis(self, head_only: bool) -> None:
+            try:
+                payload = application.analysis_payload()
+            except Exception:
+                self._send_error_json(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    "analysis_unavailable",
+                    "Media visualization analysis could not be loaded.",
+                    head_only=head_only,
+                )
+                return
+            self._send_json(HTTPStatus.OK, payload, head_only=head_only)
+
+        def _serve_analysis_artifact(
+            self,
+            analysis_id: str,
+            artifact_id: str,
+            head_only: bool,
+        ) -> None:
+            artifact = application.analysis_artifact(
+                analysis_id,
+                artifact_id,
+            )
+            if artifact is None:
+                self._send_error_json(
+                    HTTPStatus.NOT_FOUND,
+                    "analysis_artifact_unavailable",
+                    "The requested analysis artifact is unavailable.",
+                    head_only=head_only,
+                )
+                return
+            self._send_bytes(
+                HTTPStatus.OK,
+                artifact.content,
+                artifact.content_type,
+                head_only=head_only,
+                cache_control="private, max-age=3600, immutable",
+            )
+
         def _serve_media(self, source_id: str, head_only: bool) -> None:
             try:
                 resolved = application.resolve_media(source_id)
@@ -430,6 +552,18 @@ def _handler_class(
             if route == "/api/snapshot":
                 self._serve_snapshot(head_only)
                 return
+            if route == "/api/analysis":
+                self._serve_analysis(head_only)
+                return
+            if route.startswith("/analysis/thumbnail/"):
+                parts = route.split("/")
+                if len(parts) == 5:
+                    self._serve_analysis_artifact(
+                        parts[3],
+                        parts[4],
+                        head_only,
+                    )
+                    return
             if route.startswith("/media/"):
                 source_id = route.removeprefix("/media/")
                 if "/" not in source_id:

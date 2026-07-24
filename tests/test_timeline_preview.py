@@ -1,5 +1,6 @@
 import ast
 import json
+import struct
 import sys
 import threading
 import urllib.error
@@ -24,6 +25,7 @@ from core.timeline import ClipConfig, TimelineConfig, TrackConfig  # noqa: E402
 from skills.video_apply_manual_edits import (  # noqa: E402
     VideoApplyManualEditsSkill,
 )
+from media_analysis import MediaAnalysisService  # noqa: E402
 from timeline_preview import (  # noqa: E402
     MediaResolver,
     PreviewApplication,
@@ -118,6 +120,14 @@ def test_snapshot_endpoint_and_static_assets_are_read_only(
         )
         assert payload["snapshot"]["tracks"][0]["track_key"] == "video"
         source_id = snapshot.tracks[0].clips[0].source.source_id
+        browser_source = payload["snapshot"]["tracks"][0]["clips"][0][
+            "source"
+        ]
+        assert browser_source["reference_type"] == (
+            "opaque_preview_reference"
+        )
+        assert browser_source["value"] == f"media:{source_id}"
+        assert str(tmp_path).encode() not in body
         assert payload["media"][source_id] == {
             "available": True,
             "content_type": "video/mp4",
@@ -130,11 +140,12 @@ def test_snapshot_endpoint_and_static_assets_are_read_only(
         assert payload["capabilities"]["tool_execution"] is False
         assert payload["capabilities"]["manual_edit_apply"] is False
         assert payload["capabilities"]["confirmed_manual_dispatch"] is False
+        assert payload["capabilities"]["media_analysis"] is True
 
         for route, content_type, marker in [
             ("/", "text/html", b"Confirm &amp; apply"),
-            ("/app.css", "text/css", b".timeline-scroll"),
-            ("/app.js", "text/javascript", b"/api/snapshot"),
+            ("/app.css", "text/css", b".waveform"),
+            ("/app.js", "text/javascript", b"/api/analysis"),
         ]:
             asset_status, asset_headers, asset_body = _request(
                 f"{base_url}{route}"
@@ -142,6 +153,129 @@ def test_snapshot_endpoint_and_static_assets_are_read_only(
             assert asset_status == 200
             assert asset_headers["Content-Type"].startswith(content_type)
             assert marker in asset_body
+
+
+def test_analysis_endpoint_is_cached_safe_aligned_and_isolated(
+    tmp_path: Path,
+) -> None:
+    video = tmp_path / "source.mp4"
+    audio = tmp_path / "source.wav"
+    video.write_bytes(b"video-source")
+    audio.write_bytes(b"audio-source")
+    timeline = _timeline(str(video))
+    timeline.tracks["audio"].clips.append(
+        ClipConfig(
+            id="clip_audio",
+            source=str(audio),
+            trim_in=0.0,
+            trim_out=2.0,
+            timeline_start=1.0,
+        )
+    )
+    snapshot = TimelineSnapshotService.snapshot(timeline)
+    before_timeline = timeline.model_dump(mode="json")
+    before_files = {
+        path.name: path.read_bytes()
+        for path in (video, audio)
+    }
+    calls: list[tuple[str, ...]] = []
+    audio_samples = struct.pack("<32f", *([0.5, -0.5] * 16))
+
+    def fake_runner(command: list[str], timeout: float) -> bytes:
+        calls.append(tuple(command))
+        if "f32le" in command:
+            return audio_samples
+        return b"\x89PNG\r\n\x1a\npreview"
+
+    analysis_service = MediaAnalysisService(
+        command_runner=fake_runner
+    )
+    application = PreviewApplication(
+        lambda: snapshot,
+        [tmp_path],
+        analysis_service=analysis_service,
+    )
+
+    with _server(application) as base_url:
+        status, _, body = _request(f"{base_url}/api/analysis")
+        assert status == 200
+        payload = json.loads(body)
+        assert payload["schema_name"] == (
+            "vistora.media-analysis-collection"
+        )
+        assert payload["schema_version"] == "1.0.0"
+        assert payload["snapshot_id"] == snapshot.snapshot_id
+        assert [result["media_kind"] for result in payload["results"]] == [
+            "video",
+            "audio",
+        ]
+        video_result, audio_result = payload["results"]
+        assert video_result["status"] == "ready"
+        assert len(video_result["thumbnails"]) == 3
+        assert audio_result["status"] == "ready"
+        assert audio_result["waveform"][0][
+            "timeline_start_seconds"
+        ] == 1.0
+        assert audio_result["waveform"][-1][
+            "timeline_end_seconds"
+        ] == 3.0
+        assert str(tmp_path).encode() not in body
+
+        thumbnail = video_result["thumbnails"][0]
+        artifact_url = (
+            f"{base_url}/analysis/thumbnail/"
+            f"{video_result['analysis_id']}/{thumbnail['artifact_id']}"
+        )
+        artifact_status, artifact_headers, artifact_body = _request(
+            artifact_url
+        )
+        assert artifact_status == 200
+        assert artifact_headers["Content-Type"] == "image/png"
+        assert artifact_body.startswith(b"\x89PNG")
+        head_status, _, head_body = _request(
+            artifact_url,
+            method="HEAD",
+        )
+        assert head_status == 200
+        assert head_body == b""
+
+        repeat_status, _, repeat_body = _request(
+            f"{base_url}/api/analysis"
+        )
+        assert repeat_status == 200
+        assert repeat_body == body
+        assert analysis_service.cache_hits == 2
+        assert len(calls) == 4
+
+        invalid_status, _, invalid_body = _request(
+            f"{base_url}/analysis/thumbnail/..%2F..%2Fsecret/file"
+        )
+        assert invalid_status == 404
+        assert str(tmp_path).encode() not in invalid_body
+
+    assert timeline.model_dump(mode="json") == before_timeline
+    assert {
+        path.name: path.read_bytes()
+        for path in (video, audio)
+    } == before_files
+
+
+def test_analysis_missing_media_returns_placeholder_contract(
+    tmp_path: Path,
+) -> None:
+    snapshot = TimelineSnapshotService.snapshot(
+        _timeline("missing.mp4")
+    )
+    application = PreviewApplication(lambda: snapshot, [tmp_path])
+
+    with _server(application) as base_url:
+        status, _, body = _request(f"{base_url}/api/analysis")
+
+    assert status == 200
+    result = json.loads(body)["results"][0]
+    assert result["status"] == "missing"
+    assert result["status_code"] == "source_unavailable"
+    assert result["thumbnails"] == []
 
 
 def test_media_resolution_is_allowlisted_and_supports_ranges(

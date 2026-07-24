@@ -34,7 +34,10 @@ class MediaSourceReference(ReadModel):
     """Stable reference to a configured source without filesystem probing."""
 
     source_id: SnapshotId
-    reference_type: Literal["configured_path"] = "configured_path"
+    reference_type: Literal[
+        "configured_path",
+        "opaque_preview_reference",
+    ] = "configured_path"
     value: str = Field(min_length=1)
     display_name: str = Field(min_length=1)
 

@@ -44,6 +44,9 @@ src/
   timeline_query/
     models.py                Immutable, versioned timeline read models
     service.py               Deterministic read-only snapshot construction
+  media_analysis/
+    models.py                Versioned thumbnail/waveform read contracts
+    service.py               Read-only FFmpeg extraction and bounded cache
   timeline_preview/
     server.py                Loopback snapshot/media and confirmed-edit server
     static/                  Framework-free timeline preview UI
@@ -66,6 +69,8 @@ tests/
   test_reference_workflow.py  Repeatability, traceability, and media checks
   test_timeline_snapshot.py   Read isolation, stability, compatibility,
                               reference, and boundary checks
+  test_media_analysis.py      Versioning, determinism, cache, alignment,
+                              isolation, and import-boundary checks
   test_timeline_preview.py    Endpoint, media, draft/apply, and boundary checks
   test_manual_edits.py        Manual contracts, confirmation, persistence,
                               stale-state, and rollback checks
@@ -170,6 +175,14 @@ payload = snapshot.model_dump(mode="json")
 
 This boundary is suitable for Director read context or a future UI, but it is not a mutation API. The Director and Editing Agent contracts remain unchanged: the Director may inspect this data, the Editing Agent validates and dispatches a confirmed plan, and only registered atomic tools may mutate timeline or media.
 
+### Read-only media-analysis boundary
+
+`src/media_analysis/` is separate from timeline persistence, rendering, agents, skills, and the browser. It accepts an immutable `vistora.media-analysis-request` for one snapshot clip range plus a server-resolved source. It returns a frozen `vistora.media-analysis-result`; timeline batches use `vistora.media-analysis-collection`. All schemas are version `1.0.0`.
+
+For a video-track range, the service selects a bounded number of evenly spaced source times and extracts fixed-width PNG frames through an argument-list FFmpeg subprocess. For an audio-track range, it decodes a fixed-rate mono float stream and returns bounded normalized min/max peak bins whose intervals exactly cover the clip's visible timeline start/end. IDs, sample times, intervals, settings, and result ordering are deterministic for the same unchanged source/range/settings.
+
+The service reads source bytes through FFmpeg but never edits the source, imports `TimelineManager`, saves timeline state, dispatches a skill, renders an output timeline, or writes analysis files. A bounded in-memory LRU retains results and thumbnail bytes for refresh/reuse; eviction removes their opaque artifact IDs. Decode errors become structured `missing`, `unsupported`, or `error` results rather than server failures.
+
 ### Local visual timeline preview
 
 `src/timeline_preview/` is the first consumer of `TimelineSnapshotService`. It uses Python's standard-library threaded HTTP server and static HTML/CSS/JavaScript; no framework, build system, web server dependency, or persistent UI store is introduced.
@@ -180,15 +193,17 @@ The loopback-only server has a deliberately narrow route surface:
 | --- | --- | --- |
 | `/`, `/index.html`, `/app.css`, `/app.js` | `GET`, `HEAD` | Fixed packaged preview assets only. |
 | `/api/snapshot` | `GET`, `HEAD` | A read-only envelope around the current immutable timeline snapshot and derived media availability. |
+| `/api/analysis` | `GET`, `HEAD` | A versioned deterministic thumbnail/waveform collection for the current snapshot. |
 | `/media/<source_id>` | `GET`, `HEAD` | Browser-safe audio/video bytes for a source already present in the snapshot, including single-range support. |
+| `/analysis/thumbnail/<analysis_id>/<artifact_id>` | `GET`, `HEAD` | One cached PNG addressed only by validated opaque analysis IDs. |
 | `/api/manual-edits/validate` | `POST` | Validates a detached user-authored proposal and returns a reviewable diff; never writes. |
 | `/api/manual-edits/apply` | `POST` | Requires an exact matching confirmation, then asks the application service to dispatch the registered manual-edit atomic skill. |
 
 Unknown `POST` routes and all `PUT`, `PATCH`, and `DELETE` requests return `405`. There are no agent, render, upload, filesystem-browse, or direct timeline-manager routes. The server accepts only `127.0.0.1`, `::1`, or `localhost` binds.
 
-Media is disabled unless the operator supplies one or more `--media-root` directories. A configured source can be served only when its opaque `source_*` ID occurs in the current snapshot, its canonical path remains inside an allowlisted root after symlink resolution, and its extension is in the small browser audio/video allowlist. Requests never accept raw paths, directory traversal cannot address media, and error responses do not disclose resolved filesystem paths.
+Media and analysis are disabled for a source unless the operator supplies an applicable `--media-root` directory. A configured source can be served or analyzed only when its opaque `source_*` ID occurs in the current snapshot, its canonical path remains inside an allowlisted root after symlink resolution, and its extension is in the small browser audio/video allowlist. The preview copy of a snapshot replaces configured source paths with `media:source_*` references while the underlying `TimelineSnapshot` remains unchanged. Requests never accept raw paths, directory traversal cannot address media or thumbnails, and responses do not disclose resolved filesystem paths.
 
-The UI renders the snapshot's deterministic track order, preserves clip order and timing, and represents only the implemented `video` and `audio` kinds as such. Other track kinds remain visible as unsupported data-only lanes; it does not infer subtitle, transition, compositing, waveform, or thumbnail semantics. Preview selection, browser playback, playhead movement, zoom, and scrolling are transient local view state.
+The UI renders the snapshot's deterministic track order, preserves clip order and timing, places video thumbnail strips and audio peak paths inside their exact clip blocks, and represents only the implemented `video` and `audio` kinds as such. The selected-clip inspector reports the opaque source reference, media type, track, source/timeline timing, duration, playback properties, availability, and visualization status. Other track kinds remain visible as unsupported data-only lanes; the UI does not infer subtitle, transition, or compositing semantics. Missing or failed analysis produces an explicit placeholder. Preview selection, browser playback, playhead movement, zoom, scrolling, and analysis display are transient local view state.
 
 Current-workspace mode adds a deliberately narrow manual path:
 
@@ -248,9 +263,11 @@ This lightweight check does not claim that the missing Director, confirmation ga
 
 `tests/test_timeline_snapshot.py` proves deterministic ordering/serialization, derived summaries, immutable detachment, legacy and versioned compatibility, project/revision guard failures, clear invalid-reference/timing failures, persistence read isolation, and the absence of mutation/media-engine calls from the query package. The existing static agent-import test continues to prevent agent modules from importing mutation engines.
 
-`tests/test_timeline_preview.py` covers the snapshot contract, packaged assets, security headers, allowlisted resolution, traversal rejection, range and `HEAD` responses, unavailable/unsupported media, rejection of unapproved write routes, no-write proposal validation, confirmed apply/reload, invalid input, external-document edit disablement, read isolation, loopback binding, and the single approved registry dispatch in the preview application service.
+`tests/test_timeline_preview.py` covers the browser-redacted snapshot contract, packaged assets, security headers, allowlisted resolution, traversal rejection, media/analysis `GET` and `HEAD` responses, unavailable/unsupported media, thumbnail-route safety, cache reuse, waveform alignment, rejection of unapproved write routes, no-write proposal validation, confirmed apply/reload, invalid input, external-document edit disablement, read isolation, loopback binding, and the single approved registry dispatch in the preview application service.
 
 `tests/test_manual_edits.py` covers versioning/digests, immutable exact confirmation, structured diffs, no write before confirmation, update/reorder/removal persistence, rejected/mismatched/stale proposals, invalid targets, and atomic-save rollback/temporary-file cleanup.
+
+`tests/test_media_analysis.py` covers schema versions and JSON round trips, immutable requests/results, deterministic frame positions, normalized timeline-aligned peaks, missing/unsupported/decode-failed states, bounded in-memory cache reuse, opaque artifact validation, source isolation, and the absence of timeline/mutation imports or calls.
 
 ### Reference main-workflow regression
 
@@ -366,6 +383,6 @@ Mutation-capable utilities and core objects are implementation details behind to
 | G-08 | Tool envelopes are not wired into execution | Versioned request/result/error models exist, but each skill still returns an ad hoc dictionary or raises. | Wrap runtime dispatch and declare side effects without breaking skill schemas. |
 | G-09 | No production workflow UI | A local snapshot-first timeline preview with a narrow confirmed manual-edit path exists, but there is no Director plan/confirmation/execution interface. | Design future workflow UI around draft, confirmation, execution, and result phases without weakening the read boundary. |
 | G-10 | Production agent gates remain untested | The reference harness covers contract confirmation, atomic dispatch, traceability, and media output, but no Director or Editing runtime exists. | Add agent-level gate tests as those components are implemented. |
-| G-11 | Visualization/manual editing remains local and narrow | The loopback UI provides snapshot lanes, safe material preview, and a confirmed basic video-clip edit slice, but no production frontend, thumbnails, waveforms, or broader editing controls. | Extend only through separately approved contracts and atomic tools while preserving confirmation and mutation boundaries. |
+| G-11 | Visualization/manual editing remains local and narrow | The loopback UI now provides snapshot lanes, safe material preview, deterministic thumbnails/waveforms, a detailed inspector, and a confirmed basic video-clip edit slice, but no production frontend or broader editing controls. | Extend only through separately approved read contracts and atomic tools while preserving confirmation and mutation boundaries. |
 
 This gap register is descriptive. Closing any gap requires a separate approved implementation task.
