@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Virtual environments and local secrets
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# AetherEdit runtime workspaces and generated output
+.workspace/
+video/
+output/
+tests/test_data/*
+!tests/test_data/.gitkeep
+*_proxy.py
+
+# Local investigation and migration helpers
+/benchmark.py
+/fix_*import*.py
+/scratch_*
+/temp-*
+/test_frame.png
+
+# Downloaded model weights
+models/
+*.ckpt
+*.gguf
+*.onnx
+*.pt
+*.pth
+*.safetensors
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
