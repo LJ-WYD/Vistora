@@ -254,6 +254,162 @@ class EditingExecutionPlan(ContractModel):
         )
 
 
+class ManualClipUpdate(ContractModel):
+    """User-authored timing/order replacement for one existing video clip."""
+
+    operation_id: StableId
+    kind: Literal["update"] = "update"
+    track_key: Literal["video"] = "video"
+    clip_id: str = Field(min_length=1)
+    trim_in_seconds: float = Field(ge=0, allow_inf_nan=False)
+    trim_out_seconds: float = Field(gt=0, allow_inf_nan=False)
+    timeline_start_seconds: float = Field(ge=0, allow_inf_nan=False)
+    order_index: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def trim_range_is_valid(self) -> ManualClipUpdate:
+        if self.trim_out_seconds <= self.trim_in_seconds:
+            raise ValueError("Manual clip trim-out must be after trim-in")
+        return self
+
+
+class ManualClipRemove(ContractModel):
+    """User-authored removal of one existing video clip."""
+
+    operation_id: StableId
+    kind: Literal["remove"] = "remove"
+    track_key: Literal["video"] = "video"
+    clip_id: str = Field(min_length=1)
+
+
+ManualEditOperation = Annotated[
+    ManualClipUpdate | ManualClipRemove,
+    Field(discriminator="kind"),
+]
+
+
+class ManualEditProposal(ContractModel):
+    """Detached user-authored edit proposal; it is not a Director plan."""
+
+    schema_name: Literal["vistora.manual-edit-proposal"] = (
+        "vistora.manual-edit-proposal"
+    )
+    proposal_id: StableId
+    authored_by: str = Field(min_length=1)
+    base_project_id: StableId
+    base_revision: int = Field(ge=1)
+    base_timeline_digest: Sha256Digest
+    edits: tuple[ManualEditOperation, ...] = Field(min_length=1, max_length=32)
+    created_at: AwareDatetime = Field(default_factory=_utc_now)
+
+    @model_validator(mode="after")
+    def edit_targets_are_unique(self) -> ManualEditProposal:
+        operation_ids = [edit.operation_id for edit in self.edits]
+        if len(operation_ids) != len(set(operation_ids)):
+            raise ValueError("Manual edit operation IDs must be unique")
+        clip_targets = [(edit.track_key, edit.clip_id) for edit in self.edits]
+        if len(clip_targets) != len(set(clip_targets)):
+            raise ValueError(
+                "A manual proposal may edit each clip at most once"
+            )
+        return self
+
+    def digest(self) -> str:
+        payload = self.model_dump(mode="json")
+        encoded = _canonical_json(payload).encode("utf-8")
+        return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+class ManualEditProposalReference(ContractModel):
+    """Stable reference to exact user-authored proposal content."""
+
+    proposal_id: StableId
+    proposal_digest: Sha256Digest
+
+    @classmethod
+    def from_proposal(
+        cls,
+        proposal: ManualEditProposal,
+    ) -> ManualEditProposalReference:
+        return cls(
+            proposal_id=proposal.proposal_id,
+            proposal_digest=proposal.digest(),
+        )
+
+    def matches(self, proposal: ManualEditProposal) -> bool:
+        return self == self.from_proposal(proposal)
+
+
+class ManualEditConfirmationRecord(ContractModel):
+    """Explicit user decision bound to an exact manual edit proposal."""
+
+    schema_name: Literal["vistora.manual-edit-confirmation"] = (
+        "vistora.manual-edit-confirmation"
+    )
+    confirmation_id: StableId
+    proposal_ref: ManualEditProposalReference
+    decision: Literal["confirmed", "rejected"]
+    confirmed_by: str = Field(min_length=1)
+    recorded_at: AwareDatetime = Field(default_factory=_utc_now)
+
+    @classmethod
+    def for_proposal(
+        cls,
+        *,
+        confirmation_id: str,
+        proposal: ManualEditProposal,
+        confirmed_by: str,
+        decision: Literal["confirmed", "rejected"] = "confirmed",
+        recorded_at: datetime | None = None,
+    ) -> ManualEditConfirmationRecord:
+        values: dict[str, Any] = {
+            "confirmation_id": confirmation_id,
+            "proposal_ref": ManualEditProposalReference.from_proposal(
+                proposal
+            ),
+            "decision": decision,
+            "confirmed_by": confirmed_by,
+        }
+        if recorded_at is not None:
+            values["recorded_at"] = recorded_at
+        return cls(**values)
+
+    def confirms(self, proposal: ManualEditProposal) -> bool:
+        return (
+            self.decision == "confirmed"
+            and self.proposal_ref.matches(proposal)
+        )
+
+
+class ManualEditChange(ContractModel):
+    """Reviewable before/after diff for one manual edit operation."""
+
+    operation_id: StableId
+    track_key: Literal["video"]
+    clip_id: str = Field(min_length=1)
+    action: Literal["update", "remove"]
+    before: dict[str, Any]
+    after: dict[str, Any] | None
+
+    _before_is_json = field_validator("before")(_validated_json_object)
+    _after_is_json = field_validator("after")(
+        lambda value: (
+            None if value is None else _validated_json_object(value)
+        )
+    )
+
+
+class ManualEditReview(ContractModel):
+    """Validated diff for a proposal against one exact snapshot."""
+
+    schema_name: Literal["vistora.manual-edit-review"] = (
+        "vistora.manual-edit-review"
+    )
+    proposal_ref: ManualEditProposalReference
+    snapshot_id: StableId
+    changes: tuple[ManualEditChange, ...] = Field(min_length=1)
+
+
 class TimelineProjectDocument(ContractModel):
     """Versioned project envelope with deterministic legacy timeline migration."""
 

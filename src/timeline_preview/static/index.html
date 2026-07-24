@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>Vistora Timeline Preview</title>
+    <link rel="stylesheet" href="/app.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand-lockup">
+        <div class="brand-mark" aria-hidden="true">V</div>
+        <div>
+          <p class="eyebrow">Vistora / Local preview</p>
+          <h1>Visual timeline</h1>
+        </div>
+      </div>
+      <div class="read-only-badge">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span id="mode-badge-label">Snapshot first</span>
+      </div>
+    </header>
+
+    <main class="app-shell">
+      <section class="summary-strip" aria-label="Project summary">
+        <div class="summary-primary">
+          <p class="eyebrow">Project snapshot</p>
+          <h2 id="project-name">Loading timeline…</h2>
+          <p id="snapshot-meta" class="muted">Waiting for local snapshot</p>
+        </div>
+        <dl id="summary-stats" class="summary-stats" aria-live="polite"></dl>
+      </section>
+
+      <section class="workspace-grid">
+        <article class="panel preview-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Material monitor</p>
+              <h2 id="preview-title">No clip selected</h2>
+            </div>
+            <output id="timecode" class="timecode">00:00:00:00</output>
+          </div>
+          <div class="monitor">
+            <video
+              id="preview-video"
+              controls
+              preload="metadata"
+              playsinline
+              aria-label="Selected clip media preview"
+            ></video>
+            <div id="preview-placeholder" class="monitor-placeholder">
+              <div class="placeholder-glyph" aria-hidden="true">▶</div>
+              <p>Select an available video clip from the timeline.</p>
+              <span>Only explicitly allowlisted local media can play.</span>
+            </div>
+          </div>
+          <p id="preview-status" class="preview-status" aria-live="polite">
+            Timeline data is loading.
+          </p>
+        </article>
+
+        <aside class="panel inspector-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Selection</p>
+              <h2>Clip details</h2>
+            </div>
+          </div>
+          <dl id="clip-details" class="detail-list">
+            <div>
+              <dt>Status</dt>
+              <dd>Select a clip to inspect its immutable snapshot data.</dd>
+            </div>
+          </dl>
+          <section id="manual-editor" class="manual-editor" hidden>
+            <div class="manual-editor-heading">
+              <div>
+                <p class="eyebrow">Manual draft</p>
+                <h3>Timing &amp; order</h3>
+              </div>
+              <span class="draft-badge">Local only</span>
+            </div>
+            <form id="clip-edit-form" novalidate>
+              <div class="field-grid">
+                <label>
+                  <span>Source in</span>
+                  <input
+                    id="edit-trim-in"
+                    name="trim_in_seconds"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    required
+                  >
+                </label>
+                <label>
+                  <span>Source out</span>
+                  <input
+                    id="edit-trim-out"
+                    name="trim_out_seconds"
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    required
+                  >
+                </label>
+                <label>
+                  <span>Timeline start</span>
+                  <input
+                    id="edit-timeline-start"
+                    name="timeline_start_seconds"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    required
+                  >
+                </label>
+                <label>
+                  <span>Clip order</span>
+                  <input
+                    id="edit-order"
+                    name="order_index"
+                    type="number"
+                    min="0"
+                    step="1"
+                    required
+                  >
+                </label>
+              </div>
+              <p id="edit-form-message" class="form-message" aria-live="polite">
+                Changes remain detached until you review and confirm them.
+              </p>
+              <div class="editor-actions">
+                <button class="button primary" type="submit">
+                  Stage changes
+                </button>
+                <button id="stage-remove" class="button danger" type="button">
+                  Stage removal
+                </button>
+              </div>
+            </form>
+          </section>
+          <p id="manual-edit-disabled" class="manual-edit-disabled" hidden>
+            Manual apply is disabled while previewing an external timeline
+            document. Current-workspace previews can propose confirmed edits.
+          </p>
+        </aside>
+      </section>
+
+      <section id="draft-panel" class="panel draft-panel" hidden>
+        <div class="draft-heading">
+          <div>
+            <p class="eyebrow">User-authored manual proposal</p>
+            <h2>Review changes before applying</h2>
+          </div>
+          <span id="draft-state" class="draft-state">Not applied</span>
+        </div>
+        <div id="draft-changes" class="draft-changes"></div>
+        <p id="draft-message" class="draft-message" aria-live="polite"></p>
+        <div class="draft-actions">
+          <button id="undo-draft" class="button" type="button">
+            Undo last
+          </button>
+          <button id="reset-draft" class="button" type="button">
+            Reset draft
+          </button>
+          <button id="apply-draft" class="button confirm" type="button" disabled>
+            Confirm &amp; apply
+          </button>
+        </div>
+      </section>
+
+      <section id="apply-success" class="apply-success" hidden aria-live="polite">
+        <strong>Manual edit applied</strong>
+        <span id="apply-success-message"></span>
+      </section>
+
+      <section class="panel timeline-panel">
+        <div class="timeline-toolbar">
+          <div>
+            <p class="eyebrow">Sequence</p>
+            <h2>Timeline overview</h2>
+          </div>
+          <label class="zoom-control" for="zoom">
+            <span>Zoom</span>
+            <input
+              id="zoom"
+              type="range"
+              min="32"
+              max="220"
+              step="4"
+              value="88"
+            >
+            <output id="zoom-value" for="zoom">88 px/s</output>
+          </label>
+        </div>
+
+        <div id="timeline-empty" class="empty-state" hidden>
+          <div class="empty-icon" aria-hidden="true">∅</div>
+          <h3>No clips in this snapshot</h3>
+          <p>
+            Add media through Vistora’s editing workflow, then refresh this
+            snapshot preview.
+          </p>
+        </div>
+
+        <div id="timeline-scroll" class="timeline-scroll" tabindex="0">
+          <div id="timeline-content" class="timeline-content">
+            <div class="track-label ruler-label">
+              <span>Time</span>
+            </div>
+            <div id="ruler" class="ruler" aria-label="Timeline time ruler"></div>
+            <div id="track-labels" class="track-labels"></div>
+            <div id="track-lanes" class="track-lanes"></div>
+            <div id="playhead" class="playhead" aria-hidden="true">
+              <span class="playhead-handle"></span>
+            </div>
+          </div>
+        </div>
+        <p id="timeline-help" class="timeline-hint">
+          Click a clip to inspect it. Drafts stay local and do not write until
+          Confirm &amp; apply.
+        </p>
+      </section>
+    </main>
+
+    <div id="fatal-error" class="fatal-error" role="alert" hidden>
+      <strong>Preview unavailable</strong>
+      <span id="fatal-error-message"></span>
+    </div>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

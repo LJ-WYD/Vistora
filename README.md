@@ -70,6 +70,18 @@ print(snapshot.model_dump_json(indent=2))
 
 The `vistora.timeline-snapshot` output is versioned and deterministic. It includes project/revision identity, configured tracks and clips, source references, declared timing, and aggregate duration/count fields. The service accepts a current `TimelineConfig`, legacy timeline JSON, or a versioned `TimelineProjectDocument`. It does not probe media, save state, render, or expose mutable source models. Add `src` to `PYTHONPATH` when invoking this library directly from the repository root.
 
+Open the local snapshot-first visual timeline:
+
+```powershell
+python src/main.py preview --media-root C:\path\to\your\media
+```
+
+Then visit `http://127.0.0.1:8765`. Use `--timeline path\to\timeline.json` to inspect a specific legacy or versioned document instead of the current workspace, repeat `--media-root` for additional roots, or omit all media roots to disable browser media serving.
+
+The preview provides an allowlisted material monitor, time ruler/timecode, synchronized local playhead, deterministic video/audio lanes, data-only unsupported-track messaging, clip details, zoom/horizontal scrolling, and snapshot summary. Media URLs contain only opaque snapshot source IDs; paths are resolved against explicit roots after symlink resolution, and byte ranges are supported for browser playback. The server binds only to a loopback interface.
+
+For the current workspace only, a selected video clip can also be changed through a detached manual draft: source in/out, timeline start, list order, or removal. Staging and server-side validation do not write. The UI shows a before/after proposal, supports undo/reset (including restoring a staged removal), and requires the explicit **Confirm & apply** action. That action binds a user confirmation to the exact proposal digest and dispatches one transactional atomic skill through the registry. The browser never writes `TimelineManager` or media directly. Manual apply is disabled for `--timeline` external documents, which remain strictly read-only.
+
 ## Validation
 
 The integration validation creates its own synthetic source clip and generated outputs under `tests/test_data/`:

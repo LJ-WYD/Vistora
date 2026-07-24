@@ -12,6 +12,7 @@ from skills.video_modify_clip import VideoModifyClipSkill
 from skills.video_export import VideoExportSkill
 from skills.video_timelapse import VideoTimelapseSkill
 from skills.video_clear_timeline import VideoClearTimelineSkill
+from skills.video_apply_manual_edits import VideoApplyManualEditsSkill
 
 # 注册非破坏性编辑原子技能
 SKILLS = {
@@ -19,7 +20,8 @@ SKILLS = {
     "VideoModifyClipSkill": VideoModifyClipSkill(),
     "VideoExportSkill": VideoExportSkill(),
     "VideoTimelapseSkill": VideoTimelapseSkill(),
-    "VideoClearTimelineSkill": VideoClearTimelineSkill()
+    "VideoClearTimelineSkill": VideoClearTimelineSkill(),
+    "VideoApplyManualEditsSkill": VideoApplyManualEditsSkill(),
 }
 
 def list_skills():
@@ -99,6 +101,25 @@ def chat_loop():
         except Exception as e:
             print(f"\n❌ 对话执行异常: {e}")
 
+
+def preview_timeline(
+    timeline_path: str | None,
+    media_roots: list[str],
+    host: str,
+    port: int,
+):
+    """Start Vistora's local snapshot-first visual timeline preview."""
+    from timeline_preview import run_preview_server
+
+    run_preview_server(
+        timeline_path=timeline_path,
+        media_roots=media_roots,
+        host=host,
+        port=port,
+        skill_registry=SKILLS,
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description="Vistora 命令行交互入口")
     subparsers = parser.add_subparsers(dest="command", help="可选子命令")
@@ -119,6 +140,39 @@ def main():
     # 4. chat 子命令
     subparsers.add_parser("chat", help="启动人机交互式 Agent 视频剪辑对话")
 
+    preview_parser = subparsers.add_parser(
+        "preview",
+        help="Start the local snapshot-first visual timeline preview",
+    )
+    preview_parser.add_argument(
+        "--timeline",
+        help=(
+            "Optional legacy or versioned timeline JSON path. "
+            "Defaults to the current TimelineManager state."
+        ),
+    )
+    preview_parser.add_argument(
+        "--media-root",
+        action="append",
+        default=[],
+        help=(
+            "Explicit directory allowed to serve media from. "
+            "Repeat for multiple roots; omit to disable media serving."
+        ),
+    )
+    preview_parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        choices=["127.0.0.1", "::1", "localhost"],
+        help="Loopback interface to bind (default: 127.0.0.1).",
+    )
+    preview_parser.add_argument(
+        "--port",
+        type=int,
+        default=8765,
+        help="Local TCP port (default: 8765).",
+    )
+
     args = parser.parse_args()
     
     # 根据指令调用对应逻辑
@@ -130,6 +184,13 @@ def main():
         run_skill(args.name, args.params)
     elif args.command == "chat":
         chat_loop()
+    elif args.command == "preview":
+        preview_timeline(
+            args.timeline,
+            args.media_root,
+            args.host,
+            args.port,
+        )
     else:
         parser.print_help()
 

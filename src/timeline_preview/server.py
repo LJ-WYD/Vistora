@@ -1,0 +1,665 @@
+"""Local snapshot and confirmed-manual-edit HTTP surface for Vistora."""
+
+from __future__ import annotations
+
+import json
+import re
+import socket
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+from urllib.parse import unquote, urlsplit
+
+from timeline_query import TimelineSnapshot, TimelineSnapshotService
+
+from .manual_edits import (
+    ManualEditApplicationService,
+    ManualEditValidationError,
+)
+
+
+PREVIEW_API_VERSION = "1.0.0"
+STATIC_DIR = Path(__file__).with_name("static")
+STATIC_ROUTES = {
+    "/": ("index.html", "text/html; charset=utf-8"),
+    "/index.html": ("index.html", "text/html; charset=utf-8"),
+    "/app.css": ("app.css", "text/css; charset=utf-8"),
+    "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+}
+MEDIA_TYPES = {
+    ".aac": "audio/aac",
+    ".flac": "audio/flac",
+    ".m4a": "audio/mp4",
+    ".mp3": "audio/mpeg",
+    ".oga": "audio/ogg",
+    ".ogg": "audio/ogg",
+    ".wav": "audio/wav",
+    ".m4v": "video/x-m4v",
+    ".mov": "video/quicktime",
+    ".mp4": "video/mp4",
+    ".ogv": "video/ogg",
+    ".webm": "video/webm",
+}
+SOURCE_ID_PATTERN = re.compile(r"^source_[0-9a-f]{16}$")
+LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+class PreviewConfigurationError(ValueError):
+    """Preview server configuration is unsafe or invalid."""
+
+
+class _IPv6ThreadingHTTPServer(ThreadingHTTPServer):
+    address_family = socket.AF_INET6
+
+
+@dataclass(frozen=True)
+class ResolvedMedia:
+    """Allowlisted media metadata without a public filesystem path."""
+
+    path: Path
+    content_type: str
+    size: int
+
+
+class MediaResolver:
+    """Resolve configured sources only inside explicit allowlisted roots."""
+
+    def __init__(self, roots: Iterable[str | Path] = ()) -> None:
+        resolved_roots: list[Path] = []
+        for root_value in roots:
+            root = Path(root_value).expanduser().resolve(strict=True)
+            if not root.is_dir():
+                raise PreviewConfigurationError(
+                    f"Media root is not a directory: {root_value}"
+                )
+            if root not in resolved_roots:
+                resolved_roots.append(root)
+        self._roots = tuple(resolved_roots)
+
+    @property
+    def root_count(self) -> int:
+        return len(self._roots)
+
+    def resolve(self, configured_source: str) -> ResolvedMedia | None:
+        source_path = Path(configured_source).expanduser()
+        candidates = (
+            (source_path,)
+            if source_path.is_absolute()
+            else tuple(root / source_path for root in self._roots)
+        )
+        for candidate in candidates:
+            try:
+                resolved = candidate.resolve(strict=True)
+            except (OSError, RuntimeError):
+                continue
+            if not any(
+                resolved == root or resolved.is_relative_to(root)
+                for root in self._roots
+            ):
+                continue
+            content_type = MEDIA_TYPES.get(resolved.suffix.lower())
+            if content_type is None or not resolved.is_file():
+                continue
+            try:
+                size = resolved.stat().st_size
+            except OSError:
+                continue
+            return ResolvedMedia(
+                path=resolved,
+                content_type=content_type,
+                size=size,
+            )
+        return None
+
+
+class PreviewApplication:
+    """Read-only snapshot and safe-media application state."""
+
+    def __init__(
+        self,
+        snapshot_provider: Callable[[], TimelineSnapshot],
+        media_roots: Iterable[str | Path] = (),
+        *,
+        skill_registry: Mapping[str, Any] | None = None,
+        manual_edits_enabled: bool = False,
+    ) -> None:
+        self._snapshot_provider = snapshot_provider
+        self.media_resolver = MediaResolver(media_roots)
+        if manual_edits_enabled and skill_registry is None:
+            raise PreviewConfigurationError(
+                "Manual editing requires an explicit atomic skill registry"
+            )
+        self.manual_edits = (
+            ManualEditApplicationService(
+                self.snapshot,
+                skill_registry or {},
+            )
+            if manual_edits_enabled
+            else None
+        )
+
+    def snapshot(self) -> TimelineSnapshot:
+        snapshot = self._snapshot_provider()
+        if not isinstance(snapshot, TimelineSnapshot):
+            raise TypeError("Snapshot provider must return TimelineSnapshot")
+        return snapshot
+
+    @staticmethod
+    def _source_references(
+        snapshot: TimelineSnapshot,
+    ) -> dict[str, str | None]:
+        references: dict[str, str | None] = {}
+        for track in snapshot.tracks:
+            for clip in track.clips:
+                source_id = clip.source.source_id
+                source_value = clip.source.value
+                current = references.get(source_id)
+                if current is not None and current != source_value:
+                    references[source_id] = None
+                elif source_id not in references:
+                    references[source_id] = source_value
+        return references
+
+    def resolve_media(
+        self,
+        source_id: str,
+        snapshot: TimelineSnapshot | None = None,
+    ) -> ResolvedMedia | None:
+        if SOURCE_ID_PATTERN.fullmatch(source_id) is None:
+            return None
+        current_snapshot = snapshot or self.snapshot()
+        source = self._source_references(current_snapshot).get(source_id)
+        if source is None:
+            return None
+        return self.media_resolver.resolve(source)
+
+    def snapshot_payload(self) -> dict[str, Any]:
+        snapshot = self.snapshot()
+        media: dict[str, dict[str, Any]] = {}
+        for source_id, source in sorted(
+            self._source_references(snapshot).items()
+        ):
+            resolved = (
+                None if source is None else self.media_resolver.resolve(source)
+            )
+            media[source_id] = {
+                "available": resolved is not None,
+                "url": (
+                    f"/media/{source_id}" if resolved is not None else None
+                ),
+                "content_type": (
+                    resolved.content_type if resolved is not None else None
+                ),
+                "size_bytes": resolved.size if resolved is not None else None,
+                "reason": (
+                    None
+                    if resolved is not None
+                    else "not_allowlisted_or_unavailable"
+                ),
+            }
+        return {
+            "api_version": PREVIEW_API_VERSION,
+            "read_only": True,
+            "snapshot": snapshot.model_dump(mode="json"),
+            "media": media,
+            "capabilities": {
+                "snapshot_reads": True,
+                "media_range_requests": True,
+                "timeline_mutation": False,
+                "direct_timeline_mutation": False,
+                "agent_execution": False,
+                "tool_execution": False,
+                "allowlisted_media_roots": self.media_resolver.root_count,
+                "manual_draft": True,
+                "manual_edit_apply": self.manual_edits is not None,
+                "confirmed_manual_dispatch": self.manual_edits is not None,
+            },
+        }
+
+
+def _parse_range(value: str, size: int) -> tuple[int, int] | None:
+    if not value.startswith("bytes=") or "," in value or size <= 0:
+        return None
+    start_text, separator, end_text = value[6:].partition("-")
+    if not separator:
+        return None
+    try:
+        if start_text:
+            start = int(start_text)
+            end = int(end_text) if end_text else size - 1
+        elif end_text:
+            suffix_length = int(end_text)
+            if suffix_length <= 0:
+                return None
+            start = max(0, size - suffix_length)
+            end = size - 1
+        else:
+            return None
+    except ValueError:
+        return None
+    if start < 0 or start >= size or end < start:
+        return None
+    return start, min(end, size - 1)
+
+
+def _handler_class(
+    application: PreviewApplication,
+) -> type[BaseHTTPRequestHandler]:
+    class PreviewRequestHandler(BaseHTTPRequestHandler):
+        server_version = "VistoraPreview/1.0"
+
+        def log_message(self, format: str, *args: Any) -> None:
+            return
+
+        def _security_headers(self) -> None:
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'self'; "
+                "script-src 'self'; "
+                "style-src 'self'; "
+                "img-src 'self' data:; "
+                "media-src 'self'; "
+                "connect-src 'self'; "
+                "object-src 'none'; "
+                "base-uri 'none'; "
+                "frame-ancestors 'none'",
+            )
+
+        def _send_bytes(
+            self,
+            status: HTTPStatus,
+            content: bytes,
+            content_type: str,
+            *,
+            head_only: bool = False,
+            cache_control: str = "no-store",
+        ) -> None:
+            self.send_response(status)
+            self._security_headers()
+            self.send_header("Cache-Control", cache_control)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            if not head_only:
+                self.wfile.write(content)
+
+        def _send_json(
+            self,
+            status: HTTPStatus,
+            payload: dict[str, Any],
+            *,
+            head_only: bool = False,
+        ) -> None:
+            content = json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+            self._send_bytes(
+                status,
+                content,
+                "application/json; charset=utf-8",
+                head_only=head_only,
+            )
+
+        def _send_error_json(
+            self,
+            status: HTTPStatus,
+            code: str,
+            message: str,
+            *,
+            head_only: bool = False,
+        ) -> None:
+            self._send_json(
+                status,
+                {"error": {"code": code, "message": message}},
+                head_only=head_only,
+            )
+
+        def _serve_static(self, route: str, head_only: bool) -> bool:
+            asset = STATIC_ROUTES.get(route)
+            if asset is None:
+                return False
+            filename, content_type = asset
+            try:
+                content = (STATIC_DIR / filename).read_bytes()
+            except OSError:
+                self._send_error_json(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    "static_asset_unavailable",
+                    "A required preview asset is unavailable.",
+                    head_only=head_only,
+                )
+                return True
+            self._send_bytes(
+                HTTPStatus.OK,
+                content,
+                content_type,
+                head_only=head_only,
+                cache_control="no-cache",
+            )
+            return True
+
+        def _serve_snapshot(self, head_only: bool) -> None:
+            try:
+                payload = application.snapshot_payload()
+            except Exception:
+                self._send_error_json(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    "snapshot_unavailable",
+                    "The timeline snapshot could not be loaded.",
+                    head_only=head_only,
+                )
+                return
+            self._send_json(HTTPStatus.OK, payload, head_only=head_only)
+
+        def _serve_media(self, source_id: str, head_only: bool) -> None:
+            try:
+                resolved = application.resolve_media(source_id)
+            except Exception:
+                resolved = None
+            if resolved is None:
+                self._send_error_json(
+                    HTTPStatus.NOT_FOUND,
+                    "media_unavailable",
+                    "The source is unavailable or outside allowlisted roots.",
+                    head_only=head_only,
+                )
+                return
+
+            start = 0
+            end = resolved.size - 1
+            status = HTTPStatus.OK
+            range_header = self.headers.get("Range")
+            if range_header is not None:
+                byte_range = _parse_range(range_header, resolved.size)
+                if byte_range is None:
+                    self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+                    self._security_headers()
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header(
+                        "Content-Range",
+                        f"bytes */{resolved.size}",
+                    )
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                start, end = byte_range
+                status = HTTPStatus.PARTIAL_CONTENT
+
+            content_length = max(0, end - start + 1)
+            self.send_response(status)
+            self._security_headers()
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Type", resolved.content_type)
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(content_length))
+            if status == HTTPStatus.PARTIAL_CONTENT:
+                self.send_header(
+                    "Content-Range",
+                    f"bytes {start}-{end}/{resolved.size}",
+                )
+            self.end_headers()
+            if head_only:
+                return
+            try:
+                with resolved.path.open("rb") as media_file:
+                    media_file.seek(start)
+                    remaining = content_length
+                    while remaining:
+                        chunk = media_file.read(min(64 * 1024, remaining))
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        remaining -= len(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                return
+
+        def _read(self, head_only: bool) -> None:
+            route = unquote(urlsplit(self.path).path)
+            if self._serve_static(route, head_only):
+                return
+            if route == "/api/snapshot":
+                self._serve_snapshot(head_only)
+                return
+            if route.startswith("/media/"):
+                source_id = route.removeprefix("/media/")
+                if "/" not in source_id:
+                    self._serve_media(source_id, head_only)
+                    return
+            self._send_error_json(
+                HTTPStatus.NOT_FOUND,
+                "not_found",
+                "The requested preview route does not exist.",
+                head_only=head_only,
+            )
+
+        def _read_json_body(self) -> dict[str, Any] | None:
+            content_type = self.headers.get("Content-Type", "")
+            if content_type.split(";", 1)[0].strip() != "application/json":
+                self._send_error_json(
+                    HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+                    "json_required",
+                    "Manual edit requests require application/json.",
+                )
+                return None
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                content_length = 0
+            if content_length <= 0:
+                self._send_error_json(
+                    HTTPStatus.BAD_REQUEST,
+                    "body_required",
+                    "A JSON request body is required.",
+                )
+                return None
+            if content_length > 128 * 1024:
+                self._send_error_json(
+                    HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                    "body_too_large",
+                    "Manual edit request exceeds 128 KiB.",
+                )
+                return None
+            try:
+                payload = json.loads(
+                    self.rfile.read(content_length).decode("utf-8")
+                )
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                self._send_error_json(
+                    HTTPStatus.BAD_REQUEST,
+                    "invalid_json",
+                    "Request body must be valid UTF-8 JSON.",
+                )
+                return None
+            if not isinstance(payload, dict):
+                self._send_error_json(
+                    HTTPStatus.BAD_REQUEST,
+                    "object_required",
+                    "Request body must be a JSON object.",
+                )
+                return None
+            return payload
+
+        def _manual_edit(self, route: str) -> None:
+            if application.manual_edits is None:
+                self._send_error_json(
+                    HTTPStatus.CONFLICT,
+                    "manual_edit_disabled",
+                    "Manual apply is available only for current workspace state.",
+                )
+                return
+            payload = self._read_json_body()
+            if payload is None:
+                return
+            try:
+                if route == "/api/manual-edits/validate":
+                    proposal, review = application.manual_edits.review(
+                        payload.get("proposal")
+                    )
+                    self._send_json(
+                        HTTPStatus.OK,
+                        {
+                            "persisted": False,
+                            "proposal": proposal.model_dump(mode="json"),
+                            "review": review.model_dump(mode="json"),
+                        },
+                    )
+                    return
+                if route == "/api/manual-edits/apply":
+                    result = application.manual_edits.apply(
+                        payload.get("proposal"),
+                        payload.get("confirmation"),
+                    )
+                    self._send_json(HTTPStatus.OK, result)
+                    return
+            except ManualEditValidationError as exc:
+                self._send_error_json(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    "invalid_manual_edit",
+                    str(exc),
+                )
+                return
+            except (TypeError, ValueError) as exc:
+                self._send_error_json(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    "manual_edit_rejected",
+                    str(exc),
+                )
+                return
+            except Exception:
+                self._send_error_json(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    "manual_edit_failed",
+                    "The confirmed manual edit could not be applied.",
+                )
+                return
+            self._reject_write()
+
+        def do_GET(self) -> None:
+            self._read(head_only=False)
+
+        def do_HEAD(self) -> None:
+            self._read(head_only=True)
+
+        def do_POST(self) -> None:
+            route = unquote(urlsplit(self.path).path)
+            if route in {
+                "/api/manual-edits/validate",
+                "/api/manual-edits/apply",
+            }:
+                self._manual_edit(route)
+                return
+            self._reject_write()
+
+        def _reject_write(self) -> None:
+            self.send_response(HTTPStatus.METHOD_NOT_ALLOWED)
+            self._security_headers()
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Allow", "GET, HEAD")
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            content = (
+                b'{"error":{"code":"read_only","message":'
+                b'"The timeline preview has no write routes."}}'
+            )
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+
+        do_PUT = _reject_write
+        do_PATCH = _reject_write
+        do_DELETE = _reject_write
+
+    return PreviewRequestHandler
+
+
+def create_preview_server(
+    application: PreviewApplication,
+    *,
+    host: str = "127.0.0.1",
+    port: int = 8765,
+) -> ThreadingHTTPServer:
+    if host not in LOOPBACK_HOSTS:
+        raise PreviewConfigurationError(
+            "The preview server may bind only to localhost or a loopback IP."
+        )
+    if not 0 <= port <= 65535:
+        raise PreviewConfigurationError("Port must be between 0 and 65535.")
+    server_class = (
+        _IPv6ThreadingHTTPServer
+        if host == "::1"
+        else ThreadingHTTPServer
+    )
+    return server_class((host, port), _handler_class(application))
+
+
+def _snapshot_provider(
+    timeline_path: str | Path | None,
+) -> Callable[[], TimelineSnapshot]:
+    if timeline_path is None:
+        return TimelineSnapshotService.snapshot_current
+    path = Path(timeline_path).expanduser().resolve(strict=True)
+    if not path.is_file():
+        raise PreviewConfigurationError(
+            f"Timeline path is not a file: {timeline_path}"
+        )
+
+    def load_timeline_snapshot() -> TimelineSnapshot:
+        with path.open("r", encoding="utf-8") as timeline_file:
+            data = json.load(timeline_file)
+        return TimelineSnapshotService.snapshot(data)
+
+    return load_timeline_snapshot
+
+
+def run_preview_server(
+    *,
+    timeline_path: str | Path | None = None,
+    media_roots: Iterable[str | Path] = (),
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    skill_registry: Mapping[str, Any] | None = None,
+) -> None:
+    """Run the blocking local preview server until interrupted."""
+
+    application = PreviewApplication(
+        _snapshot_provider(timeline_path),
+        media_roots,
+        skill_registry=skill_registry,
+        manual_edits_enabled=(
+            timeline_path is None and skill_registry is not None
+        ),
+    )
+    server = create_preview_server(application, host=host, port=port)
+    bound_host, bound_port = server.server_address[:2]
+    display_host = f"[{bound_host}]" if ":" in bound_host else bound_host
+    print(
+        f"Vistora snapshot-first timeline preview: "
+        f"http://{display_host}:{bound_port}"
+    )
+    print(
+        f"Media roots allowlisted: {application.media_resolver.root_count}. "
+        "Press Ctrl+C to stop."
+    )
+    print(
+        "Manual apply: "
+        + (
+            "enabled through the atomic skill registry."
+            if application.manual_edits is not None
+            else "disabled for an external timeline document."
+        )
+    )
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()

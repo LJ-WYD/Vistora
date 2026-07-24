@@ -40,10 +40,13 @@ src/
     operator_agent.py        Current hybrid conversational/tool-calling agent
   contracts/
     models.py                Versioned plan, confirmation, execution,
-                              project, and atomic tool envelopes
+                              project, manual-edit, and tool envelopes
   timeline_query/
     models.py                Immutable, versioned timeline read models
     service.py               Deterministic read-only snapshot construction
+  timeline_preview/
+    server.py                Loopback snapshot/media and confirmed-edit server
+    static/                  Framework-free timeline preview UI
   core/
     timeline.py              Timeline models and MoviePy/FFmpeg renderer
     timeline_manager.py      Persistence for the active timeline
@@ -63,15 +66,18 @@ tests/
   test_reference_workflow.py  Repeatability, traceability, and media checks
   test_timeline_snapshot.py   Read isolation, stability, compatibility,
                               reference, and boundary checks
+  test_timeline_preview.py    Endpoint, media, draft/apply, and boundary checks
+  test_manual_edits.py        Manual contracts, confirmation, persistence,
+                              stale-state, and rollback checks
 ```
 
-There is no frontend application, browser UI, desktop GUI, API server, or UI state store in the repository. The only user interface is the command line.
+The repository now contains a framework-free local visual timeline preview launched from the command line. There is still no production frontend application, desktop GUI, remote API server, or persistent UI state store. The local preview owns transient detached draft state only.
 
 ## Implemented runtime
 
 ### CLI entry points
 
-`src/main.py` exposes four commands:
+`src/main.py` exposes five commands:
 
 | Command | Implemented behavior | Architectural status |
 | --- | --- | --- |
@@ -79,6 +85,7 @@ There is no frontend application, browser UI, desktop GUI, API server, or UI sta
 | `run-skill` | Parses JSON and executes one named registered skill. | Low-level/manual tool interface; bypasses Director confirmation by design. |
 | `render` | Loads `TimelineConfig` and invokes `TimelineRenderer` directly. | Current compatibility path; it bypasses the target atomic-tool-only mutation boundary. |
 | `chat` | Creates `OperatorAgent` with the registry and enters a conversational loop. | Prototype flow; not the target Director/Editing split. |
+| `preview` | Starts the loopback-only timeline snapshot UI, optionally for a supplied timeline document and explicit media roots. Current-workspace mode can submit an explicitly confirmed manual proposal to one registered atomic tool. | The browser and HTTP handler never mutate directly; external documents remain read-only. |
 
 The registry is currently a module-level dictionary named `SKILLS`. It contains:
 
@@ -87,6 +94,7 @@ The registry is currently a module-level dictionary named `SKILLS`. It contains:
 - `VideoExportSkill`
 - `VideoTimelapseSkill`
 - `VideoClearTimelineSkill`
+- `VideoApplyManualEditsSkill`
 
 Registration is hard-coded. There is no plugin discovery, registry version, capability negotiation, or authorization layer.
 
@@ -117,8 +125,11 @@ This flow validates individual tool arguments through `BaseSkill.execute`, but i
 | `TimelineProjectDocument` | `vistora.timeline-project` | Adds project ID, revision, and schema metadata while deterministically wrapping legacy timeline JSON. |
 | `AtomicToolRequestEnvelope` | `vistora.atomic-tool-request` | Traces one confirmed execution step and validates arguments with the existing registered skill input model. |
 | `AtomicToolResultEnvelope` | `vistora.atomic-tool-result` | Correlates a result to its request/execution/step and enforces consistent success/error state. |
+| `ManualEditProposal` | `vistora.manual-edit-proposal` | Identifies a user-authored, snapshot-bound batch of video clip timing/order/removal changes; it is explicitly not a Director plan. |
+| `ManualEditConfirmationRecord` | `vistora.manual-edit-confirmation` | Immutably binds a local user's decision to one exact manual proposal ID and digest. |
+| `ManualEditReview` | `vistora.manual-edit-review` | Provides structured before/after changes after validation and before any write. |
 
-These contracts are not wired into `OperatorAgent`, the CLI, `TimelineManager`, or tool execution yet. Their presence does not create a Director Agent or Editing Agent and does not authorize execution.
+The Director/Editing contracts are not wired into `OperatorAgent`, the CLI, or production agent execution yet. Their presence does not create a Director Agent or Editing Agent and does not authorize execution. The separate manual-edit contracts are wired only into the local preview application service and the dedicated confirmed atomic skill described below; they do not represent Director decisions.
 
 ### Timeline state and rendering
 
@@ -159,6 +170,48 @@ payload = snapshot.model_dump(mode="json")
 
 This boundary is suitable for Director read context or a future UI, but it is not a mutation API. The Director and Editing Agent contracts remain unchanged: the Director may inspect this data, the Editing Agent validates and dispatches a confirmed plan, and only registered atomic tools may mutate timeline or media.
 
+### Local visual timeline preview
+
+`src/timeline_preview/` is the first consumer of `TimelineSnapshotService`. It uses Python's standard-library threaded HTTP server and static HTML/CSS/JavaScript; no framework, build system, web server dependency, or persistent UI store is introduced.
+
+The loopback-only server has a deliberately narrow route surface:
+
+| Route | Methods | Behavior |
+| --- | --- | --- |
+| `/`, `/index.html`, `/app.css`, `/app.js` | `GET`, `HEAD` | Fixed packaged preview assets only. |
+| `/api/snapshot` | `GET`, `HEAD` | A read-only envelope around the current immutable timeline snapshot and derived media availability. |
+| `/media/<source_id>` | `GET`, `HEAD` | Browser-safe audio/video bytes for a source already present in the snapshot, including single-range support. |
+| `/api/manual-edits/validate` | `POST` | Validates a detached user-authored proposal and returns a reviewable diff; never writes. |
+| `/api/manual-edits/apply` | `POST` | Requires an exact matching confirmation, then asks the application service to dispatch the registered manual-edit atomic skill. |
+
+Unknown `POST` routes and all `PUT`, `PATCH`, and `DELETE` requests return `405`. There are no agent, render, upload, filesystem-browse, or direct timeline-manager routes. The server accepts only `127.0.0.1`, `::1`, or `localhost` binds.
+
+Media is disabled unless the operator supplies one or more `--media-root` directories. A configured source can be served only when its opaque `source_*` ID occurs in the current snapshot, its canonical path remains inside an allowlisted root after symlink resolution, and its extension is in the small browser audio/video allowlist. Requests never accept raw paths, directory traversal cannot address media, and error responses do not disclose resolved filesystem paths.
+
+The UI renders the snapshot's deterministic track order, preserves clip order and timing, and represents only the implemented `video` and `audio` kinds as such. Other track kinds remain visible as unsupported data-only lanes; it does not infer subtitle, transition, compositing, waveform, or thumbnail semantics. Preview selection, browser playback, playhead movement, zoom, and scrolling are transient local view state.
+
+Current-workspace mode adds a deliberately narrow manual path:
+
+```text
+TimelineSnapshot (detached read)
+  -> local browser draft (trim-in/out, timeline start, order, removal)
+  -> POST validate -> ManualEditReview (no persistence)
+  -> explicit Confirm & apply
+  -> ManualEditConfirmationRecord bound to exact proposal digest
+  -> ManualEditApplicationService
+  -> registered VideoApplyManualEditsSkill
+  -> copied timeline validation + atomic file replacement
+  -> reloaded TimelineSnapshot
+```
+
+The proposal is authored by the user, not by a Director, and is never wrapped or labeled as Director creative intent. Undo and reset operate only on the uncommitted browser draft; undoing a staged removal restores it without a server write. Apply is disabled when `--timeline` points to an external document because the existing mutation boundary persists only the current `TimelineManager` workspace. Validation checks snapshot project ID, revision, and digest again inside the atomic skill to reject stale proposals.
+
+Run:
+
+```powershell
+python src/main.py preview --media-root C:\path\to\media
+```
+
 `TimelineRenderer` consumes a `TimelineConfig` and writes media. It selects single-clip and multi-clip FFmpeg fast paths where possible and falls back to a MoviePy composite path. Hardware/color/proxy helpers live under `src/utils/`.
 
 ### Atomic skill contract today
@@ -174,10 +227,11 @@ The implemented mutation ownership is:
 | `VideoClearTimelineSkill` | Deletes the active timeline state. | None. |
 | `VideoExportSkill` | May reset timeline state after export. | Renders the timeline to an output file. |
 | `VideoTimelapseSkill` | None. | Writes a new timelapse file through FFmpeg. |
+| `VideoApplyManualEditsSkill` | Applies one exact confirmed user proposal to copied current video-track state, then atomically replaces timeline JSON. | None. |
 
 These are the only registered atomic mutation entry points. Tests may reset state directly as test-fixture setup. The CLI `render` command remains a documented nonconforming compatibility exception.
 
-Versioned atomic request/result envelopes now define the target boundary and can validate request arguments against the existing registry. Current skills still return their existing dictionaries or raise exceptions; the runtime does not wrap them yet. Atomicity currently means a bounded operation exposed as one skill; it does not yet guarantee transactional rollback, idempotency, or crash recovery.
+Versioned atomic request/result envelopes now define the target agent boundary and can validate request arguments against the existing registry. Current agent-driven skills still return their existing dictionaries or raise exceptions; the runtime does not wrap them yet. The manual-edit tool instead consumes its dedicated proposal/confirmation schema and durable-writes a fully validated copied timeline before replacement. Other skills do not yet guarantee transactional rollback, idempotency, or crash recovery.
 
 ### Validation today
 
@@ -193,6 +247,10 @@ This lightweight check does not claim that the missing Director, confirmation ga
 `tests/test_contracts.py` covers schema/version rejection, plan digests and confirmation mismatches, prohibition of unconfirmed execution, creative-step drift, JSON round trips, deterministic legacy timeline migration, existing registry/schema validation, and consistent tool result states. These are contract tests, not end-to-end Director or Editing Agent tests.
 
 `tests/test_timeline_snapshot.py` proves deterministic ordering/serialization, derived summaries, immutable detachment, legacy and versioned compatibility, project/revision guard failures, clear invalid-reference/timing failures, persistence read isolation, and the absence of mutation/media-engine calls from the query package. The existing static agent-import test continues to prevent agent modules from importing mutation engines.
+
+`tests/test_timeline_preview.py` covers the snapshot contract, packaged assets, security headers, allowlisted resolution, traversal rejection, range and `HEAD` responses, unavailable/unsupported media, rejection of unapproved write routes, no-write proposal validation, confirmed apply/reload, invalid input, external-document edit disablement, read isolation, loopback binding, and the single approved registry dispatch in the preview application service.
+
+`tests/test_manual_edits.py` covers versioning/digests, immutable exact confirmation, structured diffs, no write before confirmation, update/reorder/removal persistence, rejected/mismatched/stale proposals, invalid targets, and atomic-save rollback/temporary-file cleanup.
 
 ### Reference main-workflow regression
 
@@ -306,8 +364,8 @@ Mutation-capable utilities and core objects are implementation details behind to
 | G-06 | Direct CLI render bypass | `render` instantiates `TimelineRenderer` directly. | Route mutations through an explicit atomic tool or clearly isolated maintenance interface. |
 | G-07 | Timeline persistence lacks production safeguards | One legacy JSON file; the opt-in project document and read snapshot expose revision metadata, but current persistence has no transaction, revision enforcement, history, or rollback. | Add explicit versioned persistence and recovery semantics without weakening the read boundary. |
 | G-08 | Tool envelopes are not wired into execution | Versioned request/result/error models exist, but each skill still returns an ad hoc dictionary or raises. | Wrap runtime dispatch and declare side effects without breaking skill schemas. |
-| G-09 | No frontend/UI | Repository contains only a CLI. | Design UI state around draft, confirmation, execution, and result phases. |
+| G-09 | No production workflow UI | A local snapshot-first timeline preview with a narrow confirmed manual-edit path exists, but there is no Director plan/confirmation/execution interface. | Design future workflow UI around draft, confirmation, execution, and result phases without weakening the read boundary. |
 | G-10 | Production agent gates remain untested | The reference harness covers contract confirmation, atomic dispatch, traceability, and media output, but no Director or Editing runtime exists. | Add agent-level gate tests as those components are implemented. |
-| G-11 | No visualization consumer | A stable read-only snapshot exists, but no frontend, player, server, thumbnails, or waveforms exist. | Build future visualization against `vistora.timeline-snapshot` without importing mutation engines. |
+| G-11 | Visualization/manual editing remains local and narrow | The loopback UI provides snapshot lanes, safe material preview, and a confirmed basic video-clip edit slice, but no production frontend, thumbnails, waveforms, or broader editing controls. | Extend only through separately approved contracts and atomic tools while preserving confirmation and mutation boundaries. |
 
 This gap register is descriptive. Closing any gap requires a separate approved implementation task.
