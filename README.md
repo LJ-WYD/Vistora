@@ -66,6 +66,14 @@ The integration validation creates its own synthetic source clip and generated o
 python tests/run_validation.py
 ```
 
+Run the deterministic contract-to-atomic-tool reference workflow:
+
+```powershell
+python -m pytest -q tests/test_reference_workflow.py
+```
+
+This reference is a test harness; it does not implement production Director or Editing Agents.
+
 Generated validation media and local runtime state are ignored by Git.
 
 ## Project status

@@ -51,11 +51,13 @@ src/
     hardware.py              Encoder and color metadata helpers
     proxy.py                 Reverse-proxy media generation
 tests/
+  reference_workflow.py      Test-only contract-to-tool regression harness
   run_validation.py          Synthetic end-to-end timeline/render validation
   test_architecture_boundaries.py
                               Static agent-boundary and registry checks
   test_contracts.py           Versioning, confirmation, compatibility,
                               serialization, and envelope checks
+  test_reference_workflow.py  Repeatability, traceability, and media checks
 ```
 
 There is no frontend application, browser UI, desktop GUI, API server, or UI state store in the repository. The only user interface is the command line.
@@ -158,6 +160,39 @@ This lightweight check does not claim that the missing Director, confirmation ga
 
 `tests/test_contracts.py` covers schema/version rejection, plan digests and confirmation mismatches, prohibition of unconfirmed execution, creative-step drift, JSON round trips, deterministic legacy timeline migration, existing registry/schema validation, and consistent tool result states. These are contract tests, not end-to-end Director or Editing Agent tests.
 
+### Reference main-workflow regression
+
+`tests/reference_workflow.py` is the deterministic reference for the intended main workflow while production Director and Editing Agents remain absent:
+
+```text
+generated 320x180/24 fps silent source
+  -> fixed analyzed media facts
+  -> DirectorPlan data constructed by the harness
+  -> immutable matching UserConfirmationRecord
+  -> EditingExecutionPlan derived without creative drift
+  -> AtomicToolRequestEnvelope for each confirmed step
+  -> registered atomic skill dispatch only
+  -> AtomicToolResultEnvelope for each result
+  -> exported H.264 silent media
+  -> ffprobe metadata and trace verification
+```
+
+It uses only `VideoClearTimelineSkill`, `VideoAddClipSkill`, and `VideoExportSkill`. Fixed contract IDs, timestamps, relative generated paths, and a deterministic test clip UUID make two consecutive runs directly comparable. Generated source/output files and isolated timeline state live below `tests/test_data/` and remain ignored.
+
+Run the focused automated regression:
+
+```powershell
+python -m pytest -q tests/test_reference_workflow.py
+```
+
+Or run the harness directly to print its trace summary:
+
+```powershell
+python tests/reference_workflow.py
+```
+
+This is fixture orchestration, not an implementation of either agent. Source generation and `ffprobe` are test setup/verification; every timeline or exported-media mutation in the workflow is dispatched through the registered atomic skills.
+
 ## Target contracts
 
 ### Director Agent
@@ -238,6 +273,6 @@ Mutation-capable utilities and core objects are implementation details behind to
 | G-07 | Timeline state lacks production safeguards | One JSON file; no revision, transaction, history, or rollback. | Add explicit project/revision and recovery semantics. |
 | G-08 | Tool envelopes are not wired into execution | Versioned request/result/error models exist, but each skill still returns an ad hoc dictionary or raises. | Wrap runtime dispatch and declare side effects without breaking skill schemas. |
 | G-09 | No frontend/UI | Repository contains only a CLI. | Design UI state around draft, confirmation, execution, and result phases. |
-| G-10 | Runtime tests do not cover target gates | Contract tests cover confirmation rules; no Director or Editing runtime exists to exercise end-to-end. | Add agent-level gate tests as those components are implemented. |
+| G-10 | Production agent gates remain untested | The reference harness covers contract confirmation, atomic dispatch, traceability, and media output, but no Director or Editing runtime exists. | Add agent-level gate tests as those components are implemented. |
 
-This gap register is descriptive. Closing any gap is a separate implementation task and is outside the scope of this architecture-audit step.
+This gap register is descriptive. Closing any gap requires a separate approved implementation task.
