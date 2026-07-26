@@ -18,6 +18,7 @@ from contracts import (
 from core import timeline_manager
 from core.timeline import TimelineConfig
 from timeline_query import TimelineSnapshotService
+from traceability.recording import ManualTraceRecorder
 
 from .base import BaseSkill
 
@@ -97,6 +98,27 @@ def _atomic_save(timeline: TimelineConfig) -> None:
         temp_path.unlink(missing_ok=True)
 
 
+def _atomic_restore(previous_content: bytes | None) -> None:
+    """Restore the exact pre-apply file state after trace persistence failure."""
+
+    project_file = Path(timeline_manager.PROJECT_FILE)
+    if previous_content is None:
+        project_file.unlink(missing_ok=True)
+        return
+    project_file.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = project_file.parent / (
+        f".{project_file.name}.{uuid.uuid4().hex}.rollback.tmp"
+    )
+    try:
+        with temp_path.open("xb") as temp_file:
+            temp_file.write(previous_content)
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+        os.replace(temp_path, project_file)
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
 class VideoApplyManualEditsSkill(BaseSkill):
     """Apply an exact confirmed manual clip proposal as one atomic write."""
 
@@ -135,8 +157,22 @@ class VideoApplyManualEditsSkill(BaseSkill):
         for edit in proposal.edits:
             _apply_edit(updated, edit)
 
+        project_file = Path(timeline_manager.PROJECT_FILE)
+        previous_content = (
+            project_file.read_bytes() if project_file.exists() else None
+        )
         _atomic_save(updated)
         applied_snapshot = TimelineSnapshotService.snapshot(updated)
+        try:
+            trace = ManualTraceRecorder.record(
+                proposal,
+                confirmation,
+                current_snapshot,
+                applied_snapshot,
+            )
+        except Exception:
+            _atomic_restore(previous_content)
+            raise
         return {
             "status": "success",
             "tool_name": self.name,
@@ -148,6 +184,8 @@ class VideoApplyManualEditsSkill(BaseSkill):
             "project_id": applied_snapshot.project_id,
             "revision": applied_snapshot.revision,
             "timeline_digest": applied_snapshot.timeline_digest,
+            "trace_id": trace.trace_id,
+            "trace_sequence": trace.trace_sequence,
             "applied_operation_ids": [
                 edit.operation_id for edit in proposal.edits
             ],

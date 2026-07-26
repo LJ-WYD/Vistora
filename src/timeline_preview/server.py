@@ -19,6 +19,7 @@ from media_analysis import (
     MediaAnalysisService,
 )
 from timeline_query import TimelineSnapshot, TimelineSnapshotService
+from traceability.store import TraceabilityStore
 
 from .manual_edits import (
     ManualEditApplicationService,
@@ -749,7 +750,10 @@ def _snapshot_provider(
     def load_timeline_snapshot() -> TimelineSnapshot:
         with path.open("r", encoding="utf-8") as timeline_file:
             data = json.load(timeline_file)
-        return TimelineSnapshotService.snapshot(data)
+        return TimelineSnapshotService.snapshot(
+            data,
+            trace_document=TraceabilityStore.load(path),
+        )
 
     return load_timeline_snapshot
 

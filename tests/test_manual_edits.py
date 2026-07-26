@@ -26,6 +26,7 @@ from timeline_preview.manual_edits import (  # noqa: E402
     ManualEditValidationError,
 )
 from timeline_query import TimelineSnapshotService  # noqa: E402
+from traceability.store import TraceabilityStore  # noqa: E402
 
 
 FIXED_TIME = datetime(2026, 7, 24, tzinfo=timezone.utc)
@@ -153,6 +154,7 @@ def test_review_is_structured_and_does_not_write_before_confirmation(
 
     assert normalized == proposal
     assert isolated_timeline.read_bytes() == before
+    assert not TraceabilityStore.trace_path().exists()
     assert review.proposal_ref.proposal_digest == proposal.digest()
     assert review.changes[0].before["order_index"] == 1
     assert review.changes[0].after["order_index"] == 0
@@ -194,7 +196,42 @@ def test_confirmed_atomic_skill_updates_reorders_removes_and_persists(
     assert persisted.tracks["video"].clips[0].trim_in == 0.5
     assert persisted.tracks["video"].clips[0].trim_out == 2.5
     assert persisted.tracks["video"].clips[0].timeline_start == 1.0
+    trace_document = TraceabilityStore.load()
+    assert result["trace_id"] == trace_document.manual_traces[0].trace_id
+    assert {
+        relation.relation_type
+        for relation in trace_document.manual_traces[0].relations
+    } == {"modifies", "deletes"}
     assert not list(isolated_timeline.parent.glob("*.tmp"))
+
+
+def test_manual_reorder_records_displaced_clip_consequence(
+    isolated_timeline: Path,
+) -> None:
+    snapshot = TimelineSnapshotService.snapshot_current()
+    proposal = _proposal(snapshot, _update())
+    VideoApplyManualEditsSkill().execute(
+        {
+            "proposal": proposal.model_dump(mode="json"),
+            "confirmation": _confirmation(proposal).model_dump(mode="json"),
+        }
+    )
+
+    relations = TraceabilityStore.load().manual_traces[0].relations
+    assert tuple(relation.relation_sequence for relation in relations) == (
+        1,
+        2,
+    )
+    assert (
+        relations[0].entity.entity_id,
+        relations[0].effect_kind,
+        relations[0].operation_id,
+    ) == ("clip_b", "direct", "manual_update_b")
+    assert (
+        relations[1].entity.entity_id,
+        relations[1].effect_kind,
+        relations[1].operation_id,
+    ) == ("clip_a", "consequential", "manual_update_b")
 
 
 def test_rejected_mismatched_and_stale_proposals_never_write(
@@ -257,6 +294,34 @@ def test_atomic_save_failure_preserves_original_and_cleans_temp(
 
     assert isolated_timeline.read_bytes() == before
     assert not list(isolated_timeline.parent.glob("*.tmp"))
+
+
+def test_trace_write_failure_rolls_back_confirmed_timeline_edit(
+    isolated_timeline: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = TimelineSnapshotService.snapshot_current()
+    proposal = _proposal(snapshot, _update())
+    confirmation = _confirmation(proposal)
+    before = isolated_timeline.read_bytes()
+
+    def fail_trace(*args, **kwargs):
+        raise OSError("simulated trace failure")
+
+    monkeypatch.setattr(
+        "skills.video_apply_manual_edits.ManualTraceRecorder.record",
+        fail_trace,
+    )
+    with pytest.raises(OSError, match="trace failure"):
+        VideoApplyManualEditsSkill().execute(
+            {
+                "proposal": proposal.model_dump(mode="json"),
+                "confirmation": confirmation.model_dump(mode="json"),
+            }
+        )
+
+    assert isolated_timeline.read_bytes() == before
+    assert not TraceabilityStore.trace_path().exists()
 
 
 def test_review_rejects_invalid_target_order_and_unknown_clip() -> None:

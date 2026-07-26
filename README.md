@@ -68,7 +68,7 @@ snapshot = TimelineSnapshotService.snapshot_current()
 print(snapshot.model_dump_json(indent=2))
 ```
 
-The `vistora.timeline-snapshot` output is versioned and deterministic. It includes project/revision identity, configured tracks and clips, source references, declared timing, and aggregate duration/count fields. The service accepts a current `TimelineConfig`, legacy timeline JSON, or a versioned `TimelineProjectDocument`. It does not probe media, save state, render, or expose mutable source models. Add `src` to `PYTHONPATH` when invoking this library directly from the repository root.
+The `vistora.timeline-snapshot` output is versioned and deterministic. It includes project/revision identity, configured tracks and clips, source references, declared timing, aggregate duration/count fields, and detached clip provenance summaries when trace data exists. The service accepts a current `TimelineConfig`, legacy timeline JSON, or a versioned `TimelineProjectDocument`. It does not probe media, save state, render, or expose mutable source models. Add `src` to `PYTHONPATH` when invoking this library directly from the repository root.
 
 Open the local snapshot-first visual timeline:
 
@@ -78,11 +78,30 @@ python src/main.py preview --media-root C:\path\to\your\media
 
 Then visit `http://127.0.0.1:8765`. Use `--timeline path\to\timeline.json` to inspect a specific legacy or versioned document instead of the current workspace, repeat `--media-root` for additional roots, or omit all media roots to disable browser media serving.
 
-The preview provides an allowlisted material monitor, time ruler/timecode, synchronized local playhead, deterministic video thumbnails, timeline-aligned audio waveforms, video/audio lanes, data-only unsupported-track messaging, a selected-clip inspector, zoom/horizontal scrolling, and snapshot summary. The inspector reports opaque source reference and ID, media type, track, source range, timeline range/duration, playback properties, and availability/analysis status.
+The preview provides an allowlisted material monitor, time ruler/timecode, synchronized local playhead, deterministic video thumbnails, timeline-aligned audio waveforms, video/audio lanes, data-only unsupported-track messaging, a selected-clip inspector, zoom/horizontal scrolling, and snapshot summary. The inspector reports opaque source reference and ID, media type, track, source range, timeline range/duration, playback properties, availability/analysis status, and recorded origin/plan/step/evidence status. Legacy clips clearly report unknown provenance rather than receiving fabricated history.
 
 Media URLs and browser snapshot references contain only opaque IDs; configured absolute paths are redacted before the snapshot crosses the HTTP boundary. Paths are resolved only on the server against explicit roots after symlink resolution, and byte ranges are supported for browser playback. Thumbnail PNGs and normalized waveform peaks come from the separate versioned `media_analysis` read boundary. Results and artifacts use a bounded in-memory cache, so refresh and zoom reuse analysis without generating repository files. Missing, unreadable, unsupported, and decode-failed sources remain visible as explicit placeholders. The server binds only to a loopback interface.
 
 For the current workspace only, a selected video clip can also be changed through a detached manual draft: source in/out, timeline start, list order, or removal. Staging and server-side validation do not write. The UI shows a before/after proposal, supports undo/reset (including restoring a staged removal), and requires the explicit **Confirm & apply** action. That action binds a user confirmation to the exact proposal digest and dispatches one transactional atomic skill through the registry. The browser never writes `TimelineManager` or media directly. Manual apply is disabled for `--timeline` external documents, which remain strictly read-only.
+
+## Provenance and trace queries
+
+Vistora stores new provenance in an append-only `current_timeline.trace.json` sidecar beside the compatible legacy timeline. Versioned contracts link source evidence, a confirmed Director plan, its execution step, atomic request/result, and the clips or generated output affected by that result. Manual Apply records a separate truthful `user_manual` change; it never labels user-authored edits as Director intent. Trims and reorders preserve the original clip origin while recording the latest user change, and removals retain a queryable tombstone.
+
+Legacy projects need no sidecar and continue to load and render unchanged. Missing history is reported as `legacy_unknown`; stale, orphaned, and deleted mappings are explicit, and the inspector surfaces a recorded live clip that is missing from the current timeline. Generated media outputs use a distinct `generated_media` relation rather than being mislabeled as source footage or a manual edit. Source evidence exposed to the browser contains only opaque material IDs, typed locators, bounded time ranges, and optional analysis-fact IDs—not filesystem paths.
+
+```python
+from contracts import PlanReference
+from timeline_query import TimelineSnapshotService
+from traceability.query import TraceabilityQuery
+from traceability.store import TraceabilityStore
+
+snapshot = TimelineSnapshotService.snapshot_current()
+query = TraceabilityQuery(TraceabilityStore.load(), snapshot)
+clips = query.plan_to_clips(PlanReference.from_plan(director_plan))
+```
+
+This is provenance infrastructure, not a production Director or Editing Agent and not a plan-diff preview. Those runtimes and that future review surface remain absent.
 
 ## Validation
 

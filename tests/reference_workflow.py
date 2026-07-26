@@ -7,6 +7,7 @@ only through the registered atomic skills.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -31,18 +32,25 @@ from contracts import (  # noqa: E402
     DirectorOperation,
     DirectorPlan,
     EditingExecutionPlan,
+    MediaTimeRangeLocator,
     PlanReference,
+    SourceEvidenceReference,
     ToolError,
     UserConfirmationRecord,
 )
 from core import timeline_manager  # noqa: E402
 from moviepy import ColorClip  # noqa: E402
+from timeline_query import TimelineSnapshotService  # noqa: E402
+from traceability.models import TimelineTraceDocument  # noqa: E402
+from traceability.query import TraceabilityQuery  # noqa: E402
+from traceability.recording import ConfirmedTraceRecorder  # noqa: E402
+from traceability.store import TraceabilityStore  # noqa: E402
 
 
 REFERENCE_TIME = datetime(2026, 7, 24, tzinfo=timezone.utc)
 REFERENCE_CLIP_UUID = UUID("12345678-1234-5678-1234-567812345678")
 REFERENCE_PLAN_DIGEST = (
-    "sha256:43878f4d3f8738094fce210277e79763c35f6380e20d4fc31498a669330a4ddb"
+    "sha256:dcb3f03c238390a8e34873ab5b9ffdf57eb16269a42259801bdf95ba3aa3c583"
 )
 REFERENCE_TOOL_ORDER = (
     "VideoClearTimelineSkill",
@@ -70,6 +78,8 @@ class ReferenceWorkflowReport:
     execution: EditingExecutionPlan
     requests: tuple[AtomicToolRequestEnvelope, ...]
     results: tuple[AtomicToolResultEnvelope, ...]
+    trace_document: TimelineTraceDocument
+    traced_clips: tuple[dict[str, Any], ...]
     output_metadata: dict[str, Any]
     timeline_state_removed: bool
 
@@ -84,6 +94,12 @@ class ReferenceWorkflowReport:
             "request_ids": [request.request_id for request in self.requests],
             "result_ids": [result.result_id for result in self.results],
             "tool_order": [request.tool_name for request in self.requests],
+            "trace_revision": self.trace_document.revision,
+            "trace_ids": [
+                trace.trace_id
+                for trace in self.trace_document.confirmed_traces
+            ],
+            "traced_clips": list(self.traced_clips),
             "output_metadata": self.output_metadata,
             "timeline_state_removed": self.timeline_state_removed,
         }
@@ -187,6 +203,14 @@ def _build_plan(
     facts: AnalyzedMediaFacts,
     output_path: str,
 ) -> DirectorPlan:
+    fact_payload = json.dumps(
+        asdict(facts),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    fact_digest = f"sha256:{hashlib.sha256(fact_payload).hexdigest()}"
+    evidence_id = "evidence_reference_source_trim"
     return DirectorPlan(
         plan_id="plan_reference_main_flow",
         plan_version=1,
@@ -206,6 +230,25 @@ def _build_plan(
             "pacing": "single concise 1.5 second shot",
             "audio": "silent",
         },
+        source_evidence=(
+            SourceEvidenceReference(
+                evidence_id=evidence_id,
+                material_id=(
+                    TimelineSnapshotService.source_id_for_configured_path(
+                        facts.source_path
+                    )
+                ),
+                locator=MediaTimeRangeLocator(
+                    start_seconds=0.25,
+                    end_seconds=1.75,
+                ),
+                analysis_fact_id="analysis_fact_reference_source",
+                analysis_fact_digest=fact_digest,
+                description=(
+                    "Known deterministic source range used by the trim."
+                ),
+            ),
+        ),
         operations=(
             DirectorOperation(
                 operation_id="operation_clear_timeline",
@@ -228,6 +271,7 @@ def _build_plan(
                 },
                 rationale="Use the confirmed deterministic trim.",
                 expected_effect="One silent 1.5 second timeline clip.",
+                evidence_ids=(evidence_id,),
             ),
             DirectorOperation(
                 operation_id="operation_export_reference",
@@ -268,6 +312,7 @@ def _isolated_timeline(work_dir: Path) -> Iterator[Path]:
     project_file = workspace / "current_timeline.json"
     timeline_manager.WORKSPACE_DIR = str(workspace)
     timeline_manager.PROJECT_FILE = str(project_file)
+    TraceabilityStore.trace_path(project_file).unlink(missing_ok=True)
     try:
         yield project_file
     finally:
@@ -299,6 +344,7 @@ def _dispatch_execution(
         validated = request.validate_against_registry(vistora_main.SKILLS)
         normalized_arguments = validated.model_dump(mode="python")
         skill = vistora_main.SKILLS[request.tool_name]
+        before_snapshot = TimelineSnapshotService.snapshot_current()
         try:
             payload = skill.execute(normalized_arguments)
         except Exception as exc:
@@ -321,18 +367,25 @@ def _dispatch_execution(
                 f"Atomic reference dispatch failed: {error_result.model_dump()}"
             ) from exc
 
-        results.append(
-            AtomicToolResultEnvelope(
-                result_id=f"result_reference_{index:02d}",
-                request_id=request.request_id,
-                execution_id=request.execution_id,
-                step_id=request.step_id,
-                tool_name=request.tool_name,
-                status="success",
-                payload=payload,
-                started_at=started_at,
-                finished_at=started_at,
-            )
+        result = AtomicToolResultEnvelope(
+            result_id=f"result_reference_{index:02d}",
+            request_id=request.request_id,
+            execution_id=request.execution_id,
+            step_id=request.step_id,
+            tool_name=request.tool_name,
+            status="success",
+            payload=payload,
+            started_at=started_at,
+            finished_at=started_at,
+        )
+        results.append(result)
+        after_snapshot = TimelineSnapshotService.snapshot_current()
+        ConfirmedTraceRecorder.record(
+            execution,
+            request,
+            result,
+            before_snapshot,
+            after_snapshot,
         )
 
     return tuple(requests), tuple(results)
@@ -398,6 +451,18 @@ def run_reference_workflow(
                 requests, results = _dispatch_execution(execution)
             output_metadata = _verify_output(output_path)
             timeline_state_removed = not project_file.exists()
+            trace_document = TraceabilityStore.load()
+            final_snapshot = TimelineSnapshotService.snapshot_current()
+            trace_query = TraceabilityQuery(
+                trace_document,
+                final_snapshot,
+            )
+            traced_clips = tuple(
+                result.model_dump(mode="json")
+                for result in trace_query.plan_to_clips(
+                    PlanReference.from_plan(plan)
+                )
+            )
 
         if not timeline_state_removed:
             raise AssertionError("Reference export did not clear timeline state")
@@ -409,6 +474,8 @@ def run_reference_workflow(
             execution=execution,
             requests=requests,
             results=results,
+            trace_document=trace_document,
+            traced_clips=traced_clips,
             output_metadata=output_metadata,
             timeline_state_removed=timeline_state_removed,
         )

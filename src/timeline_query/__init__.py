@@ -2,7 +2,10 @@
 
 from .models import (
     TIMELINE_SNAPSHOT_VERSION,
+    ClipProvenanceSummary,
     ClipSnapshot,
+    ClipTraceQueryResult,
+    EvidenceSummary,
     MediaSourceReference,
     TimelineSnapshot,
     TimelineSnapshotReference,
@@ -16,7 +19,10 @@ from .service import (
 
 __all__ = [
     "TIMELINE_SNAPSHOT_VERSION",
+    "ClipProvenanceSummary",
     "ClipSnapshot",
+    "ClipTraceQueryResult",
+    "EvidenceSummary",
     "MediaSourceReference",
     "TimelineSnapshot",
     "TimelineSnapshotError",

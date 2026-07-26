@@ -42,6 +42,72 @@ class MediaSourceReference(ReadModel):
     display_name: str = Field(min_length=1)
 
 
+class EvidenceSummary(ReadModel):
+    """Browser-safe source evidence referenced by confirmed intent."""
+
+    evidence_id: SnapshotId
+    material_id: SnapshotId
+    locator_type: Literal["media_time_range", "whole_material"]
+    start_seconds: FiniteFloat | None = Field(default=None, ge=0)
+    end_seconds: FiniteFloat | None = Field(default=None, gt=0)
+    analysis_fact_id: SnapshotId | None = None
+
+
+class ClipProvenanceSummary(ReadModel):
+    """Detached origin/change summary for one current or historical clip."""
+
+    schema_name: Literal["vistora.clip-provenance-summary"] = (
+        "vistora.clip-provenance-summary"
+    )
+    schema_version: SnapshotVersion = TIMELINE_SNAPSHOT_VERSION
+    origin_kind: Literal[
+        "director_plan",
+        "user_manual",
+        "legacy_unknown",
+    ]
+    latest_change_origin: Literal[
+        "director_plan",
+        "user_manual",
+        "legacy_unknown",
+    ]
+    mapping_status: Literal[
+        "current",
+        "legacy_unknown",
+        "stale",
+        "orphaned",
+        "deleted",
+    ]
+    trace_revision: int = Field(ge=1)
+    plan_id: SnapshotId | None = None
+    plan_version: int | None = Field(default=None, ge=1)
+    plan_digest: Sha256Digest | None = None
+    confirmation_id: SnapshotId | None = None
+    execution_id: SnapshotId | None = None
+    source_operation_id: SnapshotId | None = None
+    step_id: SnapshotId | None = None
+    request_id: SnapshotId | None = None
+    result_id: SnapshotId | None = None
+    execution_status: Literal["success", "error"] | None = None
+    evidence: tuple[EvidenceSummary, ...] = ()
+
+
+class ClipTraceQueryResult(ReadModel):
+    """Revision-bound deterministic trace query result for one clip identity."""
+
+    schema_name: Literal["vistora.clip-trace-query-result"] = (
+        "vistora.clip-trace-query-result"
+    )
+    schema_version: SnapshotVersion = TIMELINE_SNAPSHOT_VERSION
+    snapshot_id: SnapshotId
+    project_id: SnapshotId
+    revision: int = Field(ge=1)
+    trace_revision: int = Field(ge=1)
+    track_key: str = Field(min_length=1)
+    clip_id: str = Field(min_length=1)
+    present: bool
+    provenance: ClipProvenanceSummary
+
+
 class ClipSnapshot(ReadModel):
     """Detached view of one clip and its declared timing."""
 
@@ -59,6 +125,7 @@ class ClipSnapshot(ReadModel):
     keep_audio: bool
     reverse: bool
     rotate_degrees: int
+    provenance: ClipProvenanceSummary | None = None
 
 
 class TrackSnapshot(ReadModel):
@@ -78,6 +145,20 @@ class TimelineSnapshotReference(ReadModel):
 
     project_id: SnapshotId
     revision: int = Field(ge=1)
+    snapshot_id: SnapshotId | None = None
+    timeline_digest: Sha256Digest | None = None
+
+    @classmethod
+    def from_snapshot(
+        cls,
+        snapshot: TimelineSnapshot,
+    ) -> TimelineSnapshotReference:
+        return cls(
+            project_id=snapshot.project_id,
+            revision=snapshot.revision,
+            snapshot_id=snapshot.snapshot_id,
+            timeline_digest=snapshot.timeline_digest,
+        )
 
 
 class TimelineSnapshot(ReadModel):
@@ -106,3 +187,4 @@ class TimelineSnapshot(ReadModel):
     audio_clip_count: int = Field(ge=0)
     duration_seconds: FiniteFloat = Field(ge=0)
     empty: bool
+    orphaned_provenance: tuple[ClipTraceQueryResult, ...] = ()

@@ -6,7 +6,7 @@ import hashlib
 import json
 import math
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
 
@@ -21,6 +21,9 @@ from .models import (
     TimelineSnapshotReference,
     TrackSnapshot,
 )
+
+if TYPE_CHECKING:
+    from traceability.models import TimelineTraceDocument
 
 
 class TimelineSnapshotError(ValueError):
@@ -142,6 +145,7 @@ class TimelineSnapshotService:
         source: TimelineConfig | TimelineProjectDocument | Mapping[str, Any],
         *,
         expected_reference: TimelineSnapshotReference | None = None,
+        trace_document: TimelineTraceDocument | None = None,
     ) -> TimelineSnapshot:
         try:
             project = TimelineProjectDocument.model_validate(source)
@@ -211,7 +215,7 @@ class TimelineSnapshotService:
             )
             clip_count = sum(track.clip_count for track in tracks)
 
-            return TimelineSnapshot(
+            snapshot = TimelineSnapshot(
                 snapshot_id=f"snapshot_{snapshot_hash[:16]}",
                 project_id=project.project_id,
                 revision=project.revision,
@@ -239,6 +243,54 @@ class TimelineSnapshotService:
                 ),
                 empty=clip_count == 0,
             )
+            if expected_reference is not None:
+                if (
+                    expected_reference.snapshot_id is not None
+                    and expected_reference.snapshot_id
+                    != snapshot.snapshot_id
+                ):
+                    raise TimelineSnapshotReferenceError(
+                        "Snapshot identity mismatch"
+                    )
+                if (
+                    expected_reference.timeline_digest is not None
+                    and expected_reference.timeline_digest
+                    != snapshot.timeline_digest
+                ):
+                    raise TimelineSnapshotReferenceError(
+                        "Timeline digest mismatch"
+                    )
+            if trace_document is None:
+                from traceability.models import TimelineTraceDocument
+
+                trace_document = TimelineTraceDocument()
+            from traceability.query import TraceabilityQuery
+
+            query = TraceabilityQuery(trace_document, snapshot)
+            traced_tracks = tuple(
+                track.model_copy(
+                    update={
+                        "clips": tuple(
+                            clip.model_copy(
+                                update={
+                                    "provenance": query.clip_to_trace(
+                                        track.track_key,
+                                        clip.clip_id,
+                                    ).provenance
+                                }
+                            )
+                            for clip in track.clips
+                        )
+                    }
+                )
+                for track in snapshot.tracks
+            )
+            return snapshot.model_copy(
+                update={
+                    "tracks": traced_tracks,
+                    "orphaned_provenance": query.orphaned_clips(),
+                }
+            )
         except TimelineSnapshotError:
             raise
         except (TypeError, ValueError, ValidationError) as exc:
@@ -253,7 +305,20 @@ class TimelineSnapshotService:
     ) -> TimelineSnapshot:
         """Read current legacy state; this never creates or saves a project."""
 
+        from traceability.store import TraceabilityStore
+
         return TimelineSnapshotService.snapshot(
             _TimelineManager.get_current_timeline(),
             expected_reference=expected_reference,
+            trace_document=TraceabilityStore.load(),
         )
+
+    @staticmethod
+    def source_id_for_configured_path(source: str) -> str:
+        """Return the same opaque material identity used in snapshots."""
+
+        if not source.strip():
+            raise TimelineSnapshotReferenceError(
+                "Configured source reference cannot be empty"
+            )
+        return f"source_{_sha256({'configured_path': source})[:16]}"

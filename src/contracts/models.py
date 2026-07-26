@@ -63,6 +63,58 @@ class ContractModel(BaseModel):
     schema_version: ContractVersion = CONTRACT_VERSION
 
 
+class MediaTimeRangeLocator(ContractModel):
+    """Bounded source-material time range used as creative evidence."""
+
+    locator_type: Literal["media_time_range"] = "media_time_range"
+    start_seconds: float = Field(ge=0, allow_inf_nan=False)
+    end_seconds: float = Field(gt=0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def range_is_forward(self) -> MediaTimeRangeLocator:
+        if self.end_seconds <= self.start_seconds:
+            raise ValueError("Evidence time range must be forward")
+        return self
+
+
+class WholeMaterialLocator(ContractModel):
+    """Typed locator for evidence that applies to a whole material."""
+
+    locator_type: Literal["whole_material"] = "whole_material"
+
+
+SourceEvidenceLocator = Annotated[
+    MediaTimeRangeLocator | WholeMaterialLocator,
+    Field(discriminator="locator_type"),
+]
+
+
+class SourceEvidenceReference(ContractModel):
+    """Opaque verifiable source evidence without a filesystem path."""
+
+    evidence_id: StableId
+    material_id: Annotated[
+        str,
+        Field(pattern=r"^source_[0-9a-f]{16}$"),
+    ]
+    locator: SourceEvidenceLocator
+    analysis_fact_id: StableId | None = None
+    analysis_fact_digest: Sha256Digest | None = None
+    description: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def analysis_fact_reference_is_complete(
+        self,
+    ) -> SourceEvidenceReference:
+        if (self.analysis_fact_id is None) != (
+            self.analysis_fact_digest is None
+        ):
+            raise ValueError(
+                "Analysis fact ID and digest must be provided together"
+            )
+        return self
+
+
 class DirectorOperation(ContractModel):
     """One proposed atomic operation in a Director-authored creative plan."""
 
@@ -71,8 +123,15 @@ class DirectorOperation(ContractModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
     rationale: str = Field(min_length=1)
     expected_effect: str = Field(min_length=1)
+    evidence_ids: tuple[StableId, ...] = ()
 
     _arguments_are_json = field_validator("arguments")(_validated_json_object)
+
+    @model_validator(mode="after")
+    def evidence_ids_are_unique(self) -> DirectorOperation:
+        if len(self.evidence_ids) != len(set(self.evidence_ids)):
+            raise ValueError("Director operation evidence IDs must be unique")
+        return self
 
 
 class DirectorPlan(ContractModel):
@@ -86,6 +145,7 @@ class DirectorPlan(ContractModel):
     requirements: tuple[str, ...] = ()
     assumptions: tuple[str, ...] = ()
     creative_direction: dict[str, Any] = Field(default_factory=dict)
+    source_evidence: tuple[SourceEvidenceReference, ...] = ()
     operations: tuple[DirectorOperation, ...] = Field(min_length=1)
     outputs: tuple[str, ...] = ()
     risks: tuple[str, ...] = ()
@@ -99,12 +159,30 @@ class DirectorPlan(ContractModel):
         operation_ids = [operation.operation_id for operation in self.operations]
         if len(operation_ids) != len(set(operation_ids)):
             raise ValueError("Director operation IDs must be unique")
+        evidence_ids = [
+            evidence.evidence_id for evidence in self.source_evidence
+        ]
+        if len(evidence_ids) != len(set(evidence_ids)):
+            raise ValueError("Director source evidence IDs must be unique")
+        known_evidence = set(evidence_ids)
+        for operation in self.operations:
+            unknown = set(operation.evidence_ids) - known_evidence
+            if unknown:
+                raise ValueError(
+                    f"Director operation {operation.operation_id} references "
+                    f"unknown evidence IDs: {sorted(unknown)}"
+                )
         return self
 
     def digest(self) -> str:
         """Return the canonical digest bound by a confirmation record."""
 
         payload = self.model_dump(mode="json")
+        if not self.source_evidence:
+            payload.pop("source_evidence", None)
+        for operation in payload["operations"]:
+            if not operation["evidence_ids"]:
+                operation.pop("evidence_ids", None)
         encoded = _canonical_json(payload).encode("utf-8")
         return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
@@ -171,8 +249,15 @@ class EditingStep(ContractModel):
     source_operation_id: StableId
     tool_name: StableId
     arguments: dict[str, Any] = Field(default_factory=dict)
+    evidence_ids: tuple[StableId, ...] = ()
 
     _arguments_are_json = field_validator("arguments")(_validated_json_object)
+
+    @model_validator(mode="after")
+    def evidence_ids_are_unique(self) -> EditingStep:
+        if len(self.evidence_ids) != len(set(self.evidence_ids)):
+            raise ValueError("Editing step evidence IDs must be unique")
+        return self
 
 
 class EditingExecutionPlan(ContractModel):
@@ -225,6 +310,10 @@ class EditingExecutionPlan(ContractModel):
                 raise ValueError(
                     f"Editing step {step.step_id} changes confirmed arguments"
                 )
+            if step.evidence_ids != operation.evidence_ids:
+                raise ValueError(
+                    f"Editing step {step.step_id} changes confirmed evidence"
+                )
         return self
 
     @classmethod
@@ -242,6 +331,7 @@ class EditingExecutionPlan(ContractModel):
                 source_operation_id=operation.operation_id,
                 tool_name=operation.tool_name,
                 arguments=operation.arguments,
+                evidence_ids=operation.evidence_ids,
             )
             for operation in director_plan.operations
         )
@@ -469,9 +559,21 @@ class AtomicToolRequestEnvelope(ContractModel):
     step_id: StableId
     tool_name: StableId
     arguments: dict[str, Any] = Field(default_factory=dict)
+    evidence_refs: tuple[SourceEvidenceReference, ...] = ()
     requested_at: AwareDatetime = Field(default_factory=_utc_now)
 
     _arguments_are_json = field_validator("arguments")(_validated_json_object)
+
+    @model_validator(mode="after")
+    def evidence_references_are_unique(
+        self,
+    ) -> AtomicToolRequestEnvelope:
+        evidence_ids = [
+            evidence.evidence_id for evidence in self.evidence_refs
+        ]
+        if len(evidence_ids) != len(set(evidence_ids)):
+            raise ValueError("Atomic request evidence IDs must be unique")
+        return self
 
     @classmethod
     def from_execution_plan(
@@ -487,6 +589,10 @@ class AtomicToolRequestEnvelope(ContractModel):
         if len(matching_steps) != 1:
             raise ValueError(f"Unknown or duplicate execution step: {step_id}")
         step = matching_steps[0]
+        evidence_by_id = {
+            evidence.evidence_id: evidence
+            for evidence in execution_plan.director_plan.source_evidence
+        }
         return cls(
             request_id=request_id,
             execution_id=execution_plan.execution_id,
@@ -496,6 +602,10 @@ class AtomicToolRequestEnvelope(ContractModel):
             step_id=step.step_id,
             tool_name=step.tool_name,
             arguments=step.arguments,
+            evidence_refs=tuple(
+                evidence_by_id[evidence_id]
+                for evidence_id in step.evidence_ids
+            ),
         )
 
     def validate_against_registry(

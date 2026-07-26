@@ -42,6 +42,30 @@ def test_agents_do_not_import_mutation_engines() -> None:
     )
 
 
+def test_trace_queries_and_visualization_do_not_import_mutation_engines() -> None:
+    read_only_modules = (
+        SRC / "traceability" / "query.py",
+        SRC / "timeline_preview" / "server.py",
+        SRC / "media_analysis" / "service.py",
+    )
+    forbidden = {
+        "core.timeline_manager",
+        "skills",
+        "skills.video_add_clip",
+        "skills.video_modify_clip",
+        "skills.video_apply_manual_edits",
+    }
+    violations = {
+        path.relative_to(SRC).as_posix(): sorted(_imports(path) & forbidden)
+        for path in read_only_modules
+        if _imports(path) & forbidden
+    }
+    assert not violations, (
+        "Read/query/visualization modules must not import timeline mutation "
+        f"engines or atomic skill implementations: {violations}"
+    )
+
+
 def test_public_registry_exports_valid_unique_skill_schemas() -> None:
     sys.path.insert(0, str(SRC))
     try:

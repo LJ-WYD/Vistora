@@ -66,3 +66,25 @@ def test_reference_main_workflow_is_traceable_and_repeatable() -> None:
     assert first.output_metadata["audio_stream_count"] == 0
     assert abs(first.output_metadata["duration_seconds"] - 1.5) <= 0.08
     assert first.timeline_state_removed is True
+    assert first.trace_document == second.trace_document
+    assert first.trace_document.revision == 4
+    assert tuple(
+        trace.trace_sequence
+        for trace in first.trace_document.confirmed_traces
+    ) == (1, 2, 3)
+    add_relation = first.trace_document.confirmed_traces[1].relations[0]
+    assert add_relation.origin_kind == "director_plan"
+    assert add_relation.entity.entity_id == "clip_12345678"
+    assert add_relation.evidence_ids == (
+        "evidence_reference_source_trim",
+    )
+    export_relations = first.trace_document.confirmed_traces[2].relations
+    generated = [
+        relation
+        for relation in export_relations
+        if relation.entity.entity_kind == "media_output"
+    ]
+    assert len(generated) == 1
+    assert generated[0].origin_kind == "generated_media"
+    assert first.traced_clips[0]["present"] is False
+    assert first.traced_clips[0]["provenance"]["mapping_status"] == "deleted"

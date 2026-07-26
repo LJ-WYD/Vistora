@@ -382,6 +382,48 @@ function renderSummary() {
   }
 }
 
+function provenanceDetailRows(provenanceValue) {
+  const provenance = provenanceValue || {
+    origin_kind: "legacy_unknown",
+    latest_change_origin: "legacy_unknown",
+    mapping_status: "legacy_unknown",
+    evidence: [],
+  };
+  const originLabel = provenance.origin_kind.replaceAll("_", " ");
+  const mappingLabel = provenance.mapping_status.replaceAll("_", " ");
+  const planLabel = provenance.plan_id
+    ? `${provenance.plan_id} v${provenance.plan_version}`
+    : "No recorded Director plan";
+  const stepLabel = provenance.step_id
+    ? `${provenance.source_operation_id} / ${provenance.step_id}`
+    : "No recorded execution step";
+  const evidenceLabel = provenance.evidence?.length
+    ? provenance.evidence.map((item) => {
+        const range = item.locator_type === "media_time_range"
+          ? ` ${formatSeconds(item.start_seconds)}–${formatSeconds(item.end_seconds)}`
+          : " whole material";
+        return `${item.evidence_id} / ${item.material_id}${range}`;
+      }).join("; ")
+    : "No recorded source evidence";
+  return [
+    detailRow("Origin", `${originLabel} · ${mappingLabel}`),
+    detailRow(
+      "Latest change",
+      provenance.latest_change_origin.replaceAll("_", " "),
+    ),
+    detailRow("Director plan", planLabel),
+    detailRow("Operation / step", stepLabel),
+    detailRow("Source evidence", evidenceLabel),
+    detailRow(
+      "Execution",
+      provenance.execution_status
+        ? `${provenance.execution_status} · ${provenance.request_id} / ` +
+          provenance.result_id
+        : "No recorded confirmed execution",
+    ),
+  ];
+}
+
 function showDetails(track, clip) {
   const availability = state.media[clip.source.source_id];
   const analysis = analysisFor(track, clip);
@@ -422,6 +464,31 @@ function showDetails(track, clip) {
         : "Unavailable or outside allowlisted roots",
     ),
     detailRow("Visualization", analysisStatusLabel(analysis)),
+    ...provenanceDetailRows(clip.provenance),
+  );
+}
+
+function showOrphanedProvenance() {
+  const issues = state.snapshot?.orphaned_provenance || [];
+  if (issues.length === 0) {
+    return;
+  }
+  const issue = issues[0];
+  ui.clipDetails.replaceChildren(
+    detailRow(
+      "Status",
+      "Recorded clip is missing from the current timeline.",
+    ),
+    detailRow("Missing clip", `${issue.track_key} / ${issue.clip_id}`),
+    detailRow(
+      "Mapping",
+      `${issue.provenance.mapping_status} · trace revision ` +
+        issue.trace_revision,
+    ),
+    ...provenanceDetailRows(issue.provenance),
+    ...(issues.length > 1
+      ? [detailRow("Other missing mappings", String(issues.length - 1))]
+      : []),
   );
 }
 
@@ -828,6 +895,7 @@ async function loadPreview({ preserveSuccess = false } = {}) {
         "Select a clip to inspect its immutable snapshot data.",
       ),
     );
+    showOrphanedProvenance();
     ui.manualEditor.hidden = true;
     ui.manualEditDisabled.hidden = true;
     resetDraft({ keepSuccess: preserveSuccess });

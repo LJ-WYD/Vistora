@@ -15,10 +15,13 @@ from .models import (
     ManualEditProposal,
     ManualEditProposalReference,
     ManualEditReview,
+    MediaTimeRangeLocator,
     PlanReference,
+    SourceEvidenceReference,
     TimelineProjectDocument,
     ToolError,
     UserConfirmationRecord,
+    WholeMaterialLocator,
 )
 
 __all__ = [
@@ -36,8 +39,11 @@ __all__ = [
     "ManualEditProposal",
     "ManualEditProposalReference",
     "ManualEditReview",
+    "MediaTimeRangeLocator",
     "PlanReference",
+    "SourceEvidenceReference",
     "TimelineProjectDocument",
     "ToolError",
     "UserConfirmationRecord",
+    "WholeMaterialLocator",
 ]

@@ -41,6 +41,11 @@ src/
   contracts/
     models.py                Versioned plan, confirmation, execution,
                               project, manual-edit, and tool envelopes
+  traceability/
+    models.py                Versioned append-only provenance contracts
+    recording.py             Confirmed atomic/manual effect correlation
+    query.py                 Revision-aware plan/evidence/clip queries
+    store.py                 Durable timeline-adjacent trace sidecar
   timeline_query/
     models.py                Immutable, versioned timeline read models
     service.py               Deterministic read-only snapshot construction
@@ -74,6 +79,8 @@ tests/
   test_timeline_preview.py    Endpoint, media, draft/apply, and boundary checks
   test_manual_edits.py        Manual contracts, confirmation, persistence,
                               stale-state, and rollback checks
+  test_traceability.py        Linkage, queries, legacy/stale/orphan/manual,
+                              redaction, and round-trip checks
 ```
 
 The repository now contains a framework-free local visual timeline preview launched from the command line. There is still no production frontend application, desktop GUI, remote API server, or persistent UI state store. The local preview owns transient detached draft state only.
@@ -124,11 +131,11 @@ This flow validates individual tool arguments through `BaseSkill.execute`, but i
 
 | Contract | Schema name | Implemented guarantee |
 | --- | --- | --- |
-| `DirectorPlan` | `vistora.director-plan` | Versioned creative intent, ordered proposed atomic operations, and a canonical SHA-256 digest. |
+| `DirectorPlan` | `vistora.director-plan` | Versioned creative intent, typed opaque source-evidence references, ordered proposed atomic operations, and a canonical SHA-256 digest. |
 | `UserConfirmationRecord` | `vistora.user-confirmation` | Immutable decision referencing an exact plan ID, version, and digest. |
 | `EditingExecutionPlan` | `vistora.editing-execution-plan` | Rejects missing, rejected, mismatched, incomplete, duplicate, or creatively drifted plan steps. |
 | `TimelineProjectDocument` | `vistora.timeline-project` | Adds project ID, revision, and schema metadata while deterministically wrapping legacy timeline JSON. |
-| `AtomicToolRequestEnvelope` | `vistora.atomic-tool-request` | Traces one confirmed execution step and validates arguments with the existing registered skill input model. |
+| `AtomicToolRequestEnvelope` | `vistora.atomic-tool-request` | Traces one confirmed execution step plus its exact evidence references and validates arguments with the existing registered skill input model. |
 | `AtomicToolResultEnvelope` | `vistora.atomic-tool-result` | Correlates a result to its request/execution/step and enforces consistent success/error state. |
 | `ManualEditProposal` | `vistora.manual-edit-proposal` | Identifies a user-authored, snapshot-bound batch of video clip timing/order/removal changes; it is explicitly not a Director plan. |
 | `ManualEditConfirmationRecord` | `vistora.manual-edit-confirmation` | Immutably binds a local user's decision to one exact manual proposal ID and digest. |
@@ -158,11 +165,24 @@ The returned `vistora.timeline-snapshot` schema is version `1.0.0`. Its frozen, 
 - output width, height, and frame rate;
 - every configured track with its mapping key, model ID, current kind, order, clips, count, and derived duration;
 - every clip with its configured ID, source reference, trim, placement, speed-adjusted duration, audio flags, volume, reversal, and rotation;
+- a detached `vistora.clip-provenance-summary` for each clip, reporting recorded origin, latest change origin, mapping health, confirmed plan/operation/step/request/result identity, execution status, and browser-safe evidence locators;
 - aggregate track/clip/video/audio counts, timeline duration, and empty state.
 
 Track mapping order is deterministic: the exact `video` key, the exact `audio` key, then other keys lexicographically. Clip-list order is preserved because it is part of the current timeline's editing semantics. Vistora currently supports a mapping of arbitrary tracks in its data model, while rendering has special behavior only for the exact `video` and `audio` keys. Other tracks are therefore reported accurately as `other`; the read layer does not invent lanes, compositing rules, transitions, thumbnails, waveforms, or availability state.
 
 Legacy timelines receive the existing content-derived `project_legacy_*` identity and revision `1`. A native `TimelineProjectDocument` retains its explicit project ID and revision. Consumers that need optimistic consistency can supply a `TimelineSnapshotReference`; a mismatched project or revision fails before data is returned. Configured source paths are stable references only and are not checked for existence, keeping repeated snapshots independent of machine and filesystem state.
+
+### Traceability boundary
+
+`src/traceability/` adds provenance without changing legacy timeline JSON or rendering semantics. `current_timeline.trace.json` is a strict version `1.0.0` append-only sidecar. Its confirmed records embed the exact `EditingExecutionPlan`, atomic request, atomic result, and observed before/after snapshot references. Entity relations use explicit `creates`, `modifies`, `deletes`, or `generates` types; generated outputs carry a separate `generated_media` origin. Manual records instead embed the exact user proposal and confirmation, use only `modifies` or `deletes`, and carry the `user_manual` origin.
+
+The trace contracts reject duplicate global IDs, non-contiguous event sequence, plan ID/version digest conflicts, confirmation or execution reuse across plans, requests that drift from the confirmed step, evidence that differs from the confirmed operation, failed results with entity effects, and manual effects that differ from the confirmed proposal. Evidence contains an opaque `source_*` material ID, a typed whole-material or bounded time-range locator, and an optional paired analysis-fact ID/digest. Absolute paths are not part of the browser provenance model.
+
+`ConfirmedTraceRecorder` is used by the deterministic confirmed-execution harness after each registered atomic dispatch. `ManualTraceRecorder` is called inside `VideoApplyManualEditsSkill`; if sidecar persistence fails, that skill restores the prior timeline. These recorders observe before/after snapshots and persist correlations; they do not dispatch tools or act as agents.
+
+`TraceabilityQuery` provides deterministic, revision-aware `clip_to_trace`, `plan_to_clips`, and `evidence_to_clips` helpers. It preserves a clip's original Director origin across a later user trim/reorder, reports the user as the latest change, and keeps an explicit deletion tombstone. Manual reorder/removal records distinguish the directly edited clip from consequential order changes to displaced neighbors, with contiguous relation sequence numbers. A traced clip changed outside a recorded boundary is `stale`; a recorded live clip absent without a deletion relation is `orphaned`; an untraced legacy clip is `legacy_unknown`. No evidence or provenance is fabricated.
+
+The sidecar is optional. Existing projects with no trace metadata load and render exactly as before. Snapshot identity remains derived only from timeline content, never from provenance, so the query layer cannot change canonical timeline semantics.
 
 Example:
 
@@ -203,7 +223,7 @@ Unknown `POST` routes and all `PUT`, `PATCH`, and `DELETE` requests return `405`
 
 Media and analysis are disabled for a source unless the operator supplies an applicable `--media-root` directory. A configured source can be served or analyzed only when its opaque `source_*` ID occurs in the current snapshot, its canonical path remains inside an allowlisted root after symlink resolution, and its extension is in the small browser audio/video allowlist. The preview copy of a snapshot replaces configured source paths with `media:source_*` references while the underlying `TimelineSnapshot` remains unchanged. Requests never accept raw paths, directory traversal cannot address media or thumbnails, and responses do not disclose resolved filesystem paths.
 
-The UI renders the snapshot's deterministic track order, preserves clip order and timing, places video thumbnail strips and audio peak paths inside their exact clip blocks, and represents only the implemented `video` and `audio` kinds as such. The selected-clip inspector reports the opaque source reference, media type, track, source/timeline timing, duration, playback properties, availability, and visualization status. Other track kinds remain visible as unsupported data-only lanes; the UI does not infer subtitle, transition, or compositing semantics. Missing or failed analysis produces an explicit placeholder. Preview selection, browser playback, playhead movement, zoom, scrolling, and analysis display are transient local view state.
+The UI renders the snapshot's deterministic track order, preserves clip order and timing, places video thumbnail strips and audio peak paths inside their exact clip blocks, and represents only the implemented `video` and `audio` kinds as such. The selected-clip inspector reports the opaque source reference, media type, track, source/timeline timing, duration, playback properties, availability, visualization status, recorded origin, plan/step identity, source evidence range, and execution status. Legacy unknown, stale, orphaned, and deleted states are represented by the trace query contracts rather than inferred in the browser. Other track kinds remain visible as unsupported data-only lanes; the UI does not infer subtitle, transition, or compositing semantics. Missing or failed analysis produces an explicit placeholder. Preview selection, browser playback, playhead movement, zoom, scrolling, and analysis display are transient local view state.
 
 Current-workspace mode adds a deliberately narrow manual path:
 
@@ -242,7 +262,7 @@ The implemented mutation ownership is:
 | `VideoClearTimelineSkill` | Deletes the active timeline state. | None. |
 | `VideoExportSkill` | May reset timeline state after export. | Renders the timeline to an output file. |
 | `VideoTimelapseSkill` | None. | Writes a new timelapse file through FFmpeg. |
-| `VideoApplyManualEditsSkill` | Applies one exact confirmed user proposal to copied current video-track state, then atomically replaces timeline JSON. | None. |
+| `VideoApplyManualEditsSkill` | Applies one exact confirmed user proposal to copied current video-track state, atomically replaces timeline JSON, and appends truthful manual provenance; timeline state is restored if trace persistence fails. | None. |
 
 These are the only registered atomic mutation entry points. Tests may reset state directly as test-fixture setup. The CLI `render` command remains a documented nonconforming compatibility exception.
 
@@ -282,8 +302,9 @@ generated 320x180/24 fps silent source
   -> AtomicToolRequestEnvelope for each confirmed step
   -> registered atomic skill dispatch only
   -> AtomicToolResultEnvelope for each result
+  -> append-only atomic/entity trace with typed source evidence
   -> exported H.264 silent media
-  -> ffprobe metadata and trace verification
+  -> ffprobe metadata plus plan/evidence-to-deleted-clip verification
 ```
 
 It uses only `VideoClearTimelineSkill`, `VideoAddClipSkill`, and `VideoExportSkill`. Fixed contract IDs, timestamps, relative generated paths, and a deterministic test clip UUID make two consecutive runs directly comparable. Generated source/output files and isolated timeline state live below `tests/test_data/` and remain ignored.
@@ -332,12 +353,18 @@ objective
 requirements
 assumptions[]
 creative_direction
+source_evidence[]:
+  evidence_id
+  material_id
+  typed locator / bounded time range
+  optional analysis fact ID and digest
 operations[]:
   operation_id
   tool_name
   arguments
   rationale
   expected_effect
+  evidence_ids[]
 outputs[]
 risks[]
 ```
@@ -384,5 +411,7 @@ Mutation-capable utilities and core objects are implementation details behind to
 | G-09 | No production workflow UI | A local snapshot-first timeline preview with a narrow confirmed manual-edit path exists, but there is no Director plan/confirmation/execution interface. | Design future workflow UI around draft, confirmation, execution, and result phases without weakening the read boundary. |
 | G-10 | Production agent gates remain untested | The reference harness covers contract confirmation, atomic dispatch, traceability, and media output, but no Director or Editing runtime exists. | Add agent-level gate tests as those components are implemented. |
 | G-11 | Visualization/manual editing remains local and narrow | The loopback UI now provides snapshot lanes, safe material preview, deterministic thumbnails/waveforms, a detailed inspector, and a confirmed basic video-clip edit slice, but no production frontend or broader editing controls. | Extend only through separately approved read contracts and atomic tools while preserving confirmation and mutation boundaries. |
+| G-12 | Trace recording is not yet wired to a production Editing Agent | Strict sidecar contracts, confirmed/manual recorders, queries, snapshot summaries, and the reference harness exist; production Director and Editing runtimes remain absent. | Invoke the same confirmed recorder from a future Editing Agent dispatcher without weakening the atomic boundary. |
+| G-13 | Provenance is not a plan-diff preview | The inspector shows entity origin and execution linkage only. | Add any future proposed-vs-applied plan diff as a separately approved read/review feature. |
 
 This gap register is descriptive. Closing any gap requires a separate approved implementation task.
