@@ -41,6 +41,14 @@ const ui = {
   applySuccessMessage: document.querySelector("#apply-success-message"),
   modeBadgeLabel: document.querySelector("#mode-badge-label"),
   timelineHelp: document.querySelector("#timeline-help"),
+  planReviewPanel: document.querySelector("#plan-review-panel"),
+  planReviewMessage: document.querySelector("#plan-review-message"),
+  planReviewStatus: document.querySelector("#plan-review-status"),
+  planReviewSummary: document.querySelector("#plan-review-summary"),
+  planReviewGroups: document.querySelector("#plan-review-groups"),
+  reviewBack: document.querySelector("#review-back"),
+  reviewReject: document.querySelector("#review-reject"),
+  reviewReady: document.querySelector("#review-ready"),
 };
 
 const state = {
@@ -59,6 +67,8 @@ const state = {
   proposalCreatedAt: null,
   review: null,
   applying: false,
+  planReview: null,
+  selectedPlanChange: null,
 };
 
 function textElement(tag, className, text) {
@@ -119,6 +129,214 @@ function detailRow(label, value) {
     textElement("dd", "", value),
   );
   return row;
+}
+
+function planChanges() {
+  return state.planReview?.diff?.changes || [];
+}
+
+function changesForClip(trackKey, clipId) {
+  return planChanges().filter(
+    (change) =>
+      change.entity?.entity_kind === "clip" &&
+      change.entity.track_key === trackKey &&
+      change.entity.entity_id === clipId,
+  );
+}
+
+function safeChangeState(stateValue) {
+  if (!stateValue) {
+    return "—";
+  }
+  if ("width" in stateValue && "height" in stateValue) {
+    return `${stateValue.width}×${stateValue.height} · ${stateValue.fps} fps`;
+  }
+  return (
+    `${formatSeconds(stateValue.timeline_start_seconds)}–` +
+    `${formatSeconds(stateValue.timeline_end_seconds)} · ` +
+    `${formatSeconds(stateValue.trim_in_seconds)}–` +
+    `${formatSeconds(stateValue.trim_out_seconds)} source · ` +
+    `${stateValue.speed_factor}×`
+  );
+}
+
+function showPlanChangeDetails(change) {
+  state.selectedPlanChange = change;
+  const evidence = change.evidence?.length
+    ? change.evidence
+        .map((item) => {
+          const range = item.locator_type === "media_time_range"
+            ? ` ${formatSeconds(item.start_seconds)}–${formatSeconds(item.end_seconds)}`
+            : " whole material";
+          return `${item.evidence_id} / ${item.material_id}${range}`;
+        })
+        .join("; ")
+    : "No source evidence attached";
+  const provenance = change.current_provenance;
+  ui.clipDetails.replaceChildren(
+    detailRow("Proposed change", change.change_id),
+    detailRow("Category", change.category.replaceAll("_", " ")),
+    detailRow("Effect", `${change.effect_kind} · ${change.severity}`),
+    detailRow("Plan operation", change.operation_id),
+    detailRow("Execution step", change.step_id),
+    detailRow("Atomic tool", change.tool_name),
+    detailRow("Director rationale", change.director_rationale),
+    detailRow("Expected effect", change.expected_effect),
+    detailRow(
+      "Before",
+      safeChangeState(change.before || change.before_project),
+    ),
+    detailRow(
+      "After",
+      safeChangeState(change.after || change.after_project),
+    ),
+    detailRow("Reason", change.reason),
+    detailRow("Source evidence", evidence),
+    detailRow(
+      "Current origin",
+      provenance
+        ? `${provenance.origin_kind.replaceAll("_", " ")} · ` +
+          provenance.mapping_status.replaceAll("_", " ")
+        : "New entity or no current provenance",
+    ),
+  );
+}
+
+function selectPlanChange(change) {
+  document
+    .querySelectorAll(".review-change.selected")
+    .forEach((item) => item.classList.remove("selected"));
+  const row = document.querySelector(
+    `[data-change-id="${CSS.escape(change.change_id)}"]`,
+  );
+  row?.classList.add("selected");
+  state.selectedPlanChange = change;
+  const matching = document.querySelector(
+    `.clip[data-track-key="${CSS.escape(change.entity.track_key || "")}"]` +
+      `[data-clip-id="${CSS.escape(change.entity.entity_id)}"]`,
+  );
+  matching?.focus({ preventScroll: true });
+  showPlanChangeDetails(change);
+  renderTimeline();
+}
+
+function renderPlanReview() {
+  const envelope = state.planReview;
+  if (!envelope || envelope.review_state === "unavailable") {
+    ui.planReviewPanel.hidden = true;
+    return;
+  }
+  ui.planReviewPanel.hidden = false;
+  ui.planReviewStatus.textContent = envelope.review_state;
+  ui.planReviewStatus.className =
+    `review-status ${envelope.review_state}`;
+  ui.planReviewMessage.textContent = envelope.message;
+  ui.planReviewSummary.replaceChildren();
+  ui.planReviewGroups.replaceChildren();
+  const diff = envelope.diff;
+  const current = envelope.review_state === "current" && diff;
+  ui.reviewReady.disabled = !current || diff.review_status === "blocked";
+  if (!current) {
+    ui.reviewReject.disabled = false;
+    return;
+  }
+  ui.planReviewStatus.textContent = diff.review_status;
+  ui.planReviewStatus.className = `review-status ${diff.review_status}`;
+  const summaryItems = [
+    ["Before / after", `${diff.summary.before_clip_count} → ${diff.summary.after_clip_count} clips`],
+    ["Added", String(diff.summary.additions)],
+    ["Removed", String(diff.summary.removals)],
+    ["Changed", String(diff.summary.modifications)],
+    ["Warnings", `${diff.summary.warnings} / ${diff.summary.blockers} blockers`],
+  ];
+  for (const [label, value] of summaryItems) {
+    const item = document.createElement("div");
+    item.append(textElement("dt", "", label), textElement("dd", "", value));
+    ui.planReviewSummary.append(item);
+  }
+  const groups = [
+    ["Added", (change) => change.category === "clip_addition"],
+    ["Removed", (change) => change.category === "clip_removal"],
+    [
+      "Changed",
+      (change) =>
+        !["clip_addition", "clip_removal", "warning"].includes(
+          change.category,
+        ) && change.severity !== "blocker",
+    ],
+    [
+      "Warnings",
+      (change) =>
+        change.category === "warning" ||
+        ["warning", "blocker"].includes(change.severity),
+    ],
+  ];
+  for (const [title, predicate] of groups) {
+    const matching = diff.changes.filter(predicate);
+    if (matching.length === 0) {
+      continue;
+    }
+    const group = document.createElement("section");
+    group.className = "review-group";
+    group.append(textElement("h3", "", `${title} · ${matching.length}`));
+    const rows = document.createElement("div");
+    rows.className = "review-change-list";
+    for (const change of matching) {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = `review-change ${change.severity}`;
+      row.dataset.changeId = change.change_id;
+      row.append(
+        textElement(
+          "strong",
+          "",
+          change.after?.source_name ||
+            change.before?.source_name ||
+            change.entity.entity_id,
+        ),
+        textElement(
+          "span",
+          "",
+          `${change.category.replaceAll("_", " ")} · ${change.reason}`,
+        ),
+        textElement(
+          "small",
+          "",
+          `${change.operation_id} / ${change.step_id}`,
+        ),
+      );
+      row.addEventListener("click", () => selectPlanChange(change));
+      rows.append(row);
+    }
+    group.append(rows);
+    ui.planReviewGroups.append(group);
+  }
+}
+
+async function loadPlanReview() {
+  try {
+    const response = await fetch("/api/plan-review", {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    });
+    const payload = await response.json();
+    if (
+      !response.ok ||
+      payload.schema_name !== "vistora.plan-review-envelope" ||
+      payload.schema_version !== "1.0.0"
+    ) {
+      throw new Error("The plan-review endpoint returned an invalid contract.");
+    }
+    state.planReview = payload;
+  } catch (error) {
+    state.planReview = {
+      review_state: "invalid",
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+  state.selectedPlanChange = null;
+  renderPlanReview();
+  renderTimeline();
 }
 
 function analysisKey(trackKey, clipId) {
@@ -674,7 +892,10 @@ function clipVisualization(track, clip) {
 
 function renderTimeline() {
   const snapshot = state.snapshot;
-  const isEmpty = snapshot.empty;
+  const hasProposedClips = planChanges().some(
+    (change) => change.category === "clip_addition",
+  );
+  const isEmpty = snapshot.empty && !hasProposedClips;
   ui.empty.hidden = !isEmpty;
   ui.scroll.hidden = isEmpty;
   if (isEmpty) {
@@ -729,6 +950,7 @@ function renderTimeline() {
       block.style.width =
         `${Math.max(28, clip.effective_duration_seconds * state.pixelsPerSecond)}px`;
       block.dataset.clipId = clip.clip_id;
+      block.dataset.trackKey = track.track_key;
       block.title =
         `${clip.clip_id}\n${clipLabel(clip)}\n${clip.source.value}`;
       block.setAttribute(
@@ -749,12 +971,68 @@ function renderTimeline() {
         block.classList.add("selected");
         state.selected = { track, clip, element: block };
       }
+      const proposedChanges = changesForClip(track.track_key, clip.clip_id);
+      if (proposedChanges.length > 0) {
+        block.classList.add("plan-affected");
+        if (
+          proposedChanges.some(
+            (change) => change.category === "clip_removal",
+          )
+        ) {
+          block.classList.add("plan-removed");
+        }
+        block.append(
+          textElement(
+            "span",
+            "plan-change-count",
+            String(proposedChanges.length),
+          ),
+        );
+      }
+      if (
+        state.selectedPlanChange?.entity.entity_id === clip.clip_id &&
+        state.selectedPlanChange?.entity.track_key === track.track_key
+      ) {
+        block.classList.add("plan-change-selected");
+      }
       block.addEventListener("click", (event) => {
         event.stopPropagation();
         selectClip(track, clip, block);
       });
       lane.append(block);
     });
+    for (const change of planChanges().filter(
+      (item) =>
+        item.category === "clip_addition" &&
+        item.after?.track_key === track.track_key,
+    )) {
+      const clip = change.after;
+      const ghost = document.createElement("button");
+      ghost.type = "button";
+      ghost.className = "clip proposed-clip";
+      ghost.dataset.clipId = clip.clip_id;
+      ghost.dataset.trackKey = track.track_key;
+      ghost.style.left =
+        `${clip.timeline_start_seconds * state.pixelsPerSecond}px`;
+      ghost.style.width =
+        `${Math.max(28, clip.effective_duration_seconds * state.pixelsPerSecond)}px`;
+      ghost.setAttribute(
+        "aria-label",
+        `Proposed addition ${clip.source_name}, ${safeChangeState(clip)}`,
+      );
+      ghost.append(
+        textElement("strong", "", `+ ${clip.source_name}`),
+        textElement("span", "", "Proposed · not applied"),
+      );
+      if (state.selectedPlanChange?.change_id === change.change_id) {
+        ghost.classList.add("plan-change-selected");
+      }
+      ghost.addEventListener("click", (event) => {
+        event.stopPropagation();
+        selectPlanChange(change);
+      });
+      lane.append(ghost);
+    }
     ui.trackLanes.append(lane);
   });
 
@@ -907,6 +1185,7 @@ async function loadPreview({ preserveSuccess = false } = {}) {
     if (!state.snapshot.empty && state.capabilities.media_analysis === true) {
       await loadAnalysis();
     }
+    await loadPlanReview();
   } catch (error) {
     showFatal(error instanceof Error ? error.message : String(error));
   }
@@ -1008,6 +1287,29 @@ ui.undoDraft.addEventListener("click", () => {
 
 ui.resetDraft.addEventListener("click", () => {
   resetDraft();
+});
+
+ui.reviewBack.addEventListener("click", () => {
+  state.selectedPlanChange = null;
+  ui.planReviewMessage.textContent =
+    state.planReview?.message || "Returned to the timeline snapshot.";
+  renderPlanReview();
+  renderTimeline();
+  if (state.selected) {
+    showDetails(state.selected.track, state.selected.clip);
+  }
+});
+
+ui.reviewReject.addEventListener("click", () => {
+  ui.planReviewMessage.textContent =
+    "Rejected in this browser view only. No rejection record was created.";
+  ui.planReviewStatus.textContent = "local reject";
+});
+
+ui.reviewReady.addEventListener("click", () => {
+  ui.planReviewMessage.textContent =
+    "Marked ready in this browser view only. No confirmation was created.";
+  ui.planReviewStatus.textContent = "ready locally";
 });
 
 ui.applyDraft.addEventListener("click", async () => {

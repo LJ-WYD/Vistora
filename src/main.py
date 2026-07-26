@@ -107,6 +107,7 @@ def preview_timeline(
     media_roots: list[str],
     host: str,
     port: int,
+    plan_review_path: str | None,
 ):
     """Start Vistora's local snapshot-first visual timeline preview."""
     from timeline_preview import run_preview_server
@@ -117,6 +118,7 @@ def preview_timeline(
         host=host,
         port=port,
         skill_registry=SKILLS,
+        plan_review_path=plan_review_path,
     )
 
 
@@ -172,6 +174,13 @@ def main():
         default=8765,
         help="Local TCP port (default: 8765).",
     )
+    preview_parser.add_argument(
+        "--plan-review",
+        help=(
+            "Optional versioned plan-diff request JSON. It is previewed "
+            "read-only; this command never confirms or executes the plan."
+        ),
+    )
 
     args = parser.parse_args()
     
@@ -190,6 +199,7 @@ def main():
             args.media_root,
             args.host,
             args.port,
+            args.plan_review,
         )
     else:
         parser.print_help()

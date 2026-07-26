@@ -18,6 +18,12 @@ from media_analysis import (
     MediaAnalysisRequest,
     MediaAnalysisService,
 )
+from plan_review import (
+    PlanDiffRequest,
+    PlanReviewEnvelope,
+    PlanReviewService,
+    load_plan_diff_request,
+)
 from timeline_query import TimelineSnapshot, TimelineSnapshotService
 from traceability.store import TraceabilityStore
 
@@ -132,10 +138,17 @@ class PreviewApplication:
         skill_registry: Mapping[str, Any] | None = None,
         manual_edits_enabled: bool = False,
         analysis_service: MediaAnalysisService | None = None,
+        plan_review_request_provider: Callable[
+            [], PlanDiffRequest
+        ] | None = None,
     ) -> None:
         self._snapshot_provider = snapshot_provider
         self.media_resolver = MediaResolver(media_roots)
         self.media_analysis = analysis_service or MediaAnalysisService()
+        self._skill_registry = skill_registry or {}
+        self._plan_review_request_provider = (
+            plan_review_request_provider
+        )
         if manual_edits_enabled and skill_registry is None:
             raise PreviewConfigurationError(
                 "Manual editing requires an explicit atomic skill registry"
@@ -143,7 +156,7 @@ class PreviewApplication:
         self.manual_edits = (
             ManualEditApplicationService(
                 self.snapshot,
-                skill_registry or {},
+                self._skill_registry,
             )
             if manual_edits_enabled
             else None
@@ -154,6 +167,10 @@ class PreviewApplication:
         if not isinstance(snapshot, TimelineSnapshot):
             raise TypeError("Snapshot provider must return TimelineSnapshot")
         return snapshot
+
+    @property
+    def plan_review_enabled(self) -> bool:
+        return self._plan_review_request_provider is not None
 
     @staticmethod
     def _source_references(
@@ -227,8 +244,44 @@ class PreviewApplication:
                 "manual_draft": True,
                 "manual_edit_apply": self.manual_edits is not None,
                 "confirmed_manual_dispatch": self.manual_edits is not None,
+                "plan_review": (
+                    self.plan_review_enabled
+                ),
+                "plan_review_confirmation": False,
+                "plan_review_execution": False,
             },
         }
+
+    def plan_review_payload(self) -> dict[str, Any]:
+        """Return a path-redacted review or an explicit availability state."""
+
+        if self._plan_review_request_provider is None:
+            return PlanReviewEnvelope(
+                review_state="unavailable",
+                message=(
+                    "No Director plan-review fixture was supplied. "
+                    "Production Director and Editing Agent runtimes are absent."
+                ),
+            ).model_dump(mode="json")
+        try:
+            request = self._plan_review_request_provider()
+            if not isinstance(request, PlanDiffRequest):
+                raise TypeError(
+                    "Plan review provider must return PlanDiffRequest"
+                )
+        except Exception:
+            return PlanReviewEnvelope(
+                review_state="invalid",
+                message=(
+                    "The configured plan-review fixture is invalid and was "
+                    "not exposed to the browser."
+                ),
+            ).model_dump(mode="json")
+        return PlanReviewService.review(
+            request,
+            self.snapshot(),
+            self._skill_registry,
+        ).model_dump(mode="json")
 
     @staticmethod
     def _browser_safe_snapshot(
@@ -458,6 +511,19 @@ def _handler_class(
                 return
             self._send_json(HTTPStatus.OK, payload, head_only=head_only)
 
+        def _serve_plan_review(self, head_only: bool) -> None:
+            try:
+                payload = application.plan_review_payload()
+            except Exception:
+                self._send_error_json(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    "plan_review_unavailable",
+                    "The plan review could not be loaded safely.",
+                    head_only=head_only,
+                )
+                return
+            self._send_json(HTTPStatus.OK, payload, head_only=head_only)
+
         def _serve_analysis_artifact(
             self,
             analysis_id: str,
@@ -555,6 +621,9 @@ def _handler_class(
                 return
             if route == "/api/analysis":
                 self._serve_analysis(head_only)
+                return
+            if route == "/api/plan-review":
+                self._serve_plan_review(head_only)
                 return
             if route.startswith("/analysis/thumbnail/"):
                 parts = route.split("/")
@@ -758,6 +827,25 @@ def _snapshot_provider(
     return load_timeline_snapshot
 
 
+def _plan_review_provider(
+    plan_review_path: str | Path | None,
+) -> Callable[[], PlanDiffRequest] | None:
+    if plan_review_path is None:
+        return None
+    path = Path(plan_review_path).expanduser().resolve(strict=True)
+    if not path.is_file():
+        raise PreviewConfigurationError(
+            f"Plan-review path is not a file: {plan_review_path}"
+        )
+    try:
+        request = load_plan_diff_request(path)
+    except Exception as exc:
+        raise PreviewConfigurationError(
+            "Plan-review fixture is not a valid versioned request"
+        ) from exc
+    return lambda: request
+
+
 def run_preview_server(
     *,
     timeline_path: str | Path | None = None,
@@ -765,6 +853,7 @@ def run_preview_server(
     host: str = "127.0.0.1",
     port: int = 8765,
     skill_registry: Mapping[str, Any] | None = None,
+    plan_review_path: str | Path | None = None,
 ) -> None:
     """Run the blocking local preview server until interrupted."""
 
@@ -774,6 +863,9 @@ def run_preview_server(
         skill_registry=skill_registry,
         manual_edits_enabled=(
             timeline_path is None and skill_registry is not None
+        ),
+        plan_review_request_provider=_plan_review_provider(
+            plan_review_path
         ),
     )
     server = create_preview_server(application, host=host, port=port)
@@ -793,6 +885,14 @@ def run_preview_server(
             "enabled through the atomic skill registry."
             if application.manual_edits is not None
             else "disabled for an external timeline document."
+        )
+    )
+    print(
+        "Director plan review: "
+        + (
+            "fixture loaded; preview only, no confirmation or execution."
+            if application.plan_review_enabled
+            else "unavailable (no fixture supplied)."
         )
     )
     try:

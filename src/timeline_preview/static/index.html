@@ -176,6 +176,32 @@
         <span id="apply-success-message"></span>
       </section>
 
+      <section id="plan-review-panel" class="panel plan-review-panel" hidden>
+        <div class="plan-review-heading">
+          <div>
+            <p class="eyebrow">方案审阅 / Director plan</p>
+            <h2>变更预览</h2>
+            <p id="plan-review-message" class="muted" aria-live="polite"></p>
+          </div>
+          <span id="plan-review-status" class="review-status">Loading</span>
+        </div>
+        <dl id="plan-review-summary" class="review-summary"></dl>
+        <div id="plan-review-groups" class="review-groups"></div>
+        <div class="review-actions">
+          <button id="review-back" class="button" type="button">Back</button>
+          <button id="review-reject" class="button danger" type="button">
+            Reject locally
+          </button>
+          <button id="review-ready" class="button confirm" type="button">
+            Ready to confirm
+          </button>
+        </div>
+        <p class="review-boundary">
+          These actions are local review state only. This preview cannot create
+          a confirmation, dispatch a tool, or apply timeline changes.
+        </p>
+      </section>
+
       <section class="panel timeline-panel">
         <div class="timeline-toolbar">
           <div>

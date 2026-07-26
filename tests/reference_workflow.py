@@ -40,7 +40,18 @@ from contracts import (  # noqa: E402
 )
 from core import timeline_manager  # noqa: E402
 from moviepy import ColorClip  # noqa: E402
-from timeline_query import TimelineSnapshotService  # noqa: E402
+from plan_review import (  # noqa: E402
+    PlanDiffDocument,
+    PlanDiffEngine,
+    PlanDiffRequest,
+    PreviewMaterialFact,
+    ProposedEditingExecutionPlan,
+    RegistrySchemaReference,
+)
+from timeline_query import (  # noqa: E402
+    TimelineSnapshotReference,
+    TimelineSnapshotService,
+)
 from traceability.models import TimelineTraceDocument  # noqa: E402
 from traceability.query import TraceabilityQuery  # noqa: E402
 from traceability.recording import ConfirmedTraceRecorder  # noqa: E402
@@ -74,6 +85,7 @@ class AnalyzedMediaFacts:
 class ReferenceWorkflowReport:
     facts: AnalyzedMediaFacts
     plan: DirectorPlan
+    pre_confirmation_diff: PlanDiffDocument
     confirmation: UserConfirmationRecord
     execution: EditingExecutionPlan
     requests: tuple[AtomicToolRequestEnvelope, ...]
@@ -89,6 +101,13 @@ class ReferenceWorkflowReport:
             "plan_id": self.plan.plan_id,
             "plan_version": self.plan.plan_version,
             "plan_digest": self.plan.digest(),
+            "pre_confirmation_diff_id": self.pre_confirmation_diff.diff_id,
+            "pre_confirmation_diff_digest": (
+                self.pre_confirmation_diff.digest()
+            ),
+            "pre_confirmation_review_status": (
+                self.pre_confirmation_diff.review_status
+            ),
             "confirmation_id": self.confirmation.confirmation_id,
             "execution_id": self.execution.execution_id,
             "request_ids": [request.request_id for request in self.requests],
@@ -434,16 +453,55 @@ def run_reference_workflow(
                 "Reference DirectorPlan digest changed; review the fixture "
                 "and update REFERENCE_PLAN_DIGEST intentionally"
             )
-        confirmation = UserConfirmationRecord.for_plan(
-            confirmation_id="confirmation_reference_main_flow",
-            plan=plan,
-            confirmed_by="user_reference",
-            decision="confirmed",
-            recorded_at=REFERENCE_TIME + timedelta(minutes=1),
-        )
-        execution = _fixed_execution(plan, confirmation)
-
         with _isolated_timeline(work_dir) as project_file:
+            preview_snapshot = TimelineSnapshotService.snapshot_current()
+            proposed_execution = (
+                ProposedEditingExecutionPlan.from_director_plan(
+                    proposal_execution_id=(
+                        "proposal_execution_reference_main_flow"
+                    ),
+                    project_id=preview_snapshot.project_id,
+                    director_plan=plan,
+                )
+            )
+            preview_request = PlanDiffRequest(
+                request_id="review_reference_main_flow",
+                snapshot_ref=TimelineSnapshotReference.from_snapshot(
+                    preview_snapshot
+                ),
+                director_plan=plan,
+                proposed_execution=proposed_execution,
+                registry_ref=RegistrySchemaReference.from_registry(
+                    vistora_main.SKILLS
+                ),
+                material_facts=(
+                    PreviewMaterialFact(
+                        material_id=(
+                            TimelineSnapshotService
+                            .source_id_for_configured_path(
+                                facts.source_path
+                            )
+                        ),
+                        media_kind="video",
+                        duration_seconds=facts.duration_seconds,
+                        width=facts.width,
+                        height=facts.height,
+                    ),
+                ),
+            )
+            pre_confirmation_diff = PlanDiffEngine.generate(
+                preview_request,
+                preview_snapshot,
+                vistora_main.SKILLS,
+            )
+            confirmation = UserConfirmationRecord.for_plan(
+                confirmation_id="confirmation_reference_main_flow",
+                plan=plan,
+                confirmed_by="user_reference",
+                decision="confirmed",
+                recorded_at=REFERENCE_TIME + timedelta(minutes=1),
+            )
+            execution = _fixed_execution(plan, confirmation)
             with patch(
                 "skills.video_add_clip.uuid.uuid4",
                 return_value=REFERENCE_CLIP_UUID,
@@ -470,6 +528,7 @@ def run_reference_workflow(
         return ReferenceWorkflowReport(
             facts=facts,
             plan=plan,
+            pre_confirmation_diff=pre_confirmation_diff,
             confirmation=confirmation,
             execution=execution,
             requests=requests,

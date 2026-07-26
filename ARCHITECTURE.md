@@ -55,6 +55,11 @@ src/
   timeline_preview/
     server.py                Loopback snapshot/media and confirmed-edit server
     static/                  Framework-free timeline preview UI
+  plan_review/
+    models.py                Frozen v1 proposed-plan and diff contracts
+    engine.py                Detached registry-validated simulator
+    query.py                 Revision-aware plan/clip/evidence queries
+    service.py               Current/stale/invalid browser envelope
   core/
     timeline.py              Timeline models and MoviePy/FFmpeg renderer
     timeline_manager.py      Persistence for the active timeline
@@ -140,8 +145,27 @@ This flow validates individual tool arguments through `BaseSkill.execute`, but i
 | `ManualEditProposal` | `vistora.manual-edit-proposal` | Identifies a user-authored, snapshot-bound batch of video clip timing/order/removal changes; it is explicitly not a Director plan. |
 | `ManualEditConfirmationRecord` | `vistora.manual-edit-confirmation` | Immutably binds a local user's decision to one exact manual proposal ID and digest. |
 | `ManualEditReview` | `vistora.manual-edit-review` | Provides structured before/after changes after validation and before any write. |
+| `ProposedEditingExecutionPlan` | `vistora.proposed-editing-execution-plan` | Exact, non-executable projection of every Director operation before confirmation. |
+| `PlanDiffRequest` | `vistora.plan-diff-request` | Binds exact snapshot, Director plan, proposed execution, registry schemas, and opaque media facts. |
+| `PlanDiffDocument` | `vistora.plan-diff` | Deterministic changes, evidence/provenance, warnings, step status, and net summary. |
+| `PlanReviewEnvelope` | `vistora.plan-review-envelope` | Browser-safe `current`, `stale`, `invalid`, or `unavailable` freshness state. |
 
-The Director/Editing contracts are not wired into `OperatorAgent`, the CLI, or production agent execution yet. Their presence does not create a Director Agent or Editing Agent and does not authorize execution. The separate manual-edit contracts are wired only into the local preview application service and the dedicated confirmed atomic skill described below; they do not represent Director decisions.
+The Director/Editing contracts are not wired into `OperatorAgent` or production agent execution. Their presence does not create a Director Agent or Editing Agent and does not authorize execution. The CLI can load an explicit plan-review fixture only. The separate manual-edit contracts are wired only into the local preview application service and the dedicated confirmed atomic skill described below; they do not represent Director decisions.
+
+### Pre-confirmation plan-review boundary
+
+`src/plan_review/` compares one proposed Director plan against one exact detached `TimelineSnapshot`. `PlanDiffRequest` rejects cross-project proposals, duplicate or creatively drifted steps, incomplete snapshot references, and duplicate media facts. `RegistrySchemaReference` canonically digests the sorted registered tool names and their Pydantic input schemas. Generation rejects snapshot, plan, execution, or registry drift before simulation.
+
+`PlanDiffEngine` validates every step through the registered tool's input model but never invokes `execute` or `run`. It imports no timeline manager, skill implementation, renderer, proxy/media engine, or trace writer. Simulation uses copied snapshot read models and emits stable IDs, direct/consequential/informational effects, before/after safe clip states, plan operation and proposed step IDs, typed evidence locators, and current provenance health. Current adapters accurately represent:
+
+- non-reverse `VideoAddClipSkill` using caller-supplied opaque duration/dimension facts, a clearly provisional clip ID, and the real first-clip canvas adoption;
+- `VideoModifyClipSkill` speed, rotation, and non-proxy property effects;
+- `VideoClearTimelineSkill` removals plus its default canvas/frame-rate reset;
+- `VideoExportSkill` as an export-only effect plus consequential removals and project reset when `clear_timeline_after` is set.
+
+Reverse proxy generation, timelapse generation, user-authored `VideoApplyManualEditsSkill`, and any registered tool lacking a detached adapter are blocked or marked unsupported. An unregistered tool, invalid argument, invalid trim/range, or stale/schema-drifted request is rejected. The engine never probes sources, renders, writes output, appends trace records, creates confirmations, or dispatches skills. `PlanDiffQuery` provides stable plan-to-changes, clip-to-changes, evidence-to-changes, and warning summaries with an optional exact snapshot freshness guard.
+
+The diff is proposed-state review, not provenance history. Step-7 provenance remains truthful recorded origin; the review only copies its detached summary onto affected current clips. Provisional additions do not claim a runtime clip ID or applied provenance.
 
 ### Timeline state and rendering
 
@@ -214,6 +238,7 @@ The loopback-only server has a deliberately narrow route surface:
 | `/`, `/index.html`, `/app.css`, `/app.js` | `GET`, `HEAD` | Fixed packaged preview assets only. |
 | `/api/snapshot` | `GET`, `HEAD` | A read-only envelope around the current immutable timeline snapshot and derived media availability. |
 | `/api/analysis` | `GET`, `HEAD` | A versioned deterministic thumbnail/waveform collection for the current snapshot. |
+| `/api/plan-review` | `GET`, `HEAD` | Browser-safe freshness envelope and structured proposed changes from an optional exact fixture. |
 | `/media/<source_id>` | `GET`, `HEAD` | Browser-safe audio/video bytes for a source already present in the snapshot, including single-range support. |
 | `/analysis/thumbnail/<analysis_id>/<artifact_id>` | `GET`, `HEAD` | One cached PNG addressed only by validated opaque analysis IDs. |
 | `/api/manual-edits/validate` | `POST` | Validates a detached user-authored proposal and returns a reviewable diff; never writes. |
@@ -224,6 +249,8 @@ Unknown `POST` routes and all `PUT`, `PATCH`, and `DELETE` requests return `405`
 Media and analysis are disabled for a source unless the operator supplies an applicable `--media-root` directory. A configured source can be served or analyzed only when its opaque `source_*` ID occurs in the current snapshot, its canonical path remains inside an allowlisted root after symlink resolution, and its extension is in the small browser audio/video allowlist. The preview copy of a snapshot replaces configured source paths with `media:source_*` references while the underlying `TimelineSnapshot` remains unchanged. Requests never accept raw paths, directory traversal cannot address media or thumbnails, and responses do not disclose resolved filesystem paths.
 
 The UI renders the snapshot's deterministic track order, preserves clip order and timing, places video thumbnail strips and audio peak paths inside their exact clip blocks, and represents only the implemented `video` and `audio` kinds as such. The selected-clip inspector reports the opaque source reference, media type, track, source/timeline timing, duration, playback properties, availability, visualization status, recorded origin, plan/step identity, source evidence range, and execution status. Legacy unknown, stale, orphaned, and deleted states are represented by the trace query contracts rather than inferred in the browser. Other track kinds remain visible as unsupported data-only lanes; the UI does not infer subtitle, transition, or compositing semantics. Missing or failed analysis produces an explicit placeholder. Preview selection, browser playback, playhead movement, zoom, scrolling, and analysis display are transient local view state.
+
+With `--plan-review path\to\request.json`, the same UI adds a **方案审阅 / 变更预览** panel. It groups added, removed, changed, and warning rows; overlays affected and provisional clips; synchronizes a selected change with before/after, tool, reason, evidence, and provenance details; and represents stale, invalid, blocked, and unsupported states. Native buttons and responsive lists preserve keyboard access. Back/Reject/Ready-to-confirm actions update browser state only. There is no plan-review POST route, confirmation store, dispatch path, or mutation authority.
 
 Current-workspace mode adds a deliberately narrow manual path:
 
@@ -245,6 +272,13 @@ Run:
 
 ```powershell
 python src/main.py preview --media-root C:\path\to\media
+```
+
+Reference-only plan review:
+
+```powershell
+python src/main.py preview --timeline path\to\timeline.json `
+  --plan-review path\to\plan-diff-request.json
 ```
 
 `TimelineRenderer` consumes a `TimelineConfig` and writes media. It selects single-clip and multi-clip FFmpeg fast paths where possible and falls back to a MoviePy composite path. Hardware/color/proxy helpers live under `src/utils/`.
@@ -289,6 +323,8 @@ This lightweight check does not claim that the missing Director, confirmation ga
 
 `tests/test_media_analysis.py` covers schema versions and JSON round trips, immutable requests/results, deterministic frame positions, normalized timeline-aligned peaks, missing/unsupported/decode-failed states, bounded in-memory cache reuse, opaque artifact validation, source isolation, and the absence of timeline/mutation imports or calls.
 
+`tests/test_plan_review.py` covers v1 round trips/digests, deterministic changes, exact snapshot and registry freshness, invalid/unregistered/unsupported steps, explicit unsupported reorder behavior, additions/removals/speed/export consequences, evidence and legacy provenance linkage, path redaction, revision-aware queries, GET-only browser delivery, no mutation, and import/call boundaries.
+
 ### Reference main-workflow regression
 
 `tests/reference_workflow.py` is the deterministic reference for the intended main workflow while production Director and Editing Agents remain absent:
@@ -297,6 +333,7 @@ This lightweight check does not claim that the missing Director, confirmation ga
 generated 320x180/24 fps silent source
   -> fixed analyzed media facts
   -> DirectorPlan data constructed by the harness
+  -> exact detached pre-confirmation PlanDiffDocument
   -> immutable matching UserConfirmationRecord
   -> EditingExecutionPlan derived without creative drift
   -> AtomicToolRequestEnvelope for each confirmed step
@@ -400,18 +437,18 @@ Mutation-capable utilities and core objects are implementation details behind to
 
 | ID | Gap | Evidence today | Required future outcome |
 | --- | --- | --- | --- |
-| G-01 | Director Agent absent | No Director class, prompt, plan model, or Director tests. | Add the general-capability Director without mutation authority. |
+| G-01 | Director Agent absent | `DirectorPlan` contracts and reference fixtures exist, but there is no Director runtime/class or directing prompt. | Add the general-capability Director without mutation authority. |
 | G-02 | Contracts are not wired into a confirmation gate | Versioned plan/confirmation/execution models exist, but current tool calls execute immediately from the LLM response. | Make the future runtime produce these contracts and gate execution on the confirmed handoff. |
 | G-03 | Operator combines incompatible roles | `OperatorAgent` owns dialogue, planning, and execution. | Separate/retire the hybrid behind Director and Editing contracts. |
 | G-04 | Editing Agent absent | No constrained plan executor exists. | Add an executor that accepts only confirmed structured plans. |
-| G-05 | Registry is hard-coded and unversioned | `SKILLS` is defined in `src/main.py`; request envelopes can validate against it but do not replace it. | Provide a reusable registry contract with schema/version metadata. |
+| G-05 | Runtime registry is hard-coded | `SKILLS` is defined in `src/main.py`; plan review binds a versioned digest of its schemas, but that read reference does not replace the runtime registry. | Provide a reusable registry contract with durable schema/version metadata. |
 | G-06 | Direct CLI render bypass | `render` instantiates `TimelineRenderer` directly. | Route mutations through an explicit atomic tool or clearly isolated maintenance interface. |
 | G-07 | Timeline persistence lacks production safeguards | One legacy JSON file; the opt-in project document and read snapshot expose revision metadata, but current persistence has no transaction, revision enforcement, history, or rollback. | Add explicit versioned persistence and recovery semantics without weakening the read boundary. |
 | G-08 | Tool envelopes are not wired into execution | Versioned request/result/error models exist, but each skill still returns an ad hoc dictionary or raises. | Wrap runtime dispatch and declare side effects without breaking skill schemas. |
-| G-09 | No production workflow UI | A local snapshot-first timeline preview with a narrow confirmed manual-edit path exists, but there is no Director plan/confirmation/execution interface. | Design future workflow UI around draft, confirmation, execution, and result phases without weakening the read boundary. |
-| G-10 | Production agent gates remain untested | The reference harness covers contract confirmation, atomic dispatch, traceability, and media output, but no Director or Editing runtime exists. | Add agent-level gate tests as those components are implemented. |
+| G-09 | No production workflow UI | A local snapshot-first timeline preview, fixture-driven plan review, and narrow confirmed manual-edit path exist, but there is no production Director plan/confirmation/execution interface. | Design future workflow UI around generated plan, persisted confirmation, execution, and result phases without weakening the read boundary. |
+| G-10 | Production agent gates remain untested | The reference harness covers pre-confirmation diff, contract confirmation, atomic dispatch, traceability, and media output, but no Director or Editing runtime exists. | Add agent-level gate tests as those components are implemented. |
 | G-11 | Visualization/manual editing remains local and narrow | The loopback UI now provides snapshot lanes, safe material preview, deterministic thumbnails/waveforms, a detailed inspector, and a confirmed basic video-clip edit slice, but no production frontend or broader editing controls. | Extend only through separately approved read contracts and atomic tools while preserving confirmation and mutation boundaries. |
 | G-12 | Trace recording is not yet wired to a production Editing Agent | Strict sidecar contracts, confirmed/manual recorders, queries, snapshot summaries, and the reference harness exist; production Director and Editing runtimes remain absent. | Invoke the same confirmed recorder from a future Editing Agent dispatcher without weakening the atomic boundary. |
-| G-13 | Provenance is not a plan-diff preview | The inspector shows entity origin and execution linkage only. | Add any future proposed-vs-applied plan diff as a separately approved read/review feature. |
+| G-13 | Plan review is fixture-only | Strict deterministic diff contracts, queries, GET-only UI, and the reference harness exist, but no Director runtime generates proposals and no confirmation/execution boundary consumes a reviewed diff. | Connect later production runtimes without allowing preview to confirm, execute, or mutate. |
 
 This gap register is descriptive. Closing any gap requires a separate approved implementation task.

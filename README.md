@@ -101,7 +101,26 @@ query = TraceabilityQuery(TraceabilityStore.load(), snapshot)
 clips = query.plan_to_clips(PlanReference.from_plan(director_plan))
 ```
 
-This is provenance infrastructure, not a production Director or Editing Agent and not a plan-diff preview. Those runtimes and that future review surface remain absent.
+This is provenance infrastructure, not a production Director or Editing Agent. Provenance describes recorded history; the separate plan-review boundary below describes proposed, unapplied changes.
+
+## Director plan review (reference/fixture mode)
+
+`src/plan_review/` provides strict version `1.0.0` contracts and a deterministic read-only diff engine for the period before confirmation. A `PlanDiffRequest` binds an exact timeline snapshot ID/revision/digest, Director plan ID/version/digest, non-executable proposed execution-plan digest, and the exact registered tool-schema set. The engine validates proposed arguments with the current registry schemas, simulates supported semantics on detached clip data, and returns stable before/after changes, source-evidence links, provenance summaries, warnings, and net counts. Repeating the same request produces the same document and digest; snapshot or registry drift requires regeneration.
+
+The current semantic adapters cover non-reverse video add (with supplied opaque media facts, including first-clip canvas adoption), safe clip property/speed modification, timeline clear/default-project reset, and export timeline effects. Proxy-generating reverse operations, timelapse output, the separate user-authored manual-edit tool, and registered tools without an adapter are blockers rather than fabricated previews. Export paths and configured source paths never cross the browser boundary.
+
+Supply an exact versioned request fixture to the local UI:
+
+```powershell
+python src/main.py preview `
+  --timeline path\to\the-bound-timeline.json `
+  --plan-review path\to\plan-diff-request.json `
+  --media-root C:\path\to\your\media
+```
+
+The **方案审阅 / 变更预览** panel groups additions, removals, changes, and warnings; synchronizes rows with affected timeline clips and the evidence inspector; and marks stale, invalid, unsupported, or blocked proposals clearly. **Back**, **Reject locally**, and **Ready to confirm** change browser view state only. The preview exposes no endpoint that creates a confirmation or executes a plan.
+
+This fixture surface exists because production Director and Editing Agent runtimes are still absent. Confirmation persistence, execution history beyond the existing trace sidecar, and rollback records belong to later work.
 
 ## Validation
 
@@ -111,7 +130,7 @@ The integration validation creates its own synthetic source clip and generated o
 python tests/run_validation.py
 ```
 
-Run the deterministic contract-to-atomic-tool reference workflow:
+Run the deterministic pre-confirmation-review-to-contract-to-atomic-tool reference workflow:
 
 ```powershell
 python -m pytest -q tests/test_reference_workflow.py

@@ -3,6 +3,7 @@ from tests.reference_workflow import (
     REFERENCE_TOOL_ORDER,
     run_reference_workflow,
 )
+from contracts import PlanReference
 
 
 def test_reference_main_workflow_is_traceable_and_repeatable() -> None:
@@ -11,6 +12,11 @@ def test_reference_main_workflow_is_traceable_and_repeatable() -> None:
 
     assert first.facts == second.facts
     assert first.plan == second.plan
+    assert first.pre_confirmation_diff == second.pre_confirmation_diff
+    assert (
+        first.pre_confirmation_diff.digest()
+        == second.pre_confirmation_diff.digest()
+    )
     assert first.plan.digest() == second.plan.digest() == REFERENCE_PLAN_DIGEST
     assert first.confirmation == second.confirmation
     assert first.execution == second.execution
@@ -27,6 +33,15 @@ def test_reference_main_workflow_is_traceable_and_repeatable() -> None:
         assert first.output_metadata[field] == second.output_metadata[field]
 
     assert first.confirmation.confirms(first.plan)
+    assert first.pre_confirmation_diff.plan_ref == PlanReference.from_plan(
+        first.plan
+    )
+    assert first.pre_confirmation_diff.review_status == "warning"
+    assert first.pre_confirmation_diff.summary.additions == 1
+    assert first.pre_confirmation_diff.summary.removals == 1
+    assert "confirmation" not in (
+        first.pre_confirmation_diff.model_dump_json()
+    )
     assert first.execution.confirmation == first.confirmation
     assert tuple(step.tool_name for step in first.execution.steps) == (
         REFERENCE_TOOL_ORDER
