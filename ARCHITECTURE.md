@@ -60,6 +60,11 @@ src/
     engine.py                Detached registry-validated simulator
     query.py                 Revision-aware plan/clip/evidence queries
     service.py               Current/stale/invalid browser envelope
+  workflow/
+    models.py                Frozen v1 review/execution/rollback records
+    store.py                 Hash-chained atomic project ledger
+    service.py               Confirmed dispatch and reviewed restore boundary
+    query.py                 Browser-safe deterministic history projection
   core/
     timeline.py              Timeline models and MoviePy/FFmpeg renderer
     timeline_manager.py      Persistence for the active timeline
@@ -86,9 +91,11 @@ tests/
                               stale-state, and rollback checks
   test_traceability.py        Linkage, queries, legacy/stale/orphan/manual,
                               redaction, and round-trip checks
+  test_workflow.py             Ledger integrity, gates, execution, recovery,
+                               rollback, history API, and redaction checks
 ```
 
-The repository now contains a framework-free local visual timeline preview launched from the command line. There is still no production frontend application, desktop GUI, remote API server, or persistent UI state store. The local preview owns transient detached draft state only.
+The repository now contains a framework-free local visual timeline preview launched from the command line. There is still no production frontend application, desktop GUI, remote API server, Director runtime, or Editing Agent runtime. Browser view/draft state is transient; current-workspace workflow decisions and runs are persisted only through the dedicated application service and ledger.
 
 ## Implemented runtime
 
@@ -112,6 +119,7 @@ The registry is currently a module-level dictionary named `SKILLS`. It contains:
 - `VideoTimelapseSkill`
 - `VideoClearTimelineSkill`
 - `VideoApplyManualEditsSkill`
+- `VideoRestoreTimelineCheckpointSkill`
 
 Registration is hard-coded. There is no plugin discovery, registry version, capability negotiation, or authorization layer.
 
@@ -126,7 +134,7 @@ Registration is hard-coded. There is no plugin discovery, registry version, capa
 5. It immediately parses and executes those calls, up to ten iterations.
 6. It returns tool results to the LLM and finally to the user.
 
-This flow validates individual tool arguments through `BaseSkill.execute`, but it has no separate Director Agent, runtime confirmation gate, or constrained Editing Agent. It does not construct or consume the versioned contract models described below. Therefore `OperatorAgent` MUST be treated as a legacy prototype/hybrid, not as proof that the target agent contracts are enforced.
+This flow validates individual tool arguments through `BaseSkill.execute`, but it has no separate Director Agent, confirmation integration, or constrained Editing Agent. It does not construct or consume the versioned workflow service described below. Therefore `OperatorAgent` MUST be treated as a legacy prototype/hybrid, not as proof that the target agent contracts are enforced. The separate fixture/application workflow is gated, but it is not wired into `OperatorAgent`.
 
 `LLMClient` is an OpenAI-compatible transport configured by `LLM_API_KEY`, `LLM_BASE_URL`, and `LLM_MODEL`. It is not a Director or Editing Agent by itself.
 
@@ -166,6 +174,29 @@ The Director/Editing contracts are not wired into `OperatorAgent` or production 
 Reverse proxy generation, timelapse generation, user-authored `VideoApplyManualEditsSkill`, and any registered tool lacking a detached adapter are blocked or marked unsupported. An unregistered tool, invalid argument, invalid trim/range, or stale/schema-drifted request is rejected. The engine never probes sources, renders, writes output, appends trace records, creates confirmations, or dispatches skills. `PlanDiffQuery` provides stable plan-to-changes, clip-to-changes, evidence-to-changes, and warning summaries with an optional exact snapshot freshness guard.
 
 The diff is proposed-state review, not provenance history. Step-7 provenance remains truthful recorded origin; the review only copies its detached summary onto affected current clips. Provisional additions do not claim a runtime clip ID or applied provenance.
+
+### Persistent workflow and recovery boundary
+
+`src/workflow/` persists the state transitions that the plan-review boundary intentionally does not create. Its frozen version `1.0.0` records cover exact Director plan versions, review sessions, immutable confirmations/rejections, execution-run snapshots with per-step atomic envelopes, integrity-checked project checkpoints, rollback proposals/reviews/confirmations/runs, and typed terminal errors. It reuses `DirectorPlan`, `UserConfirmationRecord`, `EditingExecutionPlan`, plan-diff references, timeline project documents, and atomic envelopes instead of redefining them.
+
+`current_timeline.workflow.json` is project-scoped and append-only. Every entry has a contiguous sequence, previous-entry digest, and canonical content digest; the ledger carries an aggregate integrity digest. The store holds an exclusive project lock, checks an expected ledger revision, writes and `fsync`s a same-directory temporary file, then atomically replaces the sidecar. Unsupported migration/version input, corruption, chain tampering, cross-project records, duplicate/replayed confirmations, and illegal state transitions fail closed.
+
+The ledger project ID is a stable logical workspace identity. Each review and checkpoint separately carries the exact snapshot/content-derived project ID, revision, snapshot ID, and timeline digest. This distinction preserves multi-plan history when editing changes a legacy `project_legacy_*` identity, while every confirmation/execution still revalidates the exact reviewed snapshot.
+
+The implemented execution state path is:
+
+```text
+persisted plan version
+  -> exact reviewed PlanDiffDocument
+  -> explicit immutable confirmed/rejected decision
+  -> execution_pending -> running
+  -> per-step registry validation and atomic dispatch
+  -> succeeded | failed | partial | recovery_required
+```
+
+`WorkflowApplicationService` regenerates the exact review and rechecks snapshot, plan, proposed execution, diff, and registry-schema digests immediately before execution. It dispatches in order through `BaseSkill.execute`, records each correlated result/provenance/checkpoint, and stops on the first failure. Abandoned pending/running records can only recover to `recovery_required`; they are never inferred as successful. This application service supplies the current constrained boundary for fixtures and the local workflow panel, but it is not a production Editing Agent.
+
+Rollback is a second workflow, never an automatic failure handler. The service requires the current timeline to equal the execution's latest checkpoint, creates a deterministic current-to-start-checkpoint proposal, records its limitations, and requires a separate immutable decision. Only `VideoRestoreTimelineCheckpointSkill` mutates during restore. That skill verifies the exact current checkpoint, atomically replaces the legacy timeline JSON, verifies the restored digest, and restores the prior bytes if validation fails. It does not delete exports, reverse generated media, or erase the original execution/provenance history. Manual edits or any other current-state drift invalidate rollback and require a new safe review; unsupported media-file inverses fail closed.
 
 ### Timeline state and rendering
 
@@ -239,10 +270,17 @@ The loopback-only server has a deliberately narrow route surface:
 | `/api/snapshot` | `GET`, `HEAD` | A read-only envelope around the current immutable timeline snapshot and derived media availability. |
 | `/api/analysis` | `GET`, `HEAD` | A versioned deterministic thumbnail/waveform collection for the current snapshot. |
 | `/api/plan-review` | `GET`, `HEAD` | Browser-safe freshness envelope and structured proposed changes from an optional exact fixture. |
+| `/api/workflow` | `GET`, `HEAD` | Path-redacted append-only plan/review/decision/execution/rollback history. |
 | `/media/<source_id>` | `GET`, `HEAD` | Browser-safe audio/video bytes for a source already present in the snapshot, including single-range support. |
 | `/analysis/thumbnail/<analysis_id>/<artifact_id>` | `GET`, `HEAD` | One cached PNG addressed only by validated opaque analysis IDs. |
 | `/api/manual-edits/validate` | `POST` | Validates a detached user-authored proposal and returns a reviewable diff; never writes. |
 | `/api/manual-edits/apply` | `POST` | Requires an exact matching confirmation, then asks the application service to dispatch the registered manual-edit atomic skill. |
+| `/api/workflow/reviews` | `POST` | Persists the exact current fixture review; never confirms it. |
+| `/api/workflow/confirmations` | `POST` | Persists one explicit immutable confirmation or rejection. |
+| `/api/workflow/executions` | `POST` | Runs only an exact unused confirmation through the workflow service and registry. |
+| `/api/workflow/rollbacks/reviews` | `POST` | Persists an exact deterministic timeline-state restore proposal. |
+| `/api/workflow/rollbacks/confirmations` | `POST` | Persists a separate explicit rollback decision. |
+| `/api/workflow/rollbacks/runs` | `POST` | Dispatches the registered checkpoint-restore tool after exact confirmation. |
 
 Unknown `POST` routes and all `PUT`, `PATCH`, and `DELETE` requests return `405`. There are no agent, render, upload, filesystem-browse, or direct timeline-manager routes. The server accepts only `127.0.0.1`, `::1`, or `localhost` binds.
 
@@ -250,7 +288,9 @@ Media and analysis are disabled for a source unless the operator supplies an app
 
 The UI renders the snapshot's deterministic track order, preserves clip order and timing, places video thumbnail strips and audio peak paths inside their exact clip blocks, and represents only the implemented `video` and `audio` kinds as such. The selected-clip inspector reports the opaque source reference, media type, track, source/timeline timing, duration, playback properties, availability, visualization status, recorded origin, plan/step identity, source evidence range, and execution status. Legacy unknown, stale, orphaned, and deleted states are represented by the trace query contracts rather than inferred in the browser. Other track kinds remain visible as unsupported data-only lanes; the UI does not infer subtitle, transition, or compositing semantics. Missing or failed analysis produces an explicit placeholder. Preview selection, browser playback, playhead movement, zoom, scrolling, and analysis display are transient local view state.
 
-With `--plan-review path\to\request.json`, the same UI adds a **方案审阅 / 变更预览** panel. It groups added, removed, changed, and warning rows; overlays affected and provisional clips; synchronizes a selected change with before/after, tool, reason, evidence, and provenance details; and represents stale, invalid, blocked, and unsupported states. Native buttons and responsive lists preserve keyboard access. Back/Reject/Ready-to-confirm actions update browser state only. There is no plan-review POST route, confirmation store, dispatch path, or mutation authority.
+With `--plan-review path\to\request.json`, the same UI adds a **方案审阅 / 变更预览** panel. It groups added, removed, changed, and warning rows; overlays affected and provisional clips; synchronizes a selected change with before/after, tool, reason, evidence, and provenance details; and represents stale, invalid, blocked, and unsupported states. Native buttons and responsive lists preserve keyboard access. Back/Reject/Ready-to-confirm actions update browser state only and cannot confirm.
+
+Current-workspace mode additionally exposes the workflow history panel. Its separate buttons persist the exact review, record an explicit confirmation/rejection, invoke the confirmed application service, and walk the separately reviewed rollback sequence. The HTTP handler does not import a skill or call `TimelineManager`; it delegates to the workflow application boundary. External `--timeline` documents do not receive these routes.
 
 Current-workspace mode adds a deliberately narrow manual path:
 
@@ -297,6 +337,7 @@ The implemented mutation ownership is:
 | `VideoExportSkill` | May reset timeline state after export. | Renders the timeline to an output file. |
 | `VideoTimelapseSkill` | None. | Writes a new timelapse file through FFmpeg. |
 | `VideoApplyManualEditsSkill` | Applies one exact confirmed user proposal to copied current video-track state, atomically replaces timeline JSON, and appends truthful manual provenance; timeline state is restored if trace persistence fails. | None. |
+| `VideoRestoreTimelineCheckpointSkill` | Restores one exact reviewed and confirmed checkpoint with atomic replacement and post-write digest validation; prior bytes are restored on failure. | None; generated/exported files are explicitly outside rollback. |
 
 These are the only registered atomic mutation entry points. Tests may reset state directly as test-fixture setup. The CLI `render` command remains a documented nonconforming compatibility exception.
 
@@ -334,14 +375,16 @@ generated 320x180/24 fps silent source
   -> fixed analyzed media facts
   -> DirectorPlan data constructed by the harness
   -> exact detached pre-confirmation PlanDiffDocument
-  -> immutable matching UserConfirmationRecord
-  -> EditingExecutionPlan derived without creative drift
+  -> persisted review plus immutable matching UserConfirmationRecord
+  -> recorded EditingExecutionPlan derived without creative drift
   -> AtomicToolRequestEnvelope for each confirmed step
   -> registered atomic skill dispatch only
   -> AtomicToolResultEnvelope for each result
   -> append-only atomic/entity trace with typed source evidence
   -> exported H.264 silent media
   -> ffprobe metadata plus plan/evidence-to-deleted-clip verification
+  -> deterministic rollback proposal and separate confirmation
+  -> registered checkpoint restore and verified restored revision
 ```
 
 It uses only `VideoClearTimelineSkill`, `VideoAddClipSkill`, and `VideoExportSkill`. Fixed contract IDs, timestamps, relative generated paths, and a deterministic test clip UUID make two consecutive runs directly comparable. Generated source/output files and isolated timeline state live below `tests/test_data/` and remain ignored.
@@ -438,17 +481,17 @@ Mutation-capable utilities and core objects are implementation details behind to
 | ID | Gap | Evidence today | Required future outcome |
 | --- | --- | --- | --- |
 | G-01 | Director Agent absent | `DirectorPlan` contracts and reference fixtures exist, but there is no Director runtime/class or directing prompt. | Add the general-capability Director without mutation authority. |
-| G-02 | Contracts are not wired into a confirmation gate | Versioned plan/confirmation/execution models exist, but current tool calls execute immediately from the LLM response. | Make the future runtime produce these contracts and gate execution on the confirmed handoff. |
+| G-02 | Production chat is not wired into the confirmation gate | The fixture/application workflow enforces exact review and confirmation, but `OperatorAgent` still executes LLM tool calls immediately. | Make the future Director/Editing runtimes produce and consume these records. |
 | G-03 | Operator combines incompatible roles | `OperatorAgent` owns dialogue, planning, and execution. | Separate/retire the hybrid behind Director and Editing contracts. |
 | G-04 | Editing Agent absent | No constrained plan executor exists. | Add an executor that accepts only confirmed structured plans. |
 | G-05 | Runtime registry is hard-coded | `SKILLS` is defined in `src/main.py`; plan review binds a versioned digest of its schemas, but that read reference does not replace the runtime registry. | Provide a reusable registry contract with durable schema/version metadata. |
 | G-06 | Direct CLI render bypass | `render` instantiates `TimelineRenderer` directly. | Route mutations through an explicit atomic tool or clearly isolated maintenance interface. |
-| G-07 | Timeline persistence lacks production safeguards | One legacy JSON file; the opt-in project document and read snapshot expose revision metadata, but current persistence has no transaction, revision enforcement, history, or rollback. | Add explicit versioned persistence and recovery semantics without weakening the read boundary. |
-| G-08 | Tool envelopes are not wired into execution | Versioned request/result/error models exist, but each skill still returns an ad hoc dictionary or raises. | Wrap runtime dispatch and declare side effects without breaking skill schemas. |
-| G-09 | No production workflow UI | A local snapshot-first timeline preview, fixture-driven plan review, and narrow confirmed manual-edit path exist, but there is no production Director plan/confirmation/execution interface. | Design future workflow UI around generated plan, persisted confirmation, execution, and result phases without weakening the read boundary. |
+| G-07 | Canonical timeline persistence remains legacy | Workflow checkpoints and confirmed restore add guarded history/recovery, but the canonical timeline is still one legacy JSON file with content-derived snapshot identity. | Introduce a first-class versioned project store only in a separately approved migration. |
+| G-08 | Production tools still return ad hoc payloads | The workflow service wraps confirmed dispatch in atomic envelopes, but direct CLI/chat calls still receive dictionaries or exceptions. | Route future production execution through the same application boundary. |
+| G-09 | Workflow UI is local and fixture-driven | The loopback UI persists review/confirmation/execution/rollback history, but there is no production Director-generated workflow or remote application. | Connect a future Director without weakening exact confirmation and atomic mutation gates. |
 | G-10 | Production agent gates remain untested | The reference harness covers pre-confirmation diff, contract confirmation, atomic dispatch, traceability, and media output, but no Director or Editing runtime exists. | Add agent-level gate tests as those components are implemented. |
 | G-11 | Visualization/manual editing remains local and narrow | The loopback UI now provides snapshot lanes, safe material preview, deterministic thumbnails/waveforms, a detailed inspector, and a confirmed basic video-clip edit slice, but no production frontend or broader editing controls. | Extend only through separately approved read contracts and atomic tools while preserving confirmation and mutation boundaries. |
 | G-12 | Trace recording is not yet wired to a production Editing Agent | Strict sidecar contracts, confirmed/manual recorders, queries, snapshot summaries, and the reference harness exist; production Director and Editing runtimes remain absent. | Invoke the same confirmed recorder from a future Editing Agent dispatcher without weakening the atomic boundary. |
-| G-13 | Plan review is fixture-only | Strict deterministic diff contracts, queries, GET-only UI, and the reference harness exist, but no Director runtime generates proposals and no confirmation/execution boundary consumes a reviewed diff. | Connect later production runtimes without allowing preview to confirm, execute, or mutate. |
+| G-13 | Plan creation is fixture-only | Strict deterministic diffs and the workflow service consume exact reviewed fixtures, but no Director runtime generates proposals. | Connect later production runtimes without allowing the Director or browser to bypass confirmation/atomic tools. |
 
 This gap register is descriptive. Closing any gap requires a separate approved implementation task.

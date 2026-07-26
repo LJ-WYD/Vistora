@@ -13,6 +13,9 @@ from skills.video_export import VideoExportSkill
 from skills.video_timelapse import VideoTimelapseSkill
 from skills.video_clear_timeline import VideoClearTimelineSkill
 from skills.video_apply_manual_edits import VideoApplyManualEditsSkill
+from skills.video_restore_timeline_checkpoint import (
+    VideoRestoreTimelineCheckpointSkill,
+)
 
 # 注册非破坏性编辑原子技能
 SKILLS = {
@@ -22,6 +25,9 @@ SKILLS = {
     "VideoTimelapseSkill": VideoTimelapseSkill(),
     "VideoClearTimelineSkill": VideoClearTimelineSkill(),
     "VideoApplyManualEditsSkill": VideoApplyManualEditsSkill(),
+    "VideoRestoreTimelineCheckpointSkill": (
+        VideoRestoreTimelineCheckpointSkill()
+    ),
 }
 
 def list_skills():

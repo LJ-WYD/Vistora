@@ -48,15 +48,15 @@ def test_reference_main_workflow_is_traceable_and_repeatable() -> None:
     )
 
     plan_ref = first.confirmation.plan_ref
-    assert tuple(request.request_id for request in first.requests) == (
-        "request_reference_01",
-        "request_reference_02",
-        "request_reference_03",
+    assert len({request.request_id for request in first.requests}) == 3
+    assert all(
+        request.request_id.startswith("atomic_request_reference_")
+        for request in first.requests
     )
-    assert tuple(result.result_id for result in first.results) == (
-        "result_reference_01",
-        "result_reference_02",
-        "result_reference_03",
+    assert len({result.result_id for result in first.results}) == 3
+    assert all(
+        result.result_id.startswith("atomic_result_reference_")
+        for result in first.results
     )
     for request, result in zip(first.requests, first.results, strict=True):
         assert request.execution_id == first.execution.execution_id
@@ -82,6 +82,11 @@ def test_reference_main_workflow_is_traceable_and_repeatable() -> None:
     assert abs(first.output_metadata["duration_seconds"] - 1.5) <= 0.08
     assert first.timeline_state_removed is True
     assert first.trace_document == second.trace_document
+    assert first.workflow_ledger == second.workflow_ledger
+    assert first.workflow_ledger.revision > 0
+    assert first.rollback_proposal == second.rollback_proposal
+    assert first.rollback_run.status == "succeeded"
+    assert first.timeline_restored is True
     assert first.trace_document.revision == 4
     assert tuple(
         trace.trace_sequence

@@ -1352,3 +1352,72 @@ h3 {
     transition-duration: 0.01ms !important;
   }
 }
+
+.workflow-panel[hidden] {
+  display: none;
+}
+
+.workflow-history {
+  display: grid;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.workflow-event {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.workflow-event small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.workflow-event-status {
+  align-self: start;
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.workflow-event-status.failed,
+.workflow-event-status.partial,
+.workflow-event-status.recovery_required,
+.workflow-event-status.error,
+.workflow-event-status.rejected {
+  color: var(--danger);
+}
+
+.workflow-audit {
+  margin-top: 16px;
+  color: var(--muted);
+}
+
+.workflow-audit summary {
+  cursor: pointer;
+  color: var(--text);
+  font-weight: 700;
+}
+
+.workflow-audit li {
+  margin-top: 6px;
+}
+
+@media (max-width: 620px) {
+  .workflow-event {
+    grid-template-columns: 1fr;
+  }
+
+  .workflow-event-status,
+  .workflow-event small {
+    grid-column: 1;
+  }
+}

@@ -2,7 +2,7 @@
 
 Vistora is an early-stage, agent-driven video editing prototype. It represents edits as a declarative timeline and applies them through small, schema-validated editing skills backed by MoviePy and FFmpeg.
 
-The current public baseline contains the editing runtime and two architecture chapters. Generated media, local workspaces, model weights, credentials, and machine-specific investigation scripts are intentionally excluded.
+The current public baseline contains the editing runtime, versioned review/provenance/workflow contracts, and their reference interfaces. Generated media, local workspaces, model weights, credentials, and machine-specific investigation scripts are intentionally excluded.
 
 ## Architecture
 
@@ -118,9 +118,19 @@ python src/main.py preview `
   --media-root C:\path\to\your\media
 ```
 
-The **方案审阅 / 变更预览** panel groups additions, removals, changes, and warnings; synchronizes rows with affected timeline clips and the evidence inspector; and marks stale, invalid, unsupported, or blocked proposals clearly. **Back**, **Reject locally**, and **Ready to confirm** change browser view state only. The preview exposes no endpoint that creates a confirmation or executes a plan.
+The **方案审阅 / 变更预览** panel groups additions, removals, changes, and warnings; synchronizes rows with affected timeline clips and the evidence inspector; and marks stale, invalid, unsupported, or blocked proposals clearly. **Back**, **Reject locally**, and **Ready to confirm** still change browser view state only. They never create a confirmation.
 
-This fixture surface exists because production Director and Editing Agent runtimes are still absent. Confirmation persistence, execution history beyond the existing trace sidecar, and rollback records belong to later work.
+For a current-workspace preview, the separate workflow panel can deliberately persist the exact review, record an explicit immutable confirmation or rejection, run the confirmed steps through the registered atomic-tool application boundary, and show execution/rollback history. External `--timeline` documents remain read-only. This fixture-driven surface exists because production Director and Editing Agent runtimes are still absent.
+
+## Persistent workflow ledger and rollback
+
+`src/workflow/` implements strict frozen version `1.0.0` records for Director plan versions, exact review sessions, immutable user decisions, execution runs and per-step request/results, integrity-checked project checkpoints, and separately reviewed/confirmed rollback runs. Records are appended to `current_timeline.workflow.json` beside the current project. Each entry has a contiguous sequence, previous-entry digest, and content digest; the ledger has its own integrity digest. Writes use an exclusive project lock, optimistic revision guard, temporary file, `fsync`, and atomic replacement. Unsupported versions, broken chains, tampering, duplicate decisions, confirmation replay, stale snapshots, registry drift, and illegal transitions fail closed.
+
+The ledger keeps one stable logical identity for the workspace while every review/checkpoint retains the exact timeline snapshot ID, revision, and digest it observed. This permits a second reviewed plan after a legacy content-derived `project_legacy_*` snapshot ID changes, without weakening freshness checks or changing legacy timeline JSON.
+
+`WorkflowApplicationService` is the current application boundary—not a production Editing Agent. It regenerates the exact reviewed diff immediately before confirmation/execution, dispatches registered atomic requests in order, records every result and provenance effect, stops on the first failure, and records `failed`, `partial`, or `recovery_required` truthfully. A restart helper converts abandoned pending/running records to `recovery_required` rather than guessing success.
+
+Rollback is never automatic. The service first creates a deterministic proposal from the current exact checkpoint to the run's start checkpoint. Manual edits or other revision drift make the proposal unavailable or stale. A second immutable user decision is required before `VideoRestoreTimelineCheckpointSkill` atomically restores the validated timeline document. This restores timeline/project JSON only: generated/exported external media is neither deleted nor promised reversible, and original execution/provenance history remains append-only.
 
 ## Validation
 
@@ -130,7 +140,7 @@ The integration validation creates its own synthetic source clip and generated o
 python tests/run_validation.py
 ```
 
-Run the deterministic pre-confirmation-review-to-contract-to-atomic-tool reference workflow:
+Run the deterministic review → confirmation → recorded execution → rollback reference workflow:
 
 ```powershell
 python -m pytest -q tests/test_reference_workflow.py

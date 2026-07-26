@@ -26,6 +26,12 @@ from plan_review import (
 )
 from timeline_query import TimelineSnapshot, TimelineSnapshotService
 from traceability.store import TraceabilityStore
+from workflow import (
+    WorkflowApplicationError,
+    WorkflowApplicationService,
+    WorkflowHistoryQuery,
+    WorkflowIntegrityError,
+)
 
 from .manual_edits import (
     ManualEditApplicationService,
@@ -141,6 +147,7 @@ class PreviewApplication:
         plan_review_request_provider: Callable[
             [], PlanDiffRequest
         ] | None = None,
+        workflow_service: WorkflowApplicationService | None = None,
     ) -> None:
         self._snapshot_provider = snapshot_provider
         self.media_resolver = MediaResolver(media_roots)
@@ -149,6 +156,7 @@ class PreviewApplication:
         self._plan_review_request_provider = (
             plan_review_request_provider
         )
+        self.workflow = workflow_service
         if manual_edits_enabled and skill_registry is None:
             raise PreviewConfigurationError(
                 "Manual editing requires an explicit atomic skill registry"
@@ -249,6 +257,14 @@ class PreviewApplication:
                 ),
                 "plan_review_confirmation": False,
                 "plan_review_execution": False,
+                "workflow_history": self.workflow is not None,
+                "workflow_review_persistence": (
+                    self.workflow is not None
+                    and self.plan_review_enabled
+                ),
+                "workflow_explicit_confirmation": self.workflow is not None,
+                "workflow_confirmed_execution": self.workflow is not None,
+                "workflow_reviewed_rollback": self.workflow is not None,
             },
         }
 
@@ -282,6 +298,94 @@ class PreviewApplication:
             self.snapshot(),
             self._skill_registry,
         ).model_dump(mode="json")
+
+    def workflow_payload(self) -> dict[str, Any]:
+        """Return collapsed audit history without raw plans/tool arguments."""
+
+        if self.workflow is None:
+            return {
+                "schema_name": "vistora.workflow-history-unavailable",
+                "schema_version": "1.0.0",
+                "state": "unavailable",
+                "message": (
+                    "Workflow persistence is disabled for external timeline "
+                    "documents."
+                ),
+            }
+        snapshot = self.snapshot()
+        ledger = self.workflow.store.load(
+            None
+            if self.workflow.store.path.exists()
+            else snapshot.project_id
+        )
+        return WorkflowHistoryQuery.project(ledger).model_dump(mode="json")
+
+    def workflow_action(
+        self,
+        route: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        if self.workflow is None:
+            raise WorkflowApplicationError(
+                "Workflow persistence is unavailable"
+            )
+        if route == "/api/workflow/reviews":
+            if self._plan_review_request_provider is None:
+                raise WorkflowApplicationError(
+                    "No versioned plan-review input is configured"
+                )
+            record = self.workflow.record_review(
+                self._plan_review_request_provider()
+            )
+            result = {"review_id": record.review_id, "status": "reviewed"}
+        elif route == "/api/workflow/confirmations":
+            record = self.workflow.confirm_review(
+                str(payload.get("review_id", "")),
+                confirmed_by=str(payload.get("confirmed_by", "")),
+                decision=payload.get("decision"),
+            )
+            result = {
+                "confirmation_record_id": record.confirmation_record_id,
+                "status": record.decision,
+            }
+        elif route == "/api/workflow/executions":
+            record = self.workflow.run_confirmed_execution(
+                str(payload.get("confirmation_record_id", ""))
+            )
+            result = {"run_id": record.run_id, "status": record.status}
+        elif route == "/api/workflow/rollbacks/reviews":
+            record = self.workflow.propose_rollback(
+                str(payload.get("source_run_id", ""))
+            )
+            result = {
+                "review_id": record.review_id,
+                "proposal_id": record.proposal.proposal_id,
+                "status": "reviewed",
+            }
+        elif route == "/api/workflow/rollbacks/confirmations":
+            record = self.workflow.confirm_rollback(
+                str(payload.get("review_id", "")),
+                confirmed_by=str(payload.get("confirmed_by", "")),
+                decision=payload.get("decision"),
+            )
+            result = {
+                "confirmation_id": record.confirmation_id,
+                "status": record.decision,
+            }
+        elif route == "/api/workflow/rollbacks/runs":
+            record = self.workflow.apply_rollback(
+                str(payload.get("confirmation_id", ""))
+            )
+            result = {
+                "rollback_run_id": record.rollback_run_id,
+                "status": record.status,
+            }
+        else:
+            raise WorkflowApplicationError("Unknown workflow transition")
+        return {
+            "result": result,
+            "history": self.workflow_payload(),
+        }
 
     @staticmethod
     def _browser_safe_snapshot(
@@ -524,6 +628,27 @@ def _handler_class(
                 return
             self._send_json(HTTPStatus.OK, payload, head_only=head_only)
 
+        def _serve_workflow(self, head_only: bool) -> None:
+            try:
+                payload = application.workflow_payload()
+            except WorkflowIntegrityError:
+                self._send_error_json(
+                    HTTPStatus.CONFLICT,
+                    "workflow_integrity_failed",
+                    "The workflow ledger failed integrity validation.",
+                    head_only=head_only,
+                )
+                return
+            except Exception:
+                self._send_error_json(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    "workflow_unavailable",
+                    "Workflow history could not be loaded safely.",
+                    head_only=head_only,
+                )
+                return
+            self._send_json(HTTPStatus.OK, payload, head_only=head_only)
+
         def _serve_analysis_artifact(
             self,
             analysis_id: str,
@@ -625,6 +750,9 @@ def _handler_class(
             if route == "/api/plan-review":
                 self._serve_plan_review(head_only)
                 return
+            if route == "/api/workflow":
+                self._serve_workflow(head_only)
+                return
             if route.startswith("/analysis/thumbnail/"):
                 parts = route.split("/")
                 if len(parts) == 5:
@@ -694,15 +822,15 @@ def _handler_class(
             return payload
 
         def _manual_edit(self, route: str) -> None:
+            payload = self._read_json_body()
+            if payload is None:
+                return
             if application.manual_edits is None:
                 self._send_error_json(
                     HTTPStatus.CONFLICT,
                     "manual_edit_disabled",
                     "Manual apply is available only for current workspace state.",
                 )
-                return
-            payload = self._read_json_body()
-            if payload is None:
                 return
             try:
                 if route == "/api/manual-edits/validate":
@@ -748,6 +876,43 @@ def _handler_class(
                 return
             self._reject_write()
 
+        def _workflow(self, route: str) -> None:
+            payload = self._read_json_body()
+            if payload is None:
+                return
+            try:
+                result = application.workflow_action(route, payload)
+            except WorkflowApplicationError as exc:
+                self._send_error_json(
+                    HTTPStatus.CONFLICT,
+                    "workflow_transition_rejected",
+                    str(exc),
+                )
+                return
+            except WorkflowIntegrityError:
+                self._send_error_json(
+                    HTTPStatus.CONFLICT,
+                    "workflow_integrity_failed",
+                    "The workflow ledger failed integrity validation.",
+                )
+                return
+            except (TypeError, ValueError) as exc:
+                self._send_error_json(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    "invalid_workflow_transition",
+                    str(exc),
+                )
+                return
+            except Exception:
+                self._send_error_json(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    "workflow_transition_failed",
+                    "The workflow transition failed and was not reported as "
+                    "successful.",
+                )
+                return
+            self._send_json(HTTPStatus.OK, result)
+
         def do_GET(self) -> None:
             self._read(head_only=False)
 
@@ -762,6 +927,21 @@ def _handler_class(
             }:
                 self._manual_edit(route)
                 return
+            if route in {
+                "/api/workflow/reviews",
+                "/api/workflow/confirmations",
+                "/api/workflow/executions",
+                "/api/workflow/rollbacks/reviews",
+                "/api/workflow/rollbacks/confirmations",
+                "/api/workflow/rollbacks/runs",
+            }:
+                self._workflow(route)
+                return
+            # Consume a bounded JSON body before closing an unsupported POST;
+            # this keeps Windows' HTTP stack from resetting the connection.
+            if self.headers.get("Content-Length"):
+                if self._read_json_body() is None:
+                    return
             self._reject_write()
 
         def _reject_write(self) -> None:
@@ -867,6 +1047,11 @@ def run_preview_server(
         plan_review_request_provider=_plan_review_provider(
             plan_review_path
         ),
+        workflow_service=(
+            WorkflowApplicationService.for_current_project(skill_registry)
+            if timeline_path is None and skill_registry is not None
+            else None
+        ),
     )
     server = create_preview_server(application, host=host, port=port)
     bound_host, bound_port = server.server_address[:2]
@@ -890,7 +1075,8 @@ def run_preview_server(
     print(
         "Director plan review: "
         + (
-            "fixture loaded; preview only, no confirmation or execution."
+            "fixture loaded; review is read-only until explicitly persisted "
+            "and confirmed in workflow history."
             if application.plan_review_enabled
             else "unavailable (no fixture supplied)."
         )

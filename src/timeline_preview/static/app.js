@@ -49,6 +49,12 @@ const ui = {
   reviewBack: document.querySelector("#review-back"),
   reviewReject: document.querySelector("#review-reject"),
   reviewReady: document.querySelector("#review-ready"),
+  workflowPanel: document.querySelector("#workflow-panel"),
+  workflowMessage: document.querySelector("#workflow-message"),
+  workflowStatus: document.querySelector("#workflow-status"),
+  workflowHistory: document.querySelector("#workflow-history"),
+  workflowActions: document.querySelector("#workflow-actions"),
+  workflowLimitations: document.querySelector("#workflow-limitations"),
 };
 
 const state = {
@@ -69,6 +75,8 @@ const state = {
   applying: false,
   planReview: null,
   selectedPlanChange: null,
+  workflow: null,
+  workflowBusy: false,
 };
 
 function textElement(tag, className, text) {
@@ -337,6 +345,294 @@ async function loadPlanReview() {
   state.selectedPlanChange = null;
   renderPlanReview();
   renderTimeline();
+}
+
+function workflowButton(label, action, className = "") {
+  const button = textElement("button", `button ${className}`.trim(), label);
+  button.type = "button";
+  button.disabled = state.workflowBusy;
+  button.addEventListener("click", action);
+  return button;
+}
+
+function workflowEvent(title, status, details) {
+  const article = document.createElement("article");
+  article.className = "workflow-event";
+  article.append(
+    textElement("strong", "", title),
+    textElement("span", `workflow-event-status ${status}`, status),
+  );
+  for (const detail of details) {
+    article.append(textElement("small", "", detail));
+  }
+  return article;
+}
+
+function renderWorkflow() {
+  const history = state.workflow;
+  ui.workflowPanel.hidden = !history ||
+    history.schema_name === "vistora.workflow-history-unavailable";
+  if (ui.workflowPanel.hidden) {
+    return;
+  }
+  ui.workflowStatus.textContent = history.state;
+  ui.workflowStatus.className = `review-status ${history.state}`;
+  ui.workflowMessage.textContent =
+    `Append-only revision ${history.ledger_revision} · ` +
+    `${history.integrity_digest.slice(0, 20)}…`;
+  ui.workflowHistory.replaceChildren();
+  for (const plan of history.plan_versions) {
+    ui.workflowHistory.append(
+      workflowEvent(
+        `Plan ${plan.plan_id} v${plan.plan_version}`,
+        "drafted",
+        [plan.plan_digest, plan.recorded_at],
+      ),
+    );
+  }
+  for (const review of history.reviews) {
+    ui.workflowHistory.append(
+      workflowEvent(
+        `Review ${review.review_id}`,
+        review.review_status,
+        [
+          `snapshot r${review.snapshot_revision}`,
+          review.diff_digest,
+        ],
+      ),
+    );
+  }
+  for (const confirmation of history.confirmations) {
+    ui.workflowHistory.append(
+      workflowEvent(
+        `Decision ${confirmation.confirmation_record_id}`,
+        confirmation.decision,
+        [
+          `review ${confirmation.review_id}`,
+          `by ${confirmation.confirmed_by}`,
+        ],
+      ),
+    );
+  }
+  for (const execution of history.executions) {
+    const details = [
+      execution.status_history.join(" → "),
+      `result revision ${execution.resulting_project_revision}`,
+      `${execution.steps.length} recorded step(s)`,
+    ];
+    if (execution.error) {
+      details.push(`${execution.error.code}: ${execution.error.message}`);
+    }
+    ui.workflowHistory.append(
+      workflowEvent(
+        `Execution ${execution.run_id}`,
+        execution.status,
+        details,
+      ),
+    );
+    for (const step of execution.steps) {
+      ui.workflowHistory.append(
+        workflowEvent(
+          `↳ ${step.step_id}`,
+          step.status,
+          [
+            step.tool_name,
+            `${step.request_id} → ${step.result_id}`,
+          ],
+        ),
+      );
+    }
+  }
+  for (const review of history.rollback_reviews) {
+    ui.workflowHistory.append(
+      workflowEvent(
+        `Rollback review ${review.review_id}`,
+        "reviewed",
+        [
+          `${review.change_count} timeline change(s)`,
+          `source execution ${review.source_run_id}`,
+        ],
+      ),
+    );
+  }
+  for (const rollback of history.rollbacks) {
+    const details = [
+      rollback.status_history.join(" → "),
+      "External media files unchanged",
+    ];
+    if (rollback.error) {
+      details.push(`${rollback.error.code}: ${rollback.error.message}`);
+    }
+    ui.workflowHistory.append(
+      workflowEvent(
+        `Rollback ${rollback.rollback_run_id}`,
+        rollback.status,
+        details,
+      ),
+    );
+  }
+  if (ui.workflowHistory.childElementCount === 0) {
+    ui.workflowHistory.append(
+      textElement(
+        "p",
+        "muted",
+        "No persisted workflow records for this project yet.",
+      ),
+    );
+  }
+
+  ui.workflowLimitations.replaceChildren(
+    ...history.limitations.map((item) => textElement("li", "", item)),
+  );
+  ui.workflowActions.replaceChildren();
+  const lastReview = history.reviews.at(-1);
+  const decisionForReview = history.confirmations.find(
+    (item) => item.review_id === lastReview?.review_id,
+  );
+  const lastConfirmed = [...history.confirmations]
+    .reverse()
+    .find((item) => item.decision === "confirmed");
+  const executionForConfirmation = history.executions.find(
+    (item) =>
+      item.confirmation_record_id ===
+      lastConfirmed?.confirmation_record_id,
+  );
+  const rollbackReviewForExecution = history.rollback_reviews.find(
+    (item) => item.source_run_id === executionForConfirmation?.run_id,
+  );
+  const rollbackDecision = history.rollback_confirmations.find(
+    (item) => item.review_id === rollbackReviewForExecution?.review_id,
+  );
+  const rollbackRun = history.rollbacks.find(
+    (item) =>
+      item.source_run_id === rollbackReviewForExecution?.source_run_id,
+  );
+
+  if (!lastReview && state.planReview?.review_state === "current") {
+    ui.workflowActions.append(
+      workflowButton("Persist exact review", () =>
+        workflowPost("/api/workflow/reviews", {}), "confirm"),
+    );
+  } else if (lastReview && !decisionForReview) {
+    ui.workflowActions.append(
+      workflowButton("Persist rejection", () =>
+        workflowPost("/api/workflow/confirmations", {
+          review_id: lastReview.review_id,
+          confirmed_by: "local_user",
+          decision: "rejected",
+        }), "danger"),
+      workflowButton("Explicitly confirm", () =>
+        workflowPost("/api/workflow/confirmations", {
+          review_id: lastReview.review_id,
+          confirmed_by: "local_user",
+          decision: "confirmed",
+        }), "confirm"),
+    );
+  } else if (
+    lastConfirmed &&
+    !executionForConfirmation
+  ) {
+    ui.workflowActions.append(
+      workflowButton("Run confirmed execution", () =>
+        workflowPost("/api/workflow/executions", {
+          confirmation_record_id: lastConfirmed.confirmation_record_id,
+        }), "confirm"),
+    );
+  } else if (
+    executionForConfirmation?.rollback_available &&
+    !rollbackReviewForExecution
+  ) {
+    ui.workflowActions.append(
+      workflowButton("Generate rollback review", () =>
+        workflowPost("/api/workflow/rollbacks/reviews", {
+          source_run_id: executionForConfirmation.run_id,
+        })),
+    );
+  } else if (rollbackReviewForExecution && !rollbackDecision) {
+    ui.workflowActions.append(
+      workflowButton("Reject rollback", () =>
+        workflowPost("/api/workflow/rollbacks/confirmations", {
+          review_id: rollbackReviewForExecution.review_id,
+          confirmed_by: "local_user",
+          decision: "rejected",
+        }), "danger"),
+      workflowButton("Confirm timeline restore", () =>
+        workflowPost("/api/workflow/rollbacks/confirmations", {
+          review_id: rollbackReviewForExecution.review_id,
+          confirmed_by: "local_user",
+          decision: "confirmed",
+        }), "confirm"),
+    );
+  } else if (
+    rollbackDecision?.decision === "confirmed" &&
+    !rollbackRun
+  ) {
+    ui.workflowActions.append(
+      workflowButton("Apply confirmed restore", () =>
+        workflowPost("/api/workflow/rollbacks/runs", {
+          confirmation_id: rollbackDecision.confirmation_id,
+        }), "confirm"),
+    );
+  }
+}
+
+async function loadWorkflow() {
+  try {
+    const response = await fetch("/api/workflow", {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(
+        payload.error?.message || `Workflow HTTP ${response.status}.`,
+      );
+    }
+    state.workflow = payload;
+  } catch (error) {
+    state.workflow = null;
+    ui.workflowPanel.hidden = false;
+    ui.workflowStatus.textContent = "error";
+    ui.workflowStatus.className = "review-status invalid";
+    ui.workflowMessage.textContent =
+      error instanceof Error ? error.message : String(error);
+  }
+  renderWorkflow();
+}
+
+async function workflowPost(route, payload) {
+  if (state.workflowBusy) {
+    return;
+  }
+  state.workflowBusy = true;
+  renderWorkflow();
+  ui.workflowMessage.textContent = "Recording explicit workflow transition…";
+  try {
+    const response = await fetch(route, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    const body = await response.json();
+    if (!response.ok) {
+      throw new Error(
+        body.error?.message || `Workflow HTTP ${response.status}.`,
+      );
+    }
+    state.workflow = body.history;
+    await loadPreview();
+  } catch (error) {
+    ui.workflowStatus.textContent = "rejected";
+    ui.workflowStatus.className = "review-status invalid";
+    ui.workflowMessage.textContent =
+      error instanceof Error ? error.message : String(error);
+  } finally {
+    state.workflowBusy = false;
+    renderWorkflow();
+  }
 }
 
 function analysisKey(trackKey, clipId) {
@@ -1186,6 +1482,7 @@ async function loadPreview({ preserveSuccess = false } = {}) {
       await loadAnalysis();
     }
     await loadPlanReview();
+    await loadWorkflow();
   } catch (error) {
     showFatal(error instanceof Error ? error.message : String(error));
   }

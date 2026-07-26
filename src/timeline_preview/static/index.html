@@ -202,6 +202,25 @@
         </p>
       </section>
 
+      <section id="workflow-panel" class="panel workflow-panel" hidden>
+        <div class="plan-review-heading">
+          <div>
+            <p class="eyebrow">Workflow ledger / 审计历史</p>
+            <h2>确认、执行与恢复</h2>
+            <p id="workflow-message" class="muted" aria-live="polite">
+              Loading append-only workflow history…
+            </p>
+          </div>
+          <span id="workflow-status" class="review-status">Loading</span>
+        </div>
+        <div id="workflow-history" class="workflow-history"></div>
+        <div id="workflow-actions" class="review-actions"></div>
+        <details class="workflow-audit">
+          <summary>Audit boundary and rollback limits</summary>
+          <ul id="workflow-limitations"></ul>
+        </details>
+      </section>
+
       <section class="panel timeline-panel">
         <div class="timeline-toolbar">
           <div>

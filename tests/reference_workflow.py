@@ -56,6 +56,13 @@ from traceability.models import TimelineTraceDocument  # noqa: E402
 from traceability.query import TraceabilityQuery  # noqa: E402
 from traceability.recording import ConfirmedTraceRecorder  # noqa: E402
 from traceability.store import TraceabilityStore  # noqa: E402
+from workflow import (  # noqa: E402
+    RollbackProposal,
+    RollbackRunRecord,
+    WorkflowApplicationService,
+    WorkflowLedger,
+    WorkflowStore,
+)
 
 
 REFERENCE_TIME = datetime(2026, 7, 24, tzinfo=timezone.utc)
@@ -92,6 +99,10 @@ class ReferenceWorkflowReport:
     results: tuple[AtomicToolResultEnvelope, ...]
     trace_document: TimelineTraceDocument
     traced_clips: tuple[dict[str, Any], ...]
+    workflow_ledger: WorkflowLedger
+    rollback_proposal: RollbackProposal
+    rollback_run: RollbackRunRecord
+    timeline_restored: bool
     output_metadata: dict[str, Any]
     timeline_state_removed: bool
 
@@ -119,6 +130,13 @@ class ReferenceWorkflowReport:
                 for trace in self.trace_document.confirmed_traces
             ],
             "traced_clips": list(self.traced_clips),
+            "workflow_revision": self.workflow_ledger.revision,
+            "workflow_integrity_digest": (
+                self.workflow_ledger.integrity_digest
+            ),
+            "rollback_proposal_digest": self.rollback_proposal.digest(),
+            "rollback_status": self.rollback_run.status,
+            "timeline_restored": self.timeline_restored,
             "output_metadata": self.output_metadata,
             "timeline_state_removed": self.timeline_state_removed,
         }
@@ -332,6 +350,7 @@ def _isolated_timeline(work_dir: Path) -> Iterator[Path]:
     timeline_manager.WORKSPACE_DIR = str(workspace)
     timeline_manager.PROJECT_FILE = str(project_file)
     TraceabilityStore.trace_path(project_file).unlink(missing_ok=True)
+    WorkflowStore.for_project_file(project_file).path.unlink(missing_ok=True)
     try:
         yield project_file
     finally:
@@ -494,19 +513,48 @@ def run_reference_workflow(
                 preview_snapshot,
                 vistora_main.SKILLS,
             )
-            confirmation = UserConfirmationRecord.for_plan(
-                confirmation_id="confirmation_reference_main_flow",
-                plan=plan,
+            counter = 0
+
+            def reference_id(prefix: str) -> str:
+                nonlocal counter
+                counter += 1
+                return f"{prefix}_reference_{counter:03d}"
+
+            tick = 0
+
+            def reference_clock() -> datetime:
+                nonlocal tick
+                value = REFERENCE_TIME + timedelta(seconds=tick)
+                tick += 1
+                return value
+
+            workflow = WorkflowApplicationService(
+                store=WorkflowStore.for_project_file(project_file),
+                registry=vistora_main.SKILLS,
+                clock=reference_clock,
+                id_factory=reference_id,
+            )
+            review_record = workflow.record_review(preview_request)
+            confirmation_record = workflow.confirm_review(
+                review_record.review_id,
                 confirmed_by="user_reference",
                 decision="confirmed",
-                recorded_at=REFERENCE_TIME + timedelta(minutes=1),
             )
-            execution = _fixed_execution(plan, confirmation)
             with patch(
                 "skills.video_add_clip.uuid.uuid4",
                 return_value=REFERENCE_CLIP_UUID,
             ):
-                requests, results = _dispatch_execution(execution)
+                execution_run = workflow.run_confirmed_execution(
+                    confirmation_record.confirmation_record_id
+                )
+            if execution_run.status != "succeeded":
+                raise AssertionError(
+                    f"Reference execution ended as {execution_run.status}"
+                )
+            confirmation = confirmation_record.user_confirmation
+            execution = execution_run.execution_plan
+            requests = tuple(step.request for step in execution_run.steps)
+            results = tuple(step.result for step in execution_run.steps)
             output_metadata = _verify_output(output_path)
             timeline_state_removed = not project_file.exists()
             trace_document = TraceabilityStore.load()
@@ -521,6 +569,23 @@ def run_reference_workflow(
                     PlanReference.from_plan(plan)
                 )
             )
+            rollback_review = workflow.propose_rollback(
+                execution_run.run_id
+            )
+            rollback_confirmation = workflow.confirm_rollback(
+                rollback_review.review_id,
+                confirmed_by="user_reference",
+                decision="confirmed",
+            )
+            rollback_run = workflow.apply_rollback(
+                rollback_confirmation.confirmation_id
+            )
+            if rollback_run.status != "succeeded":
+                raise AssertionError(
+                    f"Reference rollback ended as {rollback_run.status}"
+                )
+            timeline_restored = project_file.exists()
+            workflow_ledger = workflow.store.load()
 
         if not timeline_state_removed:
             raise AssertionError("Reference export did not clear timeline state")
@@ -535,6 +600,10 @@ def run_reference_workflow(
             results=results,
             trace_document=trace_document,
             traced_clips=traced_clips,
+            workflow_ledger=workflow_ledger,
+            rollback_proposal=rollback_review.proposal,
+            rollback_run=rollback_run,
+            timeline_restored=timeline_restored,
             output_metadata=output_metadata,
             timeline_state_removed=timeline_state_removed,
         )

@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *.pyd
 .pytest_cache/
+.pytest-*/
 .mypy_cache/
 .ruff_cache/
 .coverage
@@ -20,6 +21,8 @@ venv/
 
 # Vistora runtime workspaces and generated output
 .workspace/
+*.workflow.json
+*.workflow.json.lock
 video/
 output/
 tests/test_data/*
