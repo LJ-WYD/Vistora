@@ -13,6 +13,18 @@ sys.path.insert(0, str(SRC))
 
 import main as vistora_main  # noqa: E402
 from agent import DirectorAgent, EditingAgent  # noqa: E402
+from creation_planning import (  # noqa: E402
+    CapabilityRegistryReference,
+    CapabilityRequirement,
+    CreationPlanningAgent,
+    CreationPlanningReasoningOutput,
+    CreationPlanningService,
+    CreationPlanningStore,
+    DeliveryFileSpecification,
+    MaterialProductionPlanDraft,
+    MaterialProductionTask,
+    ProductionEstimate,
+)
 from core import timeline_manager  # noqa: E402
 from core.timeline import TimelineConfig, TrackConfig  # noqa: E402
 from director import (  # noqa: E402
@@ -167,6 +179,69 @@ def _output(request, *, brief, draft=None, clarify=False):
         ),
         material_requirements_draft=draft,
     ).model_dump(mode="json")
+
+
+def _production_output(request):
+    unknown = ProductionEstimate(
+        status="unknown",
+        rationale="No configured provider estimate is available.",
+    )
+    draft = MaterialProductionPlanDraft(
+        rationale="Plan how to supply the exact confirmed requirements.",
+        tasks=(
+            MaterialProductionTask(
+                task_id="production_task_manual_hero",
+                requirement_item_id="material_need_hero_shot",
+                title="Import an approved hero-shot recording",
+                purpose="Supply the confirmed authentic interaction.",
+                production_method="import",
+                status="planned",
+                capability_ids=("manual_import",),
+                duration_seconds=6.0,
+                width=1080,
+                height=1920,
+                aspect_ratio="9:16",
+                fps=30.0,
+                batch_id="production_batch_manual",
+                cost_estimate=unknown,
+                time_estimate=unknown,
+                quality_gates=("The interaction remains legible.",),
+                retry_strategy=("Request a corrected import.",),
+                alternative_strategy="Capture the interaction locally.",
+                delivery=DeliveryFileSpecification(
+                    media_kind="video",
+                    container_or_extension="mp4",
+                    mime_type="video/mp4",
+                    filename_pattern="hero_{attempt}.mp4",
+                ),
+            ),
+        ),
+        delivery_summary=("One approved vertical hero shot.",),
+        global_quality_gates=(
+            "The delivery maps to its requirement item.",
+        ),
+    )
+    return CreationPlanningReasoningOutput(
+        outcome="proposal",
+        message="The production plan is ready for review.",
+        material_confirmation_ref=request.material_confirmation_ref,
+        capability_registry_ref=request.capability_registry_ref,
+        plan_draft=draft,
+    ).model_dump(mode="json")
+
+
+def _production_capabilities():
+    return CapabilityRegistryReference.create(
+        registry_id="material_test_capabilities",
+        registry_revision=1,
+        capabilities=(
+            CapabilityRequirement(
+                capability_id="manual_import",
+                capability_kind="manual_import",
+                availability="available",
+            ),
+        ),
+    )
 
 
 @pytest.fixture
@@ -426,6 +501,23 @@ def test_product_entry_reviews_and_confirms_material_requirements(no_material):
         clock=deterministic.clock,
         id_factory=deterministic.identifier,
     )
+    creation_service = CreationPlanningService(
+        store=CreationPlanningStore(
+            project_file.with_name("requirements.creation-planning.json")
+        ),
+        material_requirements=materials,
+        session_id="session_materials",
+        project_id=materials.project_id,
+        clock=deterministic.clock,
+        id_factory=deterministic.identifier,
+    )
+    creation_agent = CreationPlanningAgent(
+        adapter=MaterialAdapter([_production_output]),
+        service=creation_service,
+        capability_provider=_production_capabilities,
+        clock=deterministic.clock,
+        id_factory=deterministic.identifier,
+    )
     product = ProductionEntryService(
         director=agent,
         director_store=director_store,
@@ -441,6 +533,8 @@ def test_product_entry_reviews_and_confirms_material_requirements(no_material):
         session_id="session_materials",
         project_id=materials.project_id,
         material_requirements=materials,
+        creation_planning_agent=creation_agent,
+        creation_planning=creation_service,
         clock=deterministic.clock,
         id_factory=deterministic.identifier,
     )
@@ -485,4 +579,35 @@ def test_product_entry_reviews_and_confirms_material_requirements(no_material):
     )
     assert confirmed.view.state == "materials_confirmed"
     assert confirmed.view.material_requirements["state"] == "confirmed"
+    assert "plan_material_production" in confirmed.view.allowed_actions
+    material_confirmation_id = confirmed.view.latest_result[
+        "confirmation_id"
+    ]
+    planned = product.command(
+        ProductEntryCommand(
+            request_id="request_material_product_04",
+            session_id=product.session_id,
+            project_id=product.project_id,
+            expected_revision=confirmed.view.revision,
+            action="plan_material_production",
+            actor_id="local_user",
+            target_id=material_confirmation_id,
+        )
+    )
+    assert planned.view.state == "production_plan_ready"
+    assert planned.view.creation_planning["state"] == "reviewable"
+    production_review_id = planned.view.latest_result["review_id"]
+    production_confirmed = product.command(
+        ProductEntryCommand(
+            request_id="request_material_product_05",
+            session_id=product.session_id,
+            project_id=product.project_id,
+            expected_revision=planned.view.revision,
+            action="confirm_production_plan",
+            actor_id="local_user",
+            target_id=production_review_id,
+        )
+    )
+    assert production_confirmed.view.state == "production_plan_confirmed"
+    assert production_confirmed.view.creation_planning["state"] == "confirmed"
     assert project_file.read_bytes() == before

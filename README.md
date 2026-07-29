@@ -152,8 +152,37 @@ items are never exposed as observed materials or source evidence.
 
 The `studio` UI shows the requirements checklist and offers separate Review,
 Confirm, Reject, and Withdraw actions. Confirmation only approves what
-materials are required. It does not generate them: production planning and
-provider execution remain later stages.
+materials are required. It does not generate them: the separately confirmed
+Creation Planning Agent described below plans production, while provider
+execution remains a later stage.
+
+## Creation Planning Agent
+
+`src/creation_planning/` implements the constrained production-planning
+boundary that follows an exact confirmed `MaterialRequirementsPlan`. Its
+provider-neutral `CreationPlanningAgent` verifies the immutable material
+confirmation, requirements plan/review/brief/snapshot digests, material-ledger
+revision, and exact versioned capability registry before reasoning.
+Unconfirmed, stale, mismatched, tampered, cross-project, or registry-drifted
+requests fail closed.
+
+A versioned `MaterialProductionPlan` maps every confirmed requirement item to
+ordered production tasks. Tasks describe the production method, structured
+prompt specification where generation is proposed, reference and continuity
+anchors, capability requirements, media parameters, reproducibility settings,
+dependency DAG and batch, known or explicitly unknown cost/time estimates,
+quality gates, retry/alternative strategies, and path-safe delivery file
+specifications. Unconfigured or unsupported capabilities remain visibly
+blocked; the Agent cannot present them as available.
+
+The Agent can only propose a read-only production plan. A separate
+hash-chained `*.creation-planning.json` ledger records plan versions,
+deterministic task changes, explicit confirmation/rejection, and withdrawal.
+The `studio` entry presents these steps after material-requirements
+confirmation. Neither the Agent nor its decision service calls an external
+generation provider, writes media, changes the timeline, invokes the Editing
+Agent, or changes the Director's definition of what is required and why.
+Actual production adapters and material ingestion are not implemented yet.
 
 `src/plan_review/` provides strict version `1.0.0` contracts and a deterministic read-only diff engine for the period before confirmation. A `PlanDiffRequest` binds an exact timeline snapshot ID/revision/digest, Director plan ID/version/digest, non-executable proposed execution-plan digest, and the exact registered tool-schema set. The engine validates proposed arguments with the current registry schemas, simulates supported semantics on detached clip data, and returns stable before/after changes, source-evidence links, provenance summaries, warnings, and net counts. Repeating the same request produces the same document and digest; snapshot or registry drift requires regeneration.
 

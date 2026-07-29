@@ -1357,6 +1357,51 @@ h3 {
   display: none;
 }
 
+.workflow-panel {
+  min-width: 0;
+  padding: 20px;
+}
+
+.manual-form {
+  display: grid;
+  min-width: 0;
+  margin-top: 16px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px 12px;
+}
+
+.manual-form label {
+  grid-column: 1 / -1;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.manual-form textarea {
+  width: 100%;
+  min-width: 0;
+  resize: vertical;
+  padding: 9px 11px;
+  border: 1px solid var(--line-bright);
+  border-radius: 9px;
+  color: var(--text);
+  background: var(--surface-soft);
+  line-height: 1.4;
+}
+
+.manual-form textarea:focus-visible {
+  border-color: var(--accent-bright);
+  outline: none;
+}
+
+.workflow-actions {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  gap: 8px;
+}
+
 .workflow-history {
   display: grid;
   gap: 8px;
@@ -1412,6 +1457,21 @@ h3 {
 }
 
 @media (max-width: 620px) {
+  .workflow-panel {
+    padding: 16px;
+  }
+
+  .manual-form {
+    grid-template-columns: 1fr;
+  }
+
+  .manual-form label,
+  .manual-form .button,
+  .manual-form button {
+    grid-column: 1;
+    width: 100%;
+  }
+
   .workflow-event {
     grid-template-columns: 1fr;
   }
@@ -1419,5 +1479,13 @@ h3 {
   .workflow-event-status,
   .workflow-event small {
     grid-column: 1;
+  }
+
+  .workflow-event h3,
+  .workflow-event-status,
+  .workflow-event small,
+  .review-boundary {
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
 }

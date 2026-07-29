@@ -52,6 +52,26 @@ from director import (  # noqa: E402
     DirectorSessionLedger,
     DirectorStore,
     DirectorTurnReport,
+    MaterialRequirementItem,
+    MaterialRequirementsDraft,
+    RequirementConstraint,
+)
+from material_requirements import (  # noqa: E402
+    MaterialRequirementsService,
+    MaterialRequirementsStore,
+)
+from creation_planning import (  # noqa: E402
+    CapabilityRegistryReference,
+    CapabilityRequirement,
+    CreationPlanningAgent,
+    CreationPlanningReasoningOutput,
+    CreationPlanningService,
+    CreationPlanningStore,
+    DeliveryFileSpecification,
+    MaterialProductionPlanDraft,
+    MaterialProductionTask,
+    ProductionEstimate,
+    ReproducibilityParameter,
 )
 from moviepy import ColorClip  # noqa: E402
 from plan_review import (  # noqa: E402
@@ -113,6 +133,7 @@ class ReferenceWorkflowReport:
     timeline_restored: bool
     output_metadata: dict[str, Any]
     timeline_state_removed: bool
+    no_material_chain: dict[str, Any]
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -153,6 +174,7 @@ class ReferenceWorkflowReport:
             "timeline_restored": self.timeline_restored,
             "output_metadata": self.output_metadata,
             "timeline_state_removed": self.timeline_state_removed,
+            "no_material_chain": self.no_material_chain,
         }
 
 
@@ -397,6 +419,141 @@ class DeterministicReferenceDirectorAdapter:
         ).model_dump(mode="json")
 
 
+class DeterministicMaterialRequirementsDirectorAdapter:
+    """No-material Director branch used before any source is observed."""
+
+    def complete(self, request):
+        unknown = RequirementConstraint(status="unknown")
+        return DirectorReasoningOutput(
+            response_kind="propose_material_requirements",
+            assistant_message=(
+                "The no-material brief is complete; exact source "
+                "requirements are ready for review."
+            ),
+            context_snapshot_ref=request.context.snapshot_ref,
+            registry_ref=request.context.registry_ref,
+            brief=CreativeBriefInput(
+                objective="Create the deterministic reference clip.",
+                audience="Vistora regression reviewers.",
+                platform="Automated local validation.",
+                target_duration_seconds=1.5,
+                style="Deterministic single-shot reference.",
+                narrative="Present one concise grounded source range.",
+                pacing="One concise shot.",
+                must_haves=("Use one verified source clip.",),
+                must_not_haves=("Do not invent existing material.",),
+                delivery_requirements=("Provide an H.264-compatible source.",),
+                acceptance_criteria=(
+                    "The source is 320x180 at 24 fps.",
+                    "The accepted source is at least 1.5 seconds.",
+                ),
+            ),
+            material_requirements_draft=MaterialRequirementsDraft(
+                rationale=(
+                    "No observed material exists, so define the exact source "
+                    "required before planning production."
+                ),
+                items=(
+                    MaterialRequirementItem(
+                        item_id="reference_material_requirement",
+                        asset_type="video_shot",
+                        purpose="Supply the grounded reference picture.",
+                        narrative_position="Only shot.",
+                        duration_seconds=2.0,
+                        aspect_ratio="16:9",
+                        width=320,
+                        height=180,
+                        fps=24.0,
+                        must_haves=("Use a stable uniform reference frame.",),
+                        must_not_haves=("Do not claim an unobserved source.",),
+                        acceptance_criteria=(
+                            "The accepted clip probes as 320x180 at 24 fps.",
+                        ),
+                        priority="required",
+                        budget_constraint=unknown,
+                        deadline_constraint=unknown,
+                    ),
+                ),
+                global_acceptance_criteria=(
+                    "Accepted media maps to the exact requirement item.",
+                ),
+                unresolved_constraints=(
+                    "Provider cost is unknown.",
+                ),
+            ),
+        ).model_dump(mode="json")
+
+
+class DeterministicCreationPlanningAdapter:
+    """Plans a truthful manual/import path without producing media."""
+
+    def complete(self, request):
+        unknown = ProductionEstimate(
+            status="unknown",
+            rationale="No production provider is invoked in this reference.",
+        )
+        return CreationPlanningReasoningOutput(
+            outcome="proposal",
+            message="The deterministic import plan is ready for review.",
+            material_confirmation_ref=request.material_confirmation_ref,
+            capability_registry_ref=request.capability_registry_ref,
+            plan_draft=MaterialProductionPlanDraft(
+                rationale=(
+                    "Use the bounded manual-import capability to supply the "
+                    "confirmed source requirement."
+                ),
+                tasks=(
+                    MaterialProductionTask(
+                        task_id="reference_import_task",
+                        requirement_item_id="reference_material_requirement",
+                        title="Import verified synthetic reference source",
+                        purpose="Supply the confirmed single-shot source.",
+                        production_method="import",
+                        status="planned",
+                        capability_ids=("manual_import",),
+                        duration_seconds=2.0,
+                        width=320,
+                        height=180,
+                        aspect_ratio="16:9",
+                        fps=24.0,
+                        seed=24,
+                        reproducibility_parameters=(
+                            ReproducibilityParameter(
+                                name="fixture_rgb",
+                                value="12,34,56",
+                            ),
+                        ),
+                        batch_id="reference_import_batch",
+                        cost_estimate=unknown,
+                        time_estimate=unknown,
+                        quality_gates=(
+                            "ffprobe reports 320x180 at 24 fps.",
+                        ),
+                        retry_strategy=(
+                            "Reject and re-import a valid fixture.",
+                        ),
+                        alternative_strategy=(
+                            "Capture an equivalent verified local fixture."
+                        ),
+                        delivery=DeliveryFileSpecification(
+                            media_kind="video",
+                            container_or_extension="mp4",
+                            mime_type="video/mp4",
+                            filename_pattern="reference_source.mp4",
+                        ),
+                    ),
+                ),
+                delivery_summary=("One verified synthetic source clip.",),
+                global_quality_gates=(
+                    "The delivery maps to its confirmed requirement.",
+                ),
+                limitations=(
+                    "This step plans only; it does not create media.",
+                ),
+            ),
+        ).model_dump(mode="json")
+
+
 def _fixed_execution(
     plan: DirectorPlan,
     confirmation: UserConfirmationRecord,
@@ -424,6 +581,15 @@ def _isolated_timeline(work_dir: Path) -> Iterator[Path]:
     WorkflowStore.for_project_file(project_file).path.unlink(missing_ok=True)
     DirectorStore(
         project_file.with_name("reference.director.json")
+    ).path.unlink(missing_ok=True)
+    DirectorStore(
+        project_file.with_name("reference.no-material.director.json")
+    ).path.unlink(missing_ok=True)
+    MaterialRequirementsStore(
+        project_file.with_name("reference.materials.json")
+    ).path.unlink(missing_ok=True)
+    CreationPlanningStore(
+        project_file.with_name("reference.creation-planning.json")
     ).path.unlink(missing_ok=True)
     try:
         yield project_file
@@ -471,6 +637,162 @@ def run_reference_workflow(
         facts = _generate_source(source_path)
         with _isolated_timeline(work_dir) as project_file:
             preview_snapshot = TimelineSnapshotService.snapshot_current()
+            no_material_counter = 0
+
+            def no_material_id(prefix: str) -> str:
+                nonlocal no_material_counter
+                no_material_counter += 1
+                return f"{prefix}_no_material_{no_material_counter:03d}"
+
+            no_material_tick = 0
+
+            def no_material_clock() -> datetime:
+                nonlocal no_material_tick
+                value = REFERENCE_TIME + timedelta(
+                    minutes=10,
+                    seconds=no_material_tick,
+                )
+                no_material_tick += 1
+                return value
+
+            def no_material_context():
+                current = TimelineSnapshotService.snapshot_current()
+                return (
+                    DirectorContextService.build(
+                        current,
+                        vistora_main.SKILLS,
+                        materials=(),
+                    ),
+                    current,
+                )
+
+            no_material_director = DirectorAgent(
+                adapter=DeterministicMaterialRequirementsDirectorAdapter(),
+                context_provider=no_material_context,
+                registry=vistora_main.SKILLS,
+                store=DirectorStore(
+                    project_file.with_name(
+                        "reference.no-material.director.json"
+                    )
+                ),
+                clock=no_material_clock,
+                id_factory=no_material_id,
+            )
+            requirements_report = no_material_director.converse(
+                session_id="session_reference_no_material",
+                turn_id="turn_reference_no_material",
+                user_message=(
+                    "Create the deterministic reference, but no materials "
+                    "exist yet."
+                ),
+            )
+            if (
+                requirements_report.status
+                != "material_requirements_ready"
+                or requirements_report.material_requirements is None
+            ):
+                raise AssertionError(
+                    "No-material Director did not produce requirements"
+                )
+            material_service = MaterialRequirementsService(
+                store=MaterialRequirementsStore(
+                    project_file.with_name(
+                        "reference.materials.json"
+                    )
+                ),
+                session_id="session_reference_no_material",
+                project_id=preview_snapshot.project_id,
+                clock=no_material_clock,
+                id_factory=no_material_id,
+            )
+            material_ledger = material_service.record(
+                requirements_report.material_requirements,
+                expected_revision=0,
+            )
+            material_confirmation, material_ledger = (
+                material_service.decide(
+                    requirements_report.material_requirements.review.review_id,
+                    decision="confirmed",
+                    confirmed_by="user_reference",
+                    expected_revision=material_ledger.revision,
+                )
+            )
+            creation_service = CreationPlanningService(
+                store=CreationPlanningStore(
+                    project_file.with_name(
+                        "reference.creation-planning.json"
+                    )
+                ),
+                material_requirements=material_service,
+                session_id="session_reference_no_material",
+                project_id=preview_snapshot.project_id,
+                clock=no_material_clock,
+                id_factory=no_material_id,
+            )
+            capability_ref = CapabilityRegistryReference.create(
+                registry_id="reference_creation_capabilities",
+                registry_revision=1,
+                capabilities=(
+                    CapabilityRequirement(
+                        capability_id="manual_import",
+                        capability_kind="manual_import",
+                        availability="available",
+                    ),
+                ),
+            )
+            planning_agent = CreationPlanningAgent(
+                adapter=DeterministicCreationPlanningAdapter(),
+                service=creation_service,
+                capability_provider=lambda: capability_ref,
+                clock=no_material_clock,
+                id_factory=no_material_id,
+            )
+            planning_request = planning_agent.prepare_request(
+                request_id="creation_request_reference_no_material",
+                material_confirmation_id=(
+                    material_confirmation.confirmation_id
+                ),
+            )
+            planning_report = planning_agent.plan(planning_request)
+            if (
+                planning_report.status != "proposal_ready"
+                or planning_report.proposal is None
+            ):
+                raise AssertionError(
+                    "CreationPlanningAgent did not create a reviewable plan"
+                )
+            production_confirmation, _ = creation_service.decide(
+                planning_report.proposal.review.review_id,
+                decision="confirmed",
+                confirmed_by="user_reference",
+                expected_revision=1,
+            )
+            no_material_chain = {
+                "director_status": requirements_report.status,
+                "requirements_plan_id": (
+                    requirements_report.material_requirements.plan.plan_id
+                ),
+                "requirements_plan_digest": (
+                    requirements_report.material_requirements.plan.digest()
+                ),
+                "requirements_confirmation_id": (
+                    material_confirmation.confirmation_id
+                ),
+                "creation_planning_status": planning_report.status,
+                "production_plan_id": (
+                    planning_report.proposal.plan.production_plan_id
+                ),
+                "production_plan_digest": (
+                    planning_report.proposal.plan.digest()
+                ),
+                "production_confirmation_id": (
+                    production_confirmation.confirmation_id
+                ),
+                "production_method": (
+                    planning_report.proposal.plan.tasks[0].production_method
+                ),
+                "media_created": False,
+            }
             intended = _build_plan(facts, output_path)
             material = DirectorMaterialFact(
                 material_id=intended.source_evidence[0].material_id,
@@ -680,6 +1002,7 @@ def run_reference_workflow(
             timeline_restored=timeline_restored,
             output_metadata=output_metadata,
             timeline_state_removed=timeline_state_removed,
+            no_material_chain=no_material_chain,
         )
     finally:
         os.chdir(previous_cwd)

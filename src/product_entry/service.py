@@ -9,6 +9,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from agent import DirectorAgent, EditingAgent
+from creation_planning import (
+    CreationPlanningAgent,
+    CreationPlanningService,
+)
 from director import DirectorHistoryQuery, DirectorStore
 from material_requirements import MaterialRequirementsService
 from workflow import WorkflowApplicationService, WorkflowHistoryQuery
@@ -56,6 +60,8 @@ class ProductionEntryService:
         session_id: str,
         project_id: str,
         material_requirements: MaterialRequirementsService | None = None,
+        creation_planning_agent: CreationPlanningAgent | None = None,
+        creation_planning: CreationPlanningService | None = None,
         clock: Clock = _utc_now,
         id_factory: IdFactory = _random_id,
     ) -> None:
@@ -67,6 +73,8 @@ class ProductionEntryService:
         self.session_id = session_id
         self.project_id = project_id
         self.material_requirements = material_requirements
+        self.creation_planning_agent = creation_planning_agent
+        self.creation_planning = creation_planning
         self.clock = clock
         self.id_factory = id_factory
 
@@ -93,11 +101,17 @@ class ProductionEntryService:
             if self.material_requirements is not None
             else None
         )
+        creation_view = (
+            self.creation_planning.view().model_dump(mode="json")
+            if self.creation_planning is not None
+            else None
+        )
         state, allowed = self._state(
             ledger,
             director,
             workflow,
             material_view,
+            creation_view,
         )
         latest = ledger.events[-1].result if ledger.events else None
         review = self._latest_review(director_ledger)
@@ -110,6 +124,7 @@ class ProductionEntryService:
             review=review,
             workflow=workflow,
             material_requirements=material_view,
+            creation_planning=creation_view,
             latest_result=latest,
             allowed_actions=allowed,
         )
@@ -151,6 +166,7 @@ class ProductionEntryService:
         director: dict,
         workflow: dict,
         material_view: dict | None,
+        creation_view: dict | None,
     ):
         if ledger.events:
             latest = ledger.events[-1]
@@ -169,6 +185,10 @@ class ProductionEntryService:
                 "confirm_materials": "materials_confirmed",
                 "reject_materials": "materials_rejected",
                 "withdraw_materials": "materials_withdrawn",
+                "plan_material_production": latest.status,
+                "confirm_production_plan": "production_plan_confirmed",
+                "reject_production_plan": "production_plan_rejected",
+                "withdraw_production_plan": "production_plan_withdrawn",
             }
             state = mapping.get(latest.action)
             if state is not None:
@@ -194,7 +214,29 @@ class ProductionEntryService:
                     ),
                     "materials_rejected": ("director_turn",),
                     "materials_withdrawn": ("director_turn",),
+                    "materials_confirmed": (
+                        "plan_material_production",
+                    ),
+                    "production_plan_ready": (
+                        "confirm_production_plan",
+                        "reject_production_plan",
+                        "withdraw_production_plan",
+                    ),
+                    "production_plan_needs_input": (
+                        "plan_material_production",
+                    ),
+                    "production_plan_unsupported": (
+                        "plan_material_production",
+                    ),
+                    "production_plan_rejected": (
+                        "plan_material_production",
+                    ),
+                    "production_plan_withdrawn": (
+                        "plan_material_production",
+                    ),
                 }.get(state, ())
+                if state == "materials_confirmed" and creation_view is None:
+                    allowed = ()
                 return state, allowed
         status = director.get("latest_status", "empty")
         if status == "material_requirements_ready":
@@ -354,6 +396,84 @@ class ProductionEntryService:
             return "withdrawn", command.target_id, {
                 "proposal_id": command.target_id,
                 "material_ledger_revision": updated.revision,
+            }
+        if command.action == "plan_material_production":
+            if (
+                self.creation_planning_agent is None
+                or self.creation_planning is None
+            ):
+                raise ProductEntryError(
+                    "Creation planning workflow is unavailable"
+                )
+            request = self.creation_planning_agent.prepare_request(
+                request_id=self.id_factory("creation_request"),
+                material_confirmation_id=command.target_id or "",
+            )
+            report = self.creation_planning_agent.plan(request)
+            status = {
+                "proposal_ready": "production_plan_ready",
+                "needs_user_input": "production_plan_needs_input",
+                "unsupported": "production_plan_unsupported",
+            }.get(report.status, "error")
+            return status, report.report_id, {
+                "report_id": report.report_id,
+                "status": report.status,
+                "message": report.message,
+                "proposal_id": (
+                    report.proposal.proposal_id
+                    if report.proposal is not None
+                    else None
+                ),
+                "review_id": (
+                    report.proposal.review.review_id
+                    if report.proposal is not None
+                    else None
+                ),
+                "error_code": report.error_code,
+            }
+        if command.action in {
+            "confirm_production_plan",
+            "reject_production_plan",
+        }:
+            if self.creation_planning is None:
+                raise ProductEntryError(
+                    "Creation planning workflow is unavailable"
+                )
+            ledger = self.creation_planning.store.load(
+                session_id=self.session_id,
+                project_id=self.project_id,
+            )
+            confirmation, updated = self.creation_planning.decide(
+                command.target_id or "",
+                decision=(
+                    "confirmed"
+                    if command.action == "confirm_production_plan"
+                    else "rejected"
+                ),
+                confirmed_by=command.actor_id,
+                expected_revision=ledger.revision,
+            )
+            return confirmation.decision, confirmation.confirmation_id, {
+                "confirmation_id": confirmation.confirmation_id,
+                "decision": confirmation.decision,
+                "creation_planning_revision": updated.revision,
+            }
+        if command.action == "withdraw_production_plan":
+            if self.creation_planning is None:
+                raise ProductEntryError(
+                    "Creation planning workflow is unavailable"
+                )
+            ledger = self.creation_planning.store.load(
+                session_id=self.session_id,
+                project_id=self.project_id,
+            )
+            updated = self.creation_planning.withdraw(
+                command.target_id or "",
+                expected_revision=ledger.revision,
+            )
+            return "withdrawn", command.target_id, {
+                "proposal_id": command.target_id,
+                "creation_planning_revision": updated.revision,
             }
         if command.action == "persist_review":
             director_ledger = self.director_store.load(

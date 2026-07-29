@@ -104,6 +104,15 @@ def test_reference_main_workflow_is_traceable_and_repeatable() -> None:
     assert first.rollback_proposal == second.rollback_proposal
     assert first.rollback_run.status == "succeeded"
     assert first.timeline_restored is True
+    assert first.no_material_chain == second.no_material_chain
+    assert first.no_material_chain["director_status"] == (
+        "material_requirements_ready"
+    )
+    assert first.no_material_chain["creation_planning_status"] == (
+        "proposal_ready"
+    )
+    assert first.no_material_chain["production_method"] == "import"
+    assert first.no_material_chain["media_created"] is False
     assert first.trace_document.revision == 4
     assert tuple(
         trace.trace_sequence

@@ -55,6 +55,12 @@ src/
     models.py                Frozen requirement decisions and ledger records
     store.py                 Hash-chained atomic requirements sidecar
     service.py               Read-only review and explicit decision boundary
+  creation_planning/
+    agent.py                 Confirmed-requirements production planner
+    adapters.py              Provider-neutral JSON-only reasoning boundary
+    models.py                Production plan/review/confirmation contracts
+    service.py               Exact review and independent decision boundary
+    store.py                 Hash-chained creation-planning ledger
   contracts/
     models.py                Versioned plan, confirmation, execution,
                               project, manual-edit, and tool envelopes
@@ -116,7 +122,7 @@ tests/
                                rollback, history API, and redaction checks
 ```
 
-The repository now contains production Director and constrained Editing Agent boundaries plus a framework-free loopback product entry. The Director can define and obtain separate confirmation for no-material requirements, but production planning and actual creation are not implemented yet. There is still no desktop GUI or remote API server. Transient browser state is reconstructed from separate append-only Director, material-requirements, product-session, provenance, and workflow stores.
+The repository now contains production Director, Creation Planning, and constrained Editing Agent boundaries plus a framework-free loopback product entry. The Director can define no-material requirements; after their separate confirmation the Creation Planning Agent can propose and obtain separate confirmation for a production plan. Actual media creation is not implemented yet. There is still no desktop GUI or remote API server. Transient browser state is reconstructed from separate append-only Director, material-requirements, creation-planning, product-session, provenance, and workflow stores.
 
 ## Implemented runtime
 
@@ -202,7 +208,7 @@ The creative brief covers objective, audience, platform, target duration, style,
 
 The Agent rejects malformed or extra model fields, requested tool calls, secrets or absolute paths, unobserved evidence, cross-context IDs, unavailable/unsafe tools, stale snapshots, and registry-schema drift. Structured-output retries are bounded; provider timeout, provider failure, malformed output, and stale context remain explicit report states rather than being presented as successful reasoning. Session records persist only redacted user text and browser-safe domain data in a hash-chained, atomically replaced `*.director.json` sidecar with optimistic revision checks and tamper detection.
 
-The Director cannot create a user confirmation, import or call the Editing Agent or workflow service, dispatch a registered skill, write timeline/media, render/export, or roll back. `proposal_ready` and `material_requirements_ready` mean ready for separate review only. Source production planning, generation, AI packaging, and richer atomic editing remain outside the implemented boundary.
+The Director cannot create a user confirmation, import or call the Editing Agent or workflow service, dispatch a registered skill, write timeline/media, render/export, roll back, or decide how a confirmed material requirement is produced. `proposal_ready` and `material_requirements_ready` mean ready for separate review only. Production planning belongs to the constrained Creation Planning Agent; generation, AI packaging, and richer atomic editing remain outside the implemented boundary.
 
 ### No-material requirements boundary
 
@@ -229,6 +235,35 @@ decisions, stale revision, unknown dependency, conflicting constraints, and
 tampering. It performs no generation, import, media write, timeline mutation,
 or Agent invocation. The production UI exposes only its path-safe checklist
 and explicit review/decision actions.
+
+### Creation-planning boundary
+
+`src/creation_planning/` receives only an exact confirmed material-requirements
+binding. `CreationPlanningAgent.prepare_request` resolves that immutable
+confirmation and freezes its material-ledger revision, requirements plan and
+review digests, creative-brief digest, empty-snapshot digest, and a sorted
+versioned capability-registry digest. `plan` re-resolves both bindings before
+and after the adapter boundary. It rejects stale or cross-binding output,
+unknown requirement/capability IDs, falsely available capabilities, absolute
+paths, skill/tool-call requests, invalid task dependencies, and schema drift.
+
+The resulting `MaterialProductionPlan` is a frozen, provider-neutral
+description of how each Director requirement could be produced. It covers
+generate/capture/import/library/manual methods, structured prompts, reference
+and continuity anchors, capability rather than vendor names, media
+specifications, reproducibility settings, dependency DAGs and batches,
+known/unknown cost and time estimates, quality gates, retry/alternative
+strategies, and path-safe delivery specifications. A task using an unavailable
+capability must be `needs_user_input` or `unsupported` with an explicit
+limitation.
+
+`CreationPlanningService` persists plan versions, deterministic task changes,
+separate immutable confirmation/rejection, and withdrawal in an atomically
+replaced hash-chained `*.creation-planning.json` sidecar. It performs no media
+production, provider invocation, material import, timeline mutation,
+confirmation on behalf of the user, or editing execution. The product entry
+can display and decide this plan, but actual production remains a later
+boundary.
 
 ### Production product-entry composition
 

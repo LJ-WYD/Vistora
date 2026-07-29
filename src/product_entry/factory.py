@@ -6,6 +6,15 @@ from collections.abc import Mapping
 from typing import Any
 
 from agent import DirectorAgent, EditingAgent
+from creation_planning import (
+    CapabilityRegistryReference,
+    CapabilityRequirement,
+    CreationPlanningAgent,
+    CreationPlanningAdapter,
+    CreationPlanningService,
+    CreationPlanningStore,
+    OpenAICompatibleCreationPlanningAdapter,
+)
 from contracts import SourceEvidenceReference, WholeMaterialLocator
 from core import timeline_manager
 from director import (
@@ -81,6 +90,7 @@ def build_current_product_entry(
     registry: Mapping[str, Any],
     *,
     adapter: DirectorReasoningAdapter | None = None,
+    creation_adapter: CreationPlanningAdapter | None = None,
     session_id: str = DEFAULT_PRODUCT_SESSION_ID,
 ) -> ProductionEntryService:
     """Compose existing production boundaries without merging responsibilities."""
@@ -116,6 +126,72 @@ def build_current_product_entry(
         session_id=session_id,
         project_id=initial.project_id,
     )
+    creation_planning = CreationPlanningService(
+        store=CreationPlanningStore.for_project_file(
+            timeline_manager.PROJECT_FILE
+        ),
+        material_requirements=material_requirements,
+        session_id=session_id,
+        project_id=initial.project_id,
+    )
+
+    def capability_provider():
+        return CapabilityRegistryReference.create(
+            registry_id="creation_capabilities_local",
+            registry_revision=1,
+            capabilities=(
+                CapabilityRequirement(
+                    capability_id="manual_import",
+                    capability_kind="manual_import",
+                    availability="available",
+                ),
+                CapabilityRequirement(
+                    capability_id="local_capture",
+                    capability_kind="capture",
+                    availability="unconfigured",
+                    limitation="No capture adapter is configured.",
+                ),
+                CapabilityRequirement(
+                    capability_id="video_generation",
+                    capability_kind="video_generation",
+                    availability="unconfigured",
+                    limitation="No video-generation adapter is configured.",
+                ),
+                CapabilityRequirement(
+                    capability_id="image_generation",
+                    capability_kind="image_generation",
+                    availability="unconfigured",
+                    limitation="No image-generation adapter is configured.",
+                ),
+                CapabilityRequirement(
+                    capability_id="audio_generation",
+                    capability_kind="audio_generation",
+                    availability="unconfigured",
+                    limitation="No audio-generation adapter is configured.",
+                ),
+                CapabilityRequirement(
+                    capability_id="voice_synthesis",
+                    capability_kind="voice_synthesis",
+                    availability="unconfigured",
+                    limitation="No voice-synthesis adapter is configured.",
+                ),
+                CapabilityRequirement(
+                    capability_id="asset_search",
+                    capability_kind="asset_search",
+                    availability="unconfigured",
+                    limitation="No asset-library adapter is configured.",
+                ),
+            ),
+        )
+
+    creation_agent = CreationPlanningAgent(
+        adapter=(
+            creation_adapter
+            or OpenAICompatibleCreationPlanningAdapter()
+        ),
+        service=creation_planning,
+        capability_provider=capability_provider,
+    )
     return ProductionEntryService(
         director=director,
         director_store=director_store,
@@ -127,6 +203,8 @@ def build_current_product_entry(
         session_id=session_id,
         project_id=initial.project_id,
         material_requirements=material_requirements,
+        creation_planning_agent=creation_agent,
+        creation_planning=creation_planning,
     )
 
 

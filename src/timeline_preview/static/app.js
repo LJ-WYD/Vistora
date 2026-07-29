@@ -494,6 +494,10 @@ function productTarget(action, view) {
     .reverse().find((item) => item.decision === "confirmed");
   const material = view.material_requirements || {};
   const materialProposal = latest(material.proposals);
+  const materialConfirmation = [...(material.decisions || [])]
+    .reverse().find((item) => item.decision === "confirmed");
+  const creation = view.creation_planning || {};
+  const productionProposal = latest(creation.proposals);
   return {
     persist_review: directorProposal?.proposal_id,
     confirm: review?.review_id,
@@ -508,6 +512,10 @@ function productTarget(action, view) {
     confirm_materials: materialProposal?.review_id,
     reject_materials: materialProposal?.review_id,
     withdraw_materials: materialProposal?.proposal_id,
+    plan_material_production: materialConfirmation?.confirmation_id,
+    confirm_production_plan: productionProposal?.review_id,
+    reject_production_plan: productionProposal?.review_id,
+    withdraw_production_plan: productionProposal?.proposal_id,
   }[action] || null;
 }
 
@@ -525,6 +533,10 @@ function productActionLabel(action) {
     confirm_materials: "Confirm material requirements",
     reject_materials: "Reject material requirements",
     withdraw_materials: "Withdraw material proposal",
+    plan_material_production: "Plan how to produce materials",
+    confirm_production_plan: "Confirm production plan",
+    reject_production_plan: "Reject production plan",
+    withdraw_production_plan: "Withdraw production plan",
   }[action] || action;
 }
 
@@ -568,6 +580,23 @@ function renderProduct() {
               `${item.priority} · ${item.asset_type} · ${item.purpose}`,
           ),
           "Planned items remain non-existent until a later production stage.",
+        ],
+      ),
+    );
+  }
+  const productionProposal = latest(view.creation_planning?.proposals || []);
+  if (productionProposal) {
+    ui.productSummary.append(
+      workflowEvent(
+        `Material production plan v${productionProposal.plan_version}`,
+        view.creation_planning?.state || "reviewable",
+        [
+          ...productionProposal.tasks.map(
+            (task) =>
+              `${task.status} / ${task.method} / ${task.title}`,
+          ),
+          ...(productionProposal.warnings || []),
+          "This plan does not invoke providers or create media.",
         ],
       ),
     );

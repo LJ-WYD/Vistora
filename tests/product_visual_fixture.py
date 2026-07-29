@@ -41,7 +41,14 @@ def _view(state: str) -> ProductEntryView:
             "reject_materials",
             "withdraw_materials",
         ),
-        "materials_confirmed": (),
+        "materials_confirmed": ("plan_material_production",),
+        "production_plan_ready": (
+            "confirm_production_plan",
+            "reject_production_plan",
+            "withdraw_production_plan",
+        ),
+        "production_plan_confirmed": (),
+        "production_plan_unsupported": ("plan_material_production",),
         "confirmed": ("execute",),
         "succeeded": ("rollback_review",),
         "error": ("director_turn",),
@@ -53,6 +60,9 @@ def _view(state: str) -> ProductEntryView:
         "material_requirements_ready": "material_requirements_ready",
         "material_reviewed": "material_requirements_ready",
         "materials_confirmed": "material_requirements_ready",
+        "production_plan_ready": "material_requirements_ready",
+        "production_plan_confirmed": "material_requirements_ready",
+        "production_plan_unsupported": "material_requirements_ready",
         "confirmed": "proposal_ready",
         "succeeded": "proposal_ready",
         "error": "model_error",
@@ -109,6 +119,9 @@ def _view(state: str) -> ProductEntryView:
                     "material_requirements_ready",
                     "material_reviewed",
                     "materials_confirmed",
+                    "production_plan_ready",
+                    "production_plan_confirmed",
+                    "production_plan_unsupported",
                 }
                 else []
             ),
@@ -180,11 +193,83 @@ def _view(state: str) -> ProductEntryView:
                             "confirmed_by": "local_user",
                         }
                     ]
-                    if state == "materials_confirmed"
+                    if state
+                    in {
+                        "materials_confirmed",
+                        "production_plan_ready",
+                        "production_plan_confirmed",
+                        "production_plan_unsupported",
+                    }
                     else []
                 ),
             }
-            if state in {"material_reviewed", "materials_confirmed"}
+            if state
+            in {
+                "material_reviewed",
+                "materials_confirmed",
+                "production_plan_ready",
+                "production_plan_confirmed",
+                "production_plan_unsupported",
+            }
+            else None
+        ),
+        creation_planning=(
+            {
+                "state": (
+                    "confirmed"
+                    if state == "production_plan_confirmed"
+                    else "reviewable"
+                ),
+                "proposals": [
+                    {
+                        "proposal_id": "production_proposal_visual",
+                        "production_plan_id": "production_plan_visual",
+                        "plan_version": 1,
+                        "plan_digest": "sha256:" + "8" * 64,
+                        "review_id": "production_review_visual",
+                        "review_digest": "sha256:" + "9" * 64,
+                        "material_confirmation_id": (
+                            "material_confirmation_visual"
+                        ),
+                        "tasks": [
+                            {
+                                "task_id": "production_task_visual",
+                                "requirement_item_id": (
+                                    "material_need_visual"
+                                ),
+                                "title": "Produce the hero interaction shot",
+                                "method": "generate",
+                                "status": "unsupported",
+                                "capability_ids": ["video_generation"],
+                                "quality_gates": [
+                                    "The UI interaction is readable."
+                                ],
+                                "limitation": (
+                                    "No video-generation adapter is configured."
+                                ),
+                            }
+                        ],
+                        "warnings": [
+                            "No video-generation adapter is configured."
+                        ],
+                    }
+                ],
+                "decisions": (
+                    [
+                        {
+                            "confirmation_id": (
+                                "production_confirmation_visual"
+                            ),
+                            "review_id": "production_review_visual",
+                            "decision": "confirmed",
+                            "confirmed_by": "local_user",
+                        }
+                    ]
+                    if state == "production_plan_confirmed"
+                    else []
+                ),
+            }
+            if state in {"production_plan_ready", "production_plan_confirmed"}
             else None
         ),
         latest_result={"status": state},
@@ -203,6 +288,9 @@ def main() -> None:
             "material_requirements_ready",
             "material_reviewed",
             "materials_confirmed",
+            "production_plan_ready",
+            "production_plan_confirmed",
+            "production_plan_unsupported",
             "confirmed",
             "succeeded",
             "error",
