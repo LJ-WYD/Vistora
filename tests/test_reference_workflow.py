@@ -111,8 +111,11 @@ def test_reference_main_workflow_is_traceable_and_repeatable() -> None:
     assert first.no_material_chain["creation_planning_status"] == (
         "proposal_ready"
     )
-    assert first.no_material_chain["production_method"] == "import"
-    assert first.no_material_chain["media_created"] is False
+    assert first.no_material_chain["production_method"] == "generate"
+    assert first.no_material_chain["media_created"] is True
+    assert first.no_material_chain["artifact_accepted"] is True
+    assert first.no_material_chain["catalog_revision"] == 1
+    assert first.no_material_chain["catalog_material_id"].startswith("source_")
     assert first.trace_document.revision == 4
     assert tuple(
         trace.trace_sequence
@@ -122,7 +125,8 @@ def test_reference_main_workflow_is_traceable_and_repeatable() -> None:
     assert add_relation.origin_kind == "director_plan"
     assert add_relation.entity.entity_id == "clip_12345678"
     assert add_relation.evidence_ids == (
-        "evidence_reference_source_trim",
+        "evidence_catalog_"
+        + first.no_material_chain["catalog_material_id"][7:],
     )
     export_relations = first.trace_document.confirmed_traces[2].relations
     generated = [

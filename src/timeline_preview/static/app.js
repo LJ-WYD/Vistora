@@ -498,6 +498,30 @@ function productTarget(action, view) {
     .reverse().find((item) => item.decision === "confirmed");
   const creation = view.creation_planning || {};
   const productionProposal = latest(creation.proposals);
+  const productionConfirmation = [...(creation.decisions || [])]
+    .reverse().find((item) => item.decision === "confirmed");
+  const production = view.material_production || {};
+  const productionRun = latest(production.runs);
+  const activeJob = [...(production.jobs || [])].reverse().find(
+    (item) => ["submitted", "running", "needs_input", "rate_limited"]
+      .includes(item.status),
+  );
+  const retryableJob = [...(production.jobs || [])].reverse().find(
+    (item) =>
+      ["failed", "timed_out", "cancelled", "recovery_required"]
+        .includes(item.status) ||
+      (
+        item.status === "succeeded" &&
+        (production.artifacts || []).some(
+          (artifact) =>
+            artifact.job_id === item.job_id &&
+            artifact.decision === "rejected",
+        )
+      ),
+  );
+  const reviewArtifact = [...(production.artifacts || [])].reverse().find(
+    (item) => item.passed && !item.decision,
+  );
   return {
     persist_review: directorProposal?.proposal_id,
     confirm: review?.review_id,
@@ -516,6 +540,13 @@ function productTarget(action, view) {
     confirm_production_plan: productionProposal?.review_id,
     reject_production_plan: productionProposal?.review_id,
     withdraw_production_plan: productionProposal?.proposal_id,
+    start_material_production: productionConfirmation?.confirmation_id,
+    poll_material_production: productionRun?.run_id,
+    cancel_material_job: activeJob?.job_id,
+    retry_material_job: retryableJob?.job_id || activeJob?.job_id,
+    accept_material_artifact: reviewArtifact?.artifact_id,
+    reject_material_artifact: reviewArtifact?.artifact_id,
+    return_to_director: productionRun?.run_id,
   }[action] || null;
 }
 
@@ -537,6 +568,13 @@ function productActionLabel(action) {
     confirm_production_plan: "Confirm production plan",
     reject_production_plan: "Reject production plan",
     withdraw_production_plan: "Withdraw production plan",
+    start_material_production: "Start confirmed material production",
+    poll_material_production: "Refresh production jobs",
+    cancel_material_job: "Cancel selected job",
+    retry_material_job: "Retry selected job",
+    accept_material_artifact: "Accept validated material",
+    reject_material_artifact: "Reject material",
+    return_to_director: "Return to Director",
   }[action] || action;
 }
 
@@ -600,6 +638,63 @@ function renderProduct() {
         ],
       ),
     );
+  }
+  const production = view.material_production;
+  if (production) {
+    for (const run of production.runs || []) {
+      ui.productSummary.append(
+        workflowEvent(
+          `Material production run ${run.run_id}`,
+          run.status,
+          [
+            run.message,
+            `Production plan ${run.production_plan_id}`,
+          ],
+        ),
+      );
+    }
+    for (const job of production.jobs || []) {
+      ui.productSummary.append(
+        workflowEvent(
+          `Job ${job.task_id} / attempt ${job.attempt}`,
+          job.status,
+          [
+            `Adapter ${job.adapter_id}`,
+            `${Math.round(job.progress * 100)}% / cost ${job.cost_status}`,
+            job.message,
+            ...(job.error_code ? [`Error ${job.error_code}`] : []),
+          ],
+        ),
+      );
+    }
+    for (const artifact of production.artifacts || []) {
+      ui.productSummary.append(
+        workflowEvent(
+          `Artifact ${artifact.artifact_id}`,
+          artifact.decision || (artifact.passed ? "validated" : "invalid"),
+          [
+            `${artifact.mime_type || "unknown"} / ${artifact.size_bytes || 0} bytes`,
+            `${artifact.width || "?"}x${artifact.height || "?"} / ${artifact.duration_seconds || "?"}s`,
+            ...(artifact.issues || []),
+            "Acceptance is required before this becomes Director-observable.",
+          ],
+        ),
+      );
+    }
+    for (const material of production.catalog || []) {
+      ui.productSummary.append(
+        workflowEvent(
+          `Catalog material ${material.material_id}`,
+          "accepted",
+          [
+            `${material.media_kind} / ${material.display_name}`,
+            `Origin ${material.origin_kind} / requirement ${material.requirement_item_id}`,
+            `License ${material.license_status}`,
+            ...(material.usage_restrictions || []),
+          ],
+        ),
+      );
+    }
   }
   ui.productActions.replaceChildren();
   for (const action of view.allowed_actions) {

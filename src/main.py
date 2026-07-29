@@ -136,7 +136,7 @@ def production_studio(
     port: int,
     session_id: str,
 ):
-    """Start the separated Director-to-confirmed-Editing product entry."""
+    """Start the confirmed planning, material, and editing product entry."""
 
     from product_entry import build_current_product_entry
     from timeline_preview import run_preview_server
@@ -191,8 +191,8 @@ def main():
     studio_parser = subparsers.add_parser(
         "studio",
         help=(
-            "Start the production Director, review, confirmation, and "
-            "constrained Editing workflow"
+            "Start Director review, confirmed material production/catalog, "
+            "and constrained Editing workflow"
         ),
     )
     studio_parser.add_argument(

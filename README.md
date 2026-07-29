@@ -154,7 +154,7 @@ The `studio` UI shows the requirements checklist and offers separate Review,
 Confirm, Reject, and Withdraw actions. Confirmation only approves what
 materials are required. It does not generate them: the separately confirmed
 Creation Planning Agent described below plans production, while provider
-execution remains a later stage.
+execution remains separately confirmed and constrained.
 
 ## Creation Planning Agent
 
@@ -182,7 +182,42 @@ The `studio` entry presents these steps after material-requirements
 confirmation. Neither the Agent nor its decision service calls an external
 generation provider, writes media, changes the timeline, invokes the Editing
 Agent, or changes the Director's definition of what is required and why.
-Actual production adapters and material ingestion are not implemented yet.
+
+## Material production, validation, and catalog
+
+`src/material_production/` consumes only an exact confirmed
+`MaterialProductionPlan`. A versioned adapter registry freezes configured
+capabilities and request/result schemas before a run. The provider-neutral
+job boundary supports submit, poll, cancel, retry, idempotency, progress,
+explicit cost-known/unknown state, terminal failure, timeout, partial result,
+and `recovery_required`. The default product factory configures no online or
+paid provider. Its manual-import capability is also marked unconfigured until
+an embedding application supplies a secure opaque-token resolver; the UI
+therefore never pretends that generation or import succeeded.
+
+Provider results first enter an ignored, project-scoped staging directory.
+Vistora verifies path confinement, task/requirement linkage, file size and
+hash, MIME/container/codecs, duration, dimensions, frame rate, and audio
+metadata with `ffprobe`. Invalid results cannot enter the catalog. Valid
+results still require a separate explicit Accept or Reject action. Acceptance
+atomically copies the artifact into the managed catalog and appends its
+versioned provenance, production IDs, quality result, license/usage status,
+and cost state. Browser payloads contain only opaque `source_*` and
+`material://source_*` identities, never staging or managed filesystem paths.
+
+Only accepted catalog entries become observed Director material on a later
+turn. They are not automatically placed on the timeline. The Director must
+re-evaluate the real catalog evidence and propose a normal edit; review,
+independent user confirmation, and the constrained Editing Agent remain
+mandatory. The registered `VideoAddClipSkill` is the sole component that
+resolves an accepted catalog URI at mutation time.
+
+The `studio` surface displays the production queue, attempts, progress,
+failure/recovery status, validated artifacts, explicit acceptance controls,
+catalog records, and “Return to Director.” Deterministic fake generation is
+used only by tests and the reference workflow. Real online AI provider
+adapters, credentials, mature cost enforcement, complex AI packaging/effects,
+and richer editing skills are not implemented.
 
 `src/plan_review/` provides strict version `1.0.0` contracts and a deterministic read-only diff engine for the period before confirmation. A `PlanDiffRequest` binds an exact timeline snapshot ID/revision/digest, Director plan ID/version/digest, non-executable proposed execution-plan digest, and the exact registered tool-schema set. The engine validates proposed arguments with the current registry schemas, simulates supported semantics on detached clip data, and returns stable before/after changes, source-evidence links, provenance summaries, warnings, and net counts. Repeating the same request produces the same document and digest; snapshot or registry drift requires regeneration.
 
@@ -240,13 +275,19 @@ The integration validation creates its own synthetic source clip and generated o
 python tests/run_validation.py
 ```
 
-Run the deterministic review → confirmation → recorded execution → rollback reference workflow:
+Run the deterministic no-material → production → catalog → Director review →
+confirmation → recorded execution → rollback reference workflow:
 
 ```powershell
 python -m pytest -q tests/test_reference_workflow.py
 ```
 
-This reference runs a deterministic fake Director adapter through the production `DirectorAgent`, feeds its proposal into the read-only review boundary, records a separate explicit confirmation, and then exercises the production constrained Editing Agent.
+This reference first confirms Director material requirements and a
+CreationPlanningAgent plan, uses a test-only deterministic provider, validates
+and explicitly accepts the artifact into the catalog, and only then returns
+the observed material to the Director. Its final proposal enters read-only
+review, a separate explicit confirmation, and the constrained Editing Agent.
+It performs no external model/provider call.
 
 Generated validation media and local runtime state are ignored by Git.
 

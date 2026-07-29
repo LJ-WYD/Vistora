@@ -31,6 +31,12 @@ venv/
 *.materials.json.lock
 *.creation-planning.json
 *.creation-planning.json.lock
+*.production.json
+*.production.json.lock
+*.material-catalog.json
+*.material-catalog.json.lock
+material_staging/
+materials/
 video/
 output/
 tests/test_data/*

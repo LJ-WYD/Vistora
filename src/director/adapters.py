@@ -59,7 +59,10 @@ class OpenAICompatibleDirectorAdapter:
             "unobserved media facts. When the brief is complete but the "
             "context has no materials, propose a structured material "
             "requirements draft describing what is needed and why; do not "
-            "claim those planned items exist or attempt to generate them."
+            "claim those planned items exist or attempt to generate them. "
+            "When an observed catalog material has a material:// source "
+            "reference, use that exact opaque value as VideoAddClipSkill's "
+            "source_path; never invent or request a filesystem path."
         )
         payload = {
             "request": request.model_dump(mode="json"),

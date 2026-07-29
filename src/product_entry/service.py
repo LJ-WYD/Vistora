@@ -15,6 +15,7 @@ from creation_planning import (
 )
 from director import DirectorHistoryQuery, DirectorStore
 from material_requirements import MaterialRequirementsService
+from material_production import MaterialProductionOrchestrator
 from workflow import WorkflowApplicationService, WorkflowHistoryQuery
 
 from .models import (
@@ -62,6 +63,7 @@ class ProductionEntryService:
         material_requirements: MaterialRequirementsService | None = None,
         creation_planning_agent: CreationPlanningAgent | None = None,
         creation_planning: CreationPlanningService | None = None,
+        material_production: MaterialProductionOrchestrator | None = None,
         clock: Clock = _utc_now,
         id_factory: IdFactory = _random_id,
     ) -> None:
@@ -75,6 +77,7 @@ class ProductionEntryService:
         self.material_requirements = material_requirements
         self.creation_planning_agent = creation_planning_agent
         self.creation_planning = creation_planning
+        self.material_production = material_production
         self.clock = clock
         self.id_factory = id_factory
 
@@ -106,12 +109,18 @@ class ProductionEntryService:
             if self.creation_planning is not None
             else None
         )
+        production_view = (
+            self.material_production.view().model_dump(mode="json")
+            if self.material_production is not None
+            else None
+        )
         state, allowed = self._state(
             ledger,
             director,
             workflow,
             material_view,
             creation_view,
+            production_view,
         )
         latest = ledger.events[-1].result if ledger.events else None
         review = self._latest_review(director_ledger)
@@ -125,6 +134,7 @@ class ProductionEntryService:
             workflow=workflow,
             material_requirements=material_view,
             creation_planning=creation_view,
+            material_production=production_view,
             latest_result=latest,
             allowed_actions=allowed,
         )
@@ -167,6 +177,7 @@ class ProductionEntryService:
         workflow: dict,
         material_view: dict | None,
         creation_view: dict | None,
+        production_view: dict | None,
     ):
         if ledger.events:
             latest = ledger.events[-1]
@@ -189,6 +200,13 @@ class ProductionEntryService:
                 "confirm_production_plan": "production_plan_confirmed",
                 "reject_production_plan": "production_plan_rejected",
                 "withdraw_production_plan": "production_plan_withdrawn",
+                "start_material_production": latest.status,
+                "poll_material_production": latest.status,
+                "cancel_material_job": latest.status,
+                "retry_material_job": latest.status,
+                "accept_material_artifact": latest.status,
+                "reject_material_artifact": latest.status,
+                "return_to_director": "returned_to_director",
             }
             state = mapping.get(latest.action)
             if state is not None:
@@ -234,9 +252,75 @@ class ProductionEntryService:
                     "production_plan_withdrawn": (
                         "plan_material_production",
                     ),
+                    "production_plan_confirmed": (
+                        ("start_material_production",)
+                        if production_view is not None
+                        else ()
+                    ),
+                    "material_production_running": (
+                        "poll_material_production",
+                        "cancel_material_job",
+                    ),
+                    "material_awaiting_review": (
+                        "accept_material_artifact",
+                        "reject_material_artifact",
+                    ),
+                    "material_production_partial": (
+                        "accept_material_artifact",
+                        "reject_material_artifact",
+                        "retry_material_job",
+                    ),
+                    "material_production_failed": (
+                        "retry_material_job",
+                    ),
+                    "material_production_recovery_required": (
+                        "retry_material_job",
+                    ),
+                    "material_production_cancelled": (
+                        "retry_material_job",
+                    ),
+                    "material_production_succeeded": (
+                        "return_to_director",
+                    ),
+                    "returned_to_director": ("director_turn",),
                 }.get(state, ())
                 if state == "materials_confirmed" and creation_view is None:
                     allowed = ()
+                if (
+                    state == "material_production_partial"
+                    and production_view is not None
+                ):
+                    reviewable = any(
+                        item.get("passed") and not item.get("decision")
+                        for item in production_view.get("artifacts", ())
+                    )
+                    rejected_jobs = {
+                        item.get("job_id")
+                        for item in production_view.get("artifacts", ())
+                        if item.get("decision") == "rejected"
+                    }
+                    retryable = any(
+                        item.get("status")
+                        in {
+                            "failed",
+                            "timed_out",
+                            "cancelled",
+                            "recovery_required",
+                        }
+                        or (
+                            item.get("status") == "succeeded"
+                            and item.get("job_id") in rejected_jobs
+                        )
+                        for item in production_view.get("jobs", ())
+                    )
+                    allowed = (
+                        (
+                            "accept_material_artifact",
+                            "reject_material_artifact",
+                        )
+                        if reviewable
+                        else ()
+                    ) + (("retry_material_job",) if retryable else ())
                 return state, allowed
         status = director.get("latest_status", "empty")
         if status == "material_requirements_ready":
@@ -475,6 +559,128 @@ class ProductionEntryService:
                 "proposal_id": command.target_id,
                 "creation_planning_revision": updated.revision,
             }
+        if command.action == "start_material_production":
+            if self.material_production is None:
+                raise ProductEntryError(
+                    "Material production workflow is unavailable"
+                )
+            request = self.material_production.prepare_request(
+                request_id=self.id_factory("production_request"),
+                production_confirmation_id=command.target_id or "",
+                requested_by=command.actor_id,
+            )
+            run = self.material_production.start(request)
+            status = self._production_status(run["status"])
+            return status, run["run_id"], {
+                "run_id": run["run_id"],
+                "status": run["status"],
+                "message": run["message"],
+            }
+        if command.action == "poll_material_production":
+            if self.material_production is None:
+                raise ProductEntryError(
+                    "Material production workflow is unavailable"
+                )
+            run = self.material_production.poll(command.target_id or "")
+            status = self._production_status(run["status"])
+            return status, run["run_id"], {
+                "run_id": run["run_id"],
+                "status": run["status"],
+                "message": run["message"],
+            }
+        if command.action == "cancel_material_job":
+            if self.material_production is None:
+                raise ProductEntryError(
+                    "Material production workflow is unavailable"
+                )
+            update = self.material_production.cancel(
+                command.target_id or ""
+            )
+            production = self.material_production.view()
+            return self._production_status(production.state), update.job_id, {
+                "job_id": update.job_id,
+                "status": update.status,
+                "message": update.message,
+                "production_state": production.state,
+            }
+        if command.action == "retry_material_job":
+            if self.material_production is None:
+                raise ProductEntryError(
+                    "Material production workflow is unavailable"
+                )
+            update = self.material_production.retry(
+                command.target_id or ""
+            )
+            production = self.material_production.view()
+            status = self._production_status(production.state)
+            return status, update.job_id, {
+                "job_id": update.job_id,
+                "status": update.status,
+                "message": update.message,
+                "production_state": production.state,
+            }
+        if command.action in {
+            "accept_material_artifact",
+            "reject_material_artifact",
+        }:
+            if self.material_production is None:
+                raise ProductEntryError(
+                    "Material production workflow is unavailable"
+                )
+            decision, entry = self.material_production.decide_artifact(
+                command.target_id or "",
+                decision=(
+                    "accepted"
+                    if command.action == "accept_material_artifact"
+                    else "rejected"
+                ),
+                decided_by=command.actor_id,
+                reason=(
+                    "Accepted through the explicit local material review."
+                    if command.action == "accept_material_artifact"
+                    else "Rejected through the explicit local material review."
+                ),
+            )
+            view = self.material_production.view()
+            return self._production_status(view.state), decision.decision_id, {
+                "decision_id": decision.decision_id,
+                "decision": decision.decision,
+                "material_id": (
+                    entry.material_id if entry is not None else None
+                ),
+                "production_state": view.state,
+            }
+        if command.action == "return_to_director":
+            if self.material_production is None:
+                raise ProductEntryError(
+                    "Material production workflow is unavailable"
+                )
+            view = self.material_production.view()
+            target_run = next(
+                (
+                    run
+                    for run in view.runs
+                    if run["run_id"] == command.target_id
+                    and run["status"] == "succeeded"
+                ),
+                None,
+            )
+            material_ids = [
+                item["material_id"]
+                for item in view.catalog
+                if item["production_run_id"] == command.target_id
+            ]
+            if target_run is None or not material_ids:
+                raise ProductEntryError(
+                    "Exact succeeded run has no accepted catalog material"
+                )
+            return "returned_to_director", command.target_id, {
+                "accepted_material_ids": material_ids,
+                "message": (
+                    "Accepted catalog material is now observable to the "
+                    "Director on the next turn."
+                ),
+            }
         if command.action == "persist_review":
             director_ledger = self.director_store.load(
                 session_id=self.session_id,
@@ -571,6 +777,19 @@ class ProductionEntryService:
                 "status": record.status,
             }
         raise ProductEntryError("Unknown product action")
+
+    @staticmethod
+    def _production_status(status: str) -> str:
+        return {
+            "pending": "material_production_running",
+            "running": "material_production_running",
+            "awaiting_review": "material_awaiting_review",
+            "succeeded": "material_production_succeeded",
+            "partial": "material_production_partial",
+            "failed": "material_production_failed",
+            "cancelled": "material_production_cancelled",
+            "recovery_required": "material_production_recovery_required",
+        }[status]
 
 
 __all__ = [

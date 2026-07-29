@@ -5,7 +5,9 @@ from pydantic import BaseModel, Field
 from .base import BaseSkill
 from moviepy import VideoFileClip
 from core.timeline_manager import TimelineManager
+from core import timeline_manager
 from core.timeline import ClipConfig
+from material_production import MaterialCatalogStore
 
 class VideoAddClipInput(BaseModel):
     """添加剪辑片段到时间线的输入契约"""
@@ -26,11 +28,21 @@ class VideoAddClipSkill(BaseSkill):
     input_model = VideoAddClipInput
 
     def run(self, params: VideoAddClipInput) -> Dict[str, Any]:
-        if not os.path.exists(params.source_path):
-            raise FileNotFoundError(f"找不到视频素材: {params.source_path}")
+        source_path = params.source_path
+        if source_path.startswith("material://"):
+            resolved = MaterialCatalogStore.for_project_file(
+                timeline_manager.PROJECT_FILE
+            ).resolve_uri(source_path)
+            if resolved is None:
+                raise FileNotFoundError(
+                    "Catalog material is missing, unaccepted, or tampered"
+                )
+            source_path = str(resolved)
+        if not os.path.exists(source_path):
+            raise FileNotFoundError(f"找不到视频素材: {source_path}")
 
         # 利用 moviepy 快速探测视频物理属性
-        clip = VideoFileClip(params.source_path)
+        clip = VideoFileClip(source_path)
         duration = clip.duration
         w, h = clip.size
         clip.close()
@@ -43,7 +55,6 @@ class VideoAddClipSkill(BaseSkill):
 
         # 检查是否需要生成倒放代理
         clip_id = f"clip_{uuid.uuid4().hex[:8]}"
-        source_path = params.source_path
         reverse_flag = params.reverse
         
         if reverse_flag:

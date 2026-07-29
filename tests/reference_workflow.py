@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from contextlib import contextmanager
@@ -41,12 +42,12 @@ from contracts import (  # noqa: E402
     PlanReference,
     SourceEvidenceReference,
     UserConfirmationRecord,
+    WholeMaterialLocator,
 )
 from core import timeline_manager  # noqa: E402
 from director import (  # noqa: E402
     CreativeBriefInput,
     DirectorContextService,
-    DirectorMaterialFact,
     DirectorPlanDraft,
     DirectorReasoningOutput,
     DirectorSessionLedger,
@@ -71,8 +72,17 @@ from creation_planning import (  # noqa: E402
     MaterialProductionPlanDraft,
     MaterialProductionTask,
     ProductionEstimate,
+    PromptSpecification,
     ReproducibilityParameter,
 )
+from material_production import (  # noqa: E402
+    AdapterRegistry,
+    DeterministicLocalVideoAdapter,
+    MaterialCatalogStore,
+    MaterialProductionOrchestrator,
+    MaterialProductionStore,
+)
+from product_entry.factory import _material_facts  # noqa: E402
 from moviepy import ColorClip  # noqa: E402
 from plan_review import (  # noqa: E402
     PlanDiffDocument,
@@ -93,7 +103,7 @@ from workflow import (  # noqa: E402
 REFERENCE_TIME = datetime(2026, 7, 24, tzinfo=timezone.utc)
 REFERENCE_CLIP_UUID = UUID("12345678-1234-5678-1234-567812345678")
 REFERENCE_PLAN_DIGEST = (
-    "sha256:dcb3f03c238390a8e34873ab5b9ffdf57eb16269a42259801bdf95ba3aa3c583"
+    "sha256:c8535c33ccf6539ba5604ab8ab339994580b0bd4e9c54f6b8b7a203ce59ece80"
 )
 REFERENCE_TOOL_ORDER = (
     "VideoClearTimelineSkill",
@@ -283,7 +293,19 @@ def _build_plan(
         separators=(",", ":"),
     ).encode("utf-8")
     fact_digest = f"sha256:{hashlib.sha256(fact_payload).hexdigest()}"
-    evidence_id = "evidence_reference_source_trim"
+    catalog_source = facts.source_path.startswith("material://")
+    material_id = (
+        facts.source_path.removeprefix("material://")
+        if catalog_source
+        else TimelineSnapshotService.source_id_for_configured_path(
+            facts.source_path
+        )
+    )
+    evidence_id = (
+        f"evidence_catalog_{material_id[7:]}"
+        if catalog_source
+        else "evidence_reference_source_trim"
+    )
     return DirectorPlan(
         plan_id="plan_reference_main_flow",
         plan_version=1,
@@ -306,19 +328,25 @@ def _build_plan(
         source_evidence=(
             SourceEvidenceReference(
                 evidence_id=evidence_id,
-                material_id=(
-                    TimelineSnapshotService.source_id_for_configured_path(
-                        facts.source_path
+                material_id=material_id,
+                locator=(
+                    WholeMaterialLocator()
+                    if catalog_source
+                    else MediaTimeRangeLocator(
+                        start_seconds=0.25,
+                        end_seconds=1.75,
                     )
                 ),
-                locator=MediaTimeRangeLocator(
-                    start_seconds=0.25,
-                    end_seconds=1.75,
+                analysis_fact_id=(
+                    None if catalog_source else "analysis_fact_reference_source"
                 ),
-                analysis_fact_id="analysis_fact_reference_source",
-                analysis_fact_digest=fact_digest,
+                analysis_fact_digest=(
+                    None if catalog_source else fact_digest
+                ),
                 description=(
-                    "Known deterministic source range used by the trim."
+                    "Validated, explicitly accepted material catalog entry."
+                    if catalog_source
+                    else "Known deterministic source range used by the trim."
                 ),
             ),
         ),
@@ -508,9 +536,20 @@ class DeterministicCreationPlanningAdapter:
                         requirement_item_id="reference_material_requirement",
                         title="Import verified synthetic reference source",
                         purpose="Supply the confirmed single-shot source.",
-                        production_method="import",
+                        production_method="generate",
                         status="planned",
-                        capability_ids=("manual_import",),
+                        capability_ids=("video_generation",),
+                        prompt_spec=PromptSpecification(
+                            subject="A uniform deterministic reference frame.",
+                            scene="A synthetic 320x180 test canvas.",
+                            camera="Locked frame.",
+                            action="No movement.",
+                            lighting="Uniform generated color.",
+                            style="Deterministic regression fixture.",
+                            negative_constraints=(
+                                "No nondeterministic content.",
+                            ),
+                        ),
                         duration_seconds=2.0,
                         width=320,
                         height=180,
@@ -591,6 +630,14 @@ def _isolated_timeline(work_dir: Path) -> Iterator[Path]:
     CreationPlanningStore(
         project_file.with_name("reference.creation-planning.json")
     ).path.unlink(missing_ok=True)
+    MaterialProductionStore.for_project_file(
+        project_file
+    ).path.unlink(missing_ok=True)
+    MaterialCatalogStore.for_project_file(
+        project_file
+    ).path.unlink(missing_ok=True)
+    shutil.rmtree(workspace / "material_staging", ignore_errors=True)
+    shutil.rmtree(workspace / "materials", ignore_errors=True)
     try:
         yield project_file
     finally:
@@ -632,9 +679,7 @@ def run_reference_workflow(
     previous_cwd = Path.cwd()
     os.chdir(ROOT)
     try:
-        source_path = (work_dir / "source.mp4").as_posix()
         output_path = (work_dir / "output.mp4").as_posix()
-        facts = _generate_source(source_path)
         with _isolated_timeline(work_dir) as project_file:
             preview_snapshot = TimelineSnapshotService.snapshot_current()
             no_material_counter = 0
@@ -734,8 +779,8 @@ def run_reference_workflow(
                 registry_revision=1,
                 capabilities=(
                     CapabilityRequirement(
-                        capability_id="manual_import",
-                        capability_kind="manual_import",
+                        capability_id="video_generation",
+                        capability_kind="video_generation",
                         availability="available",
                     ),
                 ),
@@ -767,6 +812,70 @@ def run_reference_workflow(
                 confirmed_by="user_reference",
                 expected_revision=1,
             )
+            catalog_store = MaterialCatalogStore.for_project_file(
+                project_file
+            )
+            production_orchestrator = MaterialProductionOrchestrator(
+                creation_planning=creation_service,
+                adapters=AdapterRegistry(
+                    (
+                        DeterministicLocalVideoAdapter(
+                            clock=no_material_clock,
+                        ),
+                    )
+                ),
+                store=MaterialProductionStore.for_project_file(project_file),
+                catalog=catalog_store,
+                staging_root=project_file.parent / "material_staging",
+                project_id=preview_snapshot.project_id,
+                clock=no_material_clock,
+                id_factory=no_material_id,
+            )
+            production_request = (
+                production_orchestrator.prepare_request(
+                    request_id="production_request_reference_no_material",
+                    production_confirmation_id=(
+                        production_confirmation.confirmation_id
+                    ),
+                    requested_by="user_reference",
+                )
+            )
+            production_run = production_orchestrator.start(
+                production_request
+            )
+            if production_run["status"] != "awaiting_review":
+                raise AssertionError(
+                    "Fake production did not reach artifact review"
+                )
+            production_artifact = (
+                production_orchestrator.view().artifacts[0]
+            )
+            _, catalog_entry = (
+                production_orchestrator.decide_artifact(
+                    production_artifact["artifact_id"],
+                    decision="accepted",
+                    decided_by="user_reference",
+                    reason=(
+                        "The deterministic artifact passed exact ffprobe "
+                        "validation."
+                    ),
+                )
+            )
+            if catalog_entry is None:
+                raise AssertionError("Accepted material was not cataloged")
+            facts = AnalyzedMediaFacts(
+                source_path=catalog_entry.source_uri,
+                duration_seconds=(
+                    catalog_entry.duration_seconds or 2.0
+                ),
+                width=catalog_entry.width or 320,
+                height=catalog_entry.height or 180,
+                fps=int(catalog_entry.fps or 24),
+                has_audio=bool(catalog_entry.has_audio),
+                visual_summary=(
+                    "Validated deterministic catalog reference frame."
+                ),
+            )
             no_material_chain = {
                 "director_status": requirements_report.status,
                 "requirements_plan_id": (
@@ -788,22 +897,22 @@ def run_reference_workflow(
                 "production_confirmation_id": (
                     production_confirmation.confirmation_id
                 ),
+                "production_run_id": production_run["run_id"],
+                "catalog_material_id": catalog_entry.material_id,
+                "catalog_revision": (
+                    production_orchestrator.view().catalog_revision
+                ),
                 "production_method": (
                     planning_report.proposal.plan.tasks[0].production_method
                 ),
-                "media_created": False,
+                "media_created": True,
+                "artifact_accepted": True,
             }
             intended = _build_plan(facts, output_path)
-            material = DirectorMaterialFact(
-                material_id=intended.source_evidence[0].material_id,
-                media_kind="video",
-                display_name="source.mp4",
-                duration_seconds=facts.duration_seconds,
-                width=facts.width,
-                height=facts.height,
-                has_audio=facts.has_audio,
-                evidence=intended.source_evidence,
-            )
+            material = _material_facts(
+                preview_snapshot,
+                (catalog_entry,),
+            )[0]
 
             def director_context():
                 current = TimelineSnapshotService.snapshot_current()
@@ -887,7 +996,7 @@ def run_reference_workflow(
                 raise AssertionError(
                     "Reference DirectorPlan digest changed; review the "
                     "deterministic adapter and update REFERENCE_PLAN_DIGEST "
-                    "intentionally"
+                    f"intentionally: {plan.digest()}"
                 )
             counter = 0
 

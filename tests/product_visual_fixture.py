@@ -49,6 +49,17 @@ def _view(state: str) -> ProductEntryView:
         ),
         "production_plan_confirmed": (),
         "production_plan_unsupported": ("plan_material_production",),
+        "material_production_running": (
+            "poll_material_production",
+            "cancel_material_job",
+        ),
+        "material_awaiting_review": (
+            "accept_material_artifact",
+            "reject_material_artifact",
+        ),
+        "material_production_partial": ("retry_material_job",),
+        "material_production_failed": ("retry_material_job",),
+        "material_production_succeeded": ("return_to_director",),
         "confirmed": ("execute",),
         "succeeded": ("rollback_review",),
         "error": ("director_turn",),
@@ -63,6 +74,11 @@ def _view(state: str) -> ProductEntryView:
         "production_plan_ready": "material_requirements_ready",
         "production_plan_confirmed": "material_requirements_ready",
         "production_plan_unsupported": "material_requirements_ready",
+        "material_production_running": "material_requirements_ready",
+        "material_awaiting_review": "material_requirements_ready",
+        "material_production_partial": "material_requirements_ready",
+        "material_production_failed": "material_requirements_ready",
+        "material_production_succeeded": "material_requirements_ready",
         "confirmed": "proposal_ready",
         "succeeded": "proposal_ready",
         "error": "model_error",
@@ -122,6 +138,11 @@ def _view(state: str) -> ProductEntryView:
                     "production_plan_ready",
                     "production_plan_confirmed",
                     "production_plan_unsupported",
+                    "material_production_running",
+                    "material_awaiting_review",
+                    "material_production_partial",
+                    "material_production_failed",
+                    "material_production_succeeded",
                 }
                 else []
             ),
@@ -199,6 +220,11 @@ def _view(state: str) -> ProductEntryView:
                         "production_plan_ready",
                         "production_plan_confirmed",
                         "production_plan_unsupported",
+                        "material_production_running",
+                        "material_awaiting_review",
+                        "material_production_partial",
+                        "material_production_failed",
+                        "material_production_succeeded",
                     }
                     else []
                 ),
@@ -210,6 +236,11 @@ def _view(state: str) -> ProductEntryView:
                 "production_plan_ready",
                 "production_plan_confirmed",
                 "production_plan_unsupported",
+                "material_production_running",
+                "material_awaiting_review",
+                "material_production_partial",
+                "material_production_failed",
+                "material_production_succeeded",
             }
             else None
         ),
@@ -217,7 +248,15 @@ def _view(state: str) -> ProductEntryView:
             {
                 "state": (
                     "confirmed"
-                    if state == "production_plan_confirmed"
+                    if state
+                    in {
+                        "production_plan_confirmed",
+                        "material_production_running",
+                        "material_awaiting_review",
+                        "material_production_partial",
+                        "material_production_failed",
+                        "material_production_succeeded",
+                    }
                     else "reviewable"
                 ),
                 "proposals": [
@@ -239,19 +278,32 @@ def _view(state: str) -> ProductEntryView:
                                 ),
                                 "title": "Produce the hero interaction shot",
                                 "method": "generate",
-                                "status": "unsupported",
+                                "status": (
+                                    "planned"
+                                    if state.startswith("material_")
+                                    else "unsupported"
+                                ),
                                 "capability_ids": ["video_generation"],
                                 "quality_gates": [
                                     "The UI interaction is readable."
                                 ],
                                 "limitation": (
-                                    "No video-generation adapter is configured."
+                                    None
+                                    if state.startswith("material_")
+                                    else (
+                                        "No video-generation adapter is "
+                                        "configured."
+                                    )
                                 ),
                             }
                         ],
-                        "warnings": [
-                            "No video-generation adapter is configured."
-                        ],
+                        "warnings": (
+                            []
+                            if state.startswith("material_")
+                            else [
+                                "No video-generation adapter is configured."
+                            ]
+                        ),
                     }
                 ],
                 "decisions": (
@@ -265,11 +317,179 @@ def _view(state: str) -> ProductEntryView:
                             "confirmed_by": "local_user",
                         }
                     ]
-                    if state == "production_plan_confirmed"
+                    if state
+                    in {
+                        "production_plan_confirmed",
+                        "material_production_running",
+                        "material_awaiting_review",
+                        "material_production_partial",
+                        "material_production_failed",
+                        "material_production_succeeded",
+                    }
                     else []
                 ),
             }
-            if state in {"production_plan_ready", "production_plan_confirmed"}
+            if state
+            in {
+                "production_plan_ready",
+                "production_plan_confirmed",
+                "material_production_running",
+                "material_awaiting_review",
+                "material_production_partial",
+                "material_production_failed",
+                "material_production_succeeded",
+            }
+            else None
+        ),
+        material_production=(
+            {
+                "state": {
+                    "material_production_running": "running",
+                    "material_awaiting_review": "awaiting_review",
+                    "material_production_partial": "partial",
+                    "material_production_failed": "failed",
+                    "material_production_succeeded": "succeeded",
+                }[state],
+                "ledger_revision": 6,
+                "catalog_revision": (
+                    1 if state == "material_production_succeeded" else 0
+                ),
+                "runs": [
+                    {
+                        "run_id": "production_run_visual",
+                        "request_id": "production_request_visual",
+                        "production_plan_id": "production_plan_visual",
+                        "status": {
+                            "material_production_running": "running",
+                            "material_awaiting_review": "awaiting_review",
+                            "material_production_partial": "partial",
+                            "material_production_failed": "failed",
+                            "material_production_succeeded": "succeeded",
+                        }[state],
+                        "message": {
+                            "material_production_running": (
+                                "The local adapter is processing the task."
+                            ),
+                            "material_awaiting_review": (
+                                "The validated result requires an explicit "
+                                "accept or reject decision."
+                            ),
+                            "material_production_partial": (
+                                "The valid result was rejected and may be "
+                                "retried without cataloging it."
+                            ),
+                            "material_production_failed": (
+                                "The configured adapter did not produce a "
+                                "valid result."
+                            ),
+                            "material_production_succeeded": (
+                                "The accepted material is registered."
+                            ),
+                        }[state],
+                    }
+                ],
+                "jobs": [
+                    {
+                        "job_id": "production_job_visual",
+                        "run_id": "production_run_visual",
+                        "task_id": "production_task_visual",
+                        "requirement_item_id": "material_need_visual",
+                        "adapter_id": "visual_fixture_adapter",
+                        "attempt": 1,
+                        "status": {
+                            "material_production_running": "running",
+                            "material_awaiting_review": "succeeded",
+                            "material_production_partial": "succeeded",
+                            "material_production_failed": "failed",
+                            "material_production_succeeded": "succeeded",
+                        }[state],
+                        "progress": (
+                            0.45
+                            if state == "material_production_running"
+                            else 1
+                        ),
+                        "cost_status": "unknown",
+                        "cost_value": None,
+                        "cost_currency": None,
+                        "message": "Browser-safe production status.",
+                        "error_code": (
+                            "provider_unavailable"
+                            if state == "material_production_failed"
+                            else None
+                        ),
+                    }
+                ],
+                "artifacts": (
+                    [
+                        {
+                            "artifact_id": "artifact_visual",
+                            "run_id": "production_run_visual",
+                            "job_id": "production_job_visual",
+                            "task_id": "production_task_visual",
+                            "requirement_item_id": "material_need_visual",
+                            "passed": True,
+                            "size_bytes": 4096,
+                            "mime_type": "video/mp4",
+                            "duration_seconds": 6.0,
+                            "width": 1080,
+                            "height": 1920,
+                            "fps": 30.0,
+                            "has_audio": False,
+                            "issues": [],
+                            "decision": (
+                                "accepted"
+                                if state
+                                == "material_production_succeeded"
+                                else (
+                                    "rejected"
+                                    if state
+                                    == "material_production_partial"
+                                    else None
+                                )
+                            ),
+                        }
+                    ]
+                    if state
+                    in {
+                        "material_awaiting_review",
+                        "material_production_partial",
+                        "material_production_succeeded",
+                    }
+                    else []
+                ),
+                "catalog": (
+                    [
+                        {
+                            "material_id": "source_1234567890abcdef",
+                            "display_name": "Hero interaction.mp4",
+                            "media_kind": "video",
+                            "duration_seconds": 6.0,
+                            "width": 1080,
+                            "height": 1920,
+                            "fps": 30.0,
+                            "has_audio": False,
+                            "origin_kind": "generated",
+                            "requirement_item_id": "material_need_visual",
+                            "production_task_id": "production_task_visual",
+                            "production_run_id": "production_run_visual",
+                            "license_status": "unknown",
+                            "usage_restrictions": [
+                                "Verify usage rights before publishing."
+                            ],
+                        }
+                    ]
+                    if state == "material_production_succeeded"
+                    else []
+                ),
+            }
+            if state
+            in {
+                "material_production_running",
+                "material_awaiting_review",
+                "material_production_partial",
+                "material_production_failed",
+                "material_production_succeeded",
+            }
             else None
         ),
         latest_result={"status": state},
@@ -291,6 +511,11 @@ def main() -> None:
             "production_plan_ready",
             "production_plan_confirmed",
             "production_plan_unsupported",
+            "material_production_running",
+            "material_awaiting_review",
+            "material_production_partial",
+            "material_production_failed",
+            "material_production_succeeded",
             "confirmed",
             "succeeded",
             "error",

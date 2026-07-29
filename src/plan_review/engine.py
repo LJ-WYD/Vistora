@@ -50,6 +50,8 @@ def _redact_path_text(value: str) -> str:
 
 
 def _source_id(configured_path: str) -> str:
+    if re.fullmatch(r"material://source_[0-9a-f]{16}", configured_path):
+        return configured_path.removeprefix("material://")
     return (
         "source_"
         + digest_json({"configured_path": configured_path})[7:23]
@@ -57,6 +59,8 @@ def _source_id(configured_path: str) -> str:
 
 
 def _display_name(configured_path: str) -> str:
+    if configured_path.startswith("material://"):
+        return configured_path.removeprefix("material://")
     normalized = configured_path.replace("\\", "/").rstrip("/")
     return normalized.rsplit("/", 1)[-1] or PurePath(configured_path).name
 

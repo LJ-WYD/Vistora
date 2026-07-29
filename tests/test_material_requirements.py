@@ -42,6 +42,13 @@ from material_requirements import (  # noqa: E402
     MaterialRequirementsService,
     MaterialRequirementsStore,
 )
+from material_production import (  # noqa: E402
+    AdapterRegistry,
+    DeterministicLocalVideoAdapter,
+    MaterialCatalogStore,
+    MaterialProductionOrchestrator,
+    MaterialProductionStore,
+)
 from product_entry import (  # noqa: E402
     ProductEntryCommand,
     ProductEntryStore,
@@ -518,6 +525,34 @@ def test_product_entry_reviews_and_confirms_material_requirements(no_material):
         clock=deterministic.clock,
         id_factory=deterministic.identifier,
     )
+    material_production = MaterialProductionOrchestrator(
+        creation_planning=creation_service,
+        adapters=AdapterRegistry(
+            (
+                DeterministicLocalVideoAdapter(
+                    clock=deterministic.clock,
+                    capability_ids=("manual_import",),
+                    width=1080,
+                    height=1920,
+                    fps=30,
+                    duration_seconds=6,
+                ),
+            )
+        ),
+        store=MaterialProductionStore(
+            project_file.with_name("requirements.production.json")
+        ),
+        catalog=MaterialCatalogStore(
+            project_file.with_name(
+                "requirements.material-catalog.json"
+            ),
+            media_root=project_file.parent / "materials",
+        ),
+        staging_root=project_file.parent / "material_staging",
+        project_id=materials.project_id,
+        clock=deterministic.clock,
+        id_factory=deterministic.identifier,
+    )
     product = ProductionEntryService(
         director=agent,
         director_store=director_store,
@@ -535,6 +570,7 @@ def test_product_entry_reviews_and_confirms_material_requirements(no_material):
         material_requirements=materials,
         creation_planning_agent=creation_agent,
         creation_planning=creation_service,
+        material_production=material_production,
         clock=deterministic.clock,
         id_factory=deterministic.identifier,
     )
@@ -610,4 +646,93 @@ def test_product_entry_reviews_and_confirms_material_requirements(no_material):
     )
     assert production_confirmed.view.state == "production_plan_confirmed"
     assert production_confirmed.view.creation_planning["state"] == "confirmed"
+    started = product.command(
+        ProductEntryCommand(
+            request_id="request_material_product_06",
+            session_id=product.session_id,
+            project_id=product.project_id,
+            expected_revision=production_confirmed.view.revision,
+            action="start_material_production",
+            actor_id="local_user",
+            target_id=production_confirmed.view.latest_result[
+                "confirmation_id"
+            ],
+        )
+    )
+    assert started.view.state == "material_awaiting_review"
+    artifact_id = started.view.material_production["artifacts"][0][
+        "artifact_id"
+    ]
+    rejected = product.command(
+        ProductEntryCommand(
+            request_id="request_material_product_07",
+            session_id=product.session_id,
+            project_id=product.project_id,
+            expected_revision=started.view.revision,
+            action="reject_material_artifact",
+            actor_id="local_user",
+            target_id=artifact_id,
+        )
+    )
+    assert rejected.view.state == "material_production_partial"
+    assert rejected.view.allowed_actions == ("retry_material_job",)
+    job_id = rejected.view.material_production["jobs"][0]["job_id"]
+    retried = product.command(
+        ProductEntryCommand(
+            request_id="request_material_product_08",
+            session_id=product.session_id,
+            project_id=product.project_id,
+            expected_revision=rejected.view.revision,
+            action="retry_material_job",
+            actor_id="local_user",
+            target_id=job_id,
+        )
+    )
+    assert retried.view.state == "material_awaiting_review"
+    retry_artifact = next(
+        item
+        for item in retried.view.material_production["artifacts"]
+        if item["decision"] is None
+    )
+    accepted = product.command(
+        ProductEntryCommand(
+            request_id="request_material_product_09",
+            session_id=product.session_id,
+            project_id=product.project_id,
+            expected_revision=retried.view.revision,
+            action="accept_material_artifact",
+            actor_id="local_user",
+            target_id=retry_artifact["artifact_id"],
+        )
+    )
+    assert accepted.view.state == "material_production_succeeded"
+    assert accepted.view.material_production["catalog_revision"] == 1
+    run_id = accepted.view.material_production["runs"][-1]["run_id"]
+    with pytest.raises(ValueError, match="Exact succeeded run"):
+        product.command(
+            ProductEntryCommand(
+                request_id="request_material_product_wrong_run",
+                session_id=product.session_id,
+                project_id=product.project_id,
+                expected_revision=accepted.view.revision,
+                action="return_to_director",
+                actor_id="local_user",
+                target_id="production_run_from_another_session",
+            )
+        )
+    returned = product.command(
+        ProductEntryCommand(
+            request_id="request_material_product_10",
+            session_id=product.session_id,
+            project_id=product.project_id,
+            expected_revision=accepted.view.revision,
+            action="return_to_director",
+            actor_id="local_user",
+            target_id=run_id,
+        )
+    )
+    assert returned.view.state == "returned_to_director"
+    assert returned.view.latest_result["accepted_material_ids"][0].startswith(
+        "source_"
+    )
     assert project_file.read_bytes() == before

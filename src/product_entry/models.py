@@ -57,6 +57,13 @@ ProductAction = Literal[
     "confirm_production_plan",
     "reject_production_plan",
     "withdraw_production_plan",
+    "start_material_production",
+    "poll_material_production",
+    "cancel_material_job",
+    "retry_material_job",
+    "accept_material_artifact",
+    "reject_material_artifact",
+    "return_to_director",
 ]
 
 
@@ -226,6 +233,14 @@ class ProductEntryView(ProductEntryModel):
         "production_plan_confirmed",
         "production_plan_rejected",
         "production_plan_withdrawn",
+        "material_production_running",
+        "material_awaiting_review",
+        "material_production_succeeded",
+        "material_production_partial",
+        "material_production_failed",
+        "material_production_recovery_required",
+        "material_production_cancelled",
+        "returned_to_director",
         "reviewed",
         "confirmed",
         "rejected",
@@ -245,10 +260,12 @@ class ProductEntryView(ProductEntryModel):
     workflow: dict[str, Any]
     material_requirements: dict[str, Any] | None = None
     creation_planning: dict[str, Any] | None = None
+    material_production: dict[str, Any] | None = None
     latest_result: dict[str, Any] | None = None
     allowed_actions: tuple[ProductAction, ...] = ()
     limitations: tuple[str, ...] = (
-        "Confirmed material requirements can be production-planned but not produced yet.",
+        "Online generation providers are not configured by default.",
+        "Only validated and explicitly accepted artifacts enter the material catalog.",
         "A Director proposal is not user confirmation.",
         "Execution is delegated only to the constrained Editing Agent.",
         "The browser cannot call skills or mutate timeline/media directly.",

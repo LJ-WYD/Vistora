@@ -30,6 +30,13 @@ from material_requirements import (
     MaterialRequirementsService,
     MaterialRequirementsStore,
 )
+from material_production import (
+    AdapterRegistry,
+    ManualImportAdapter,
+    MaterialCatalogStore,
+    MaterialProductionOrchestrator,
+    MaterialProductionStore,
+)
 
 from .service import ProductionEntryService
 from .store import ProductEntryStore
@@ -38,7 +45,10 @@ from .store import ProductEntryStore
 DEFAULT_PRODUCT_SESSION_ID = "session_local_product"
 
 
-def _material_facts(snapshot) -> tuple[DirectorMaterialFact, ...]:
+def _material_facts(
+    snapshot,
+    catalog_entries=(),
+) -> tuple[DirectorMaterialFact, ...]:
     by_source: dict[str, dict[str, Any]] = {}
     for track in snapshot.tracks:
         for clip in track.clips:
@@ -83,7 +93,37 @@ def _material_facts(snapshot) -> tuple[DirectorMaterialFact, ...]:
                 evidence=(evidence,),
             )
         )
-    return tuple(facts)
+    for entry in sorted(
+        catalog_entries,
+        key=lambda item: item.material_id,
+    ):
+        evidence = SourceEvidenceReference(
+            evidence_id=f"evidence_catalog_{entry.material_id[7:]}",
+            material_id=entry.material_id,
+            locator=WholeMaterialLocator(),
+            description=(
+                "Validated, explicitly accepted material catalog entry."
+            ),
+        )
+        facts.append(
+            DirectorMaterialFact(
+                material_id=entry.material_id,
+                media_kind=(
+                    "audio" if entry.media_kind == "audio" else "video"
+                ),
+                display_name=entry.display_name,
+                source_reference=entry.source_uri,
+                duration_seconds=entry.duration_seconds,
+                width=entry.width,
+                height=entry.height,
+                has_audio=entry.has_audio,
+                observation_status="observed",
+                evidence=(evidence,),
+            )
+        )
+    return tuple(
+        sorted(facts, key=lambda item: item.material_id)
+    )
 
 
 def build_current_product_entry(
@@ -100,14 +140,21 @@ def build_current_product_entry(
         timeline_manager.PROJECT_FILE,
         session_id=session_id,
     )
+    catalog_store = MaterialCatalogStore.for_project_file(
+        timeline_manager.PROJECT_FILE
+    )
 
     def context_provider():
         snapshot = TimelineSnapshotService.snapshot_current()
+        catalog = catalog_store.load(project_id=initial.project_id)
         return (
             DirectorContextService.build(
                 snapshot,
                 registry,
-                materials=_material_facts(snapshot),
+                materials=_material_facts(
+                    snapshot,
+                    catalog.entries,
+                ),
             ),
             snapshot,
         )
@@ -143,7 +190,10 @@ def build_current_product_entry(
                 CapabilityRequirement(
                     capability_id="manual_import",
                     capability_kind="manual_import",
-                    availability="available",
+                    availability="unconfigured",
+                    limitation=(
+                        "No secure local import-token resolver is configured."
+                    ),
                 ),
                 CapabilityRequirement(
                     capability_id="local_capture",
@@ -192,6 +242,25 @@ def build_current_product_entry(
         service=creation_planning,
         capability_provider=capability_provider,
     )
+    production = MaterialProductionOrchestrator(
+        creation_planning=creation_planning,
+        adapters=AdapterRegistry(
+            (
+                ManualImportAdapter(
+                    lambda _token: None,
+                    configured=False,
+                ),
+            ),
+        ),
+        store=MaterialProductionStore.for_project_file(
+            timeline_manager.PROJECT_FILE
+        ),
+        catalog=catalog_store,
+        staging_root=(
+            catalog_store.path.parent / "material_staging"
+        ),
+        project_id=initial.project_id,
+    )
     return ProductionEntryService(
         director=director,
         director_store=director_store,
@@ -205,6 +274,7 @@ def build_current_product_entry(
         material_requirements=material_requirements,
         creation_planning_agent=creation_agent,
         creation_planning=creation_planning,
+        material_production=production,
     )
 
 

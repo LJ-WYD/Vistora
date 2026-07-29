@@ -61,6 +61,12 @@ src/
     models.py                Production plan/review/confirmation contracts
     service.py               Exact review and independent decision boundary
     store.py                 Hash-chained creation-planning ledger
+  material_production/
+    models.py                Versioned adapter/job/artifact/catalog contracts
+    adapters.py              Provider-neutral registry and local test/import adapters
+    validation.py            Staging confinement and ffprobe quality checks
+    service.py               Confirmed orchestration and human acceptance
+    store.py                 Hash-chained run ledger and atomic material catalog
   contracts/
     models.py                Versioned plan, confirmation, execution,
                               project, manual-edit, and tool envelopes
@@ -120,9 +126,11 @@ tests/
                               redaction, and round-trip checks
   test_workflow.py             Ledger integrity, gates, execution, recovery,
                                rollback, history API, and redaction checks
+  test_material_production.py  Confirmation, adapters, staging, catalog,
+                               recovery, tamper, and boundary checks
 ```
 
-The repository now contains production Director, Creation Planning, and constrained Editing Agent boundaries plus a framework-free loopback product entry. The Director can define no-material requirements; after their separate confirmation the Creation Planning Agent can propose and obtain separate confirmation for a production plan. Actual media creation is not implemented yet. There is still no desktop GUI or remote API server. Transient browser state is reconstructed from separate append-only Director, material-requirements, creation-planning, product-session, provenance, and workflow stores.
+The repository now contains production Director, Creation Planning, Material Production, and constrained Editing Agent boundaries plus a framework-free loopback product entry. The Director can define no-material requirements; after their separate confirmation the Creation Planning Agent can propose a production plan; after a second independent confirmation the Material Production Orchestrator can use configured provider-neutral adapters, validate staged artifacts, and require human acceptance before catalog registration. No online provider is configured by default. There is still no desktop GUI or remote API server. Transient browser state is reconstructed from separate append-only Director, material-requirements, creation-planning, material-production, catalog, product-session, provenance, and workflow stores.
 
 ## Implemented runtime
 
@@ -262,8 +270,52 @@ separate immutable confirmation/rejection, and withdrawal in an atomically
 replaced hash-chained `*.creation-planning.json` sidecar. It performs no media
 production, provider invocation, material import, timeline mutation,
 confirmation on behalf of the user, or editing execution. The product entry
-can display and decide this plan, but actual production remains a later
-boundary.
+can display and decide this plan. Only the separately confirmed production
+boundary below may consume it.
+
+### Material-production and catalog boundary
+
+`src/material_production/` is the constrained provider/application boundary.
+`MaterialProductionOrchestrator.prepare_request` resolves an exact confirmed
+production plan and freezes the creation-planning ledger revision, material
+confirmation, plan/review/capability digests, and a sorted versioned adapter
+registry with input/result schema digests. Starting a run revalidates all of
+those bindings before any adapter submission.
+
+Adapters expose provider-neutral `submit`, `poll`, `cancel`, and result
+contracts with opaque job/provider references, idempotency keys, attempts,
+progress, explicit cost state, timeout/rate-limit/failure/partial/recovery
+states, and bounded capability metadata. Domain contracts contain no vendor
+SDK types. The production factory registers only a truthful, unconfigured
+manual-import adapter. The deterministic local video adapter is exported for
+tests only and is never registered by the production factory. No credentials
+are collected or submitted.
+
+Artifacts first land below an ignored project-scoped staging root. Validation
+rejects traversal and verifies request/task/requirement linkage, size/hash/
+MIME, container, codecs, duration, dimensions, frame rate, and audio metadata.
+A failed artifact cannot be accepted. A passing artifact still remains staged
+until a separate human decision. Acceptance atomically registers it in the
+versioned `MaterialCatalog` with an opaque `source_*` ID, production
+provenance, validation and decision IDs, origin, license/usage limitations,
+and explicit cost state. The append-only production ledger and catalog both
+use digest integrity and atomic replacement; tampering fails closed.
+
+Only accepted catalog entries are projected into the Director's next detached
+read context. They use browser-safe `material://source_*` references and
+whole-material evidence; no filesystem path enters the Director ledger or
+browser API. Catalog acceptance does not add a clip. A subsequent Director
+proposal must still pass deterministic review, independent confirmation, and
+the Editing Agent. `VideoAddClipSkill`, at the atomic mutation boundary,
+resolves an accepted catalog URI to its managed file; unknown or unaccepted
+URIs fail.
+
+The loopback product state machine adds production start/poll/cancel/retry,
+artifact accept/reject, catalog status, and return-to-Director actions. The
+browser calls only this application service and receives path-redacted views.
+Real online AI adapters, provider credentials, automatic license approval,
+external artifact cleanup, complex AI effects, and more mature atomic editing
+capabilities remain unimplemented.
 
 ### Production product-entry composition
 
@@ -524,13 +576,26 @@ The static boundary check complements the dedicated production Director, confirm
 
 `tests/test_plan_review.py` covers v1 round trips/digests, deterministic changes, exact snapshot and registry freshness, invalid/unregistered/unsupported steps, explicit unsupported reorder behavior, additions/removals/speed/export consequences, evidence and legacy provenance linkage, path redaction, revision-aware queries, GET-only browser delivery, no mutation, and import/call boundaries.
 
+`tests/test_material_production.py` covers exact production confirmation and
+adapter-registry binding, idempotent submission, staging traversal rejection,
+ffprobe validation, corruption, explicit acceptance/rejection, catalog
+registration, retry/cancel/restart/partial states, ledger/catalog tamper,
+browser path redaction, accepted-only catalog URI resolution, and the absence
+of timeline/skill/workflow mutation imports from the orchestrator package.
+
 ### Reference main-workflow regression
 
-`tests/reference_workflow.py` is the deterministic reference for the implemented separated Director, confirmation, and Editing boundaries:
+`tests/reference_workflow.py` is the deterministic reference for the implemented no-material-to-editing loop:
 
 ```text
-generated 320x180/24 fps silent source
-  -> fixed analyzed media facts
+empty synthetic project
+  -> Director material-requirements plan
+  -> explicit requirements confirmation
+  -> CreationPlanningAgent production plan
+  -> explicit production-plan confirmation
+  -> deterministic test-only provider job
+  -> staged ffprobe validation and explicit artifact acceptance
+  -> versioned MaterialCatalog entry and opaque material evidence
   -> deterministic fake adapter through production DirectorAgent
   -> versioned creative brief and DirectorPlan proposal
   -> exact detached pre-confirmation PlanDiffDocument
@@ -560,7 +625,12 @@ Or run the harness directly to print its trace summary:
 python tests/reference_workflow.py
 ```
 
-This is deterministic fixture orchestration around the production agent boundaries, not a real external-model call or a production UI. Source generation and `ffprobe` are test setup/verification; the Director stops at review, explicit confirmation remains separate, and every timeline or exported-media mutation is dispatched through the registered atomic skills by the confirmed workflow/Editing boundary.
+This is deterministic fixture orchestration around the production boundaries,
+not a real external-model/provider call. Fake source creation is isolated to
+the test adapter; `ffprobe` verifies it before explicit acceptance. Every
+confirmation remains separate, the Director stops at review, accepted material
+is not auto-inserted, and every timeline/export mutation is dispatched through
+registered atomic skills by the confirmed workflow/Editing boundary.
 
 ## Target contracts
 

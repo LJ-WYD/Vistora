@@ -99,6 +99,10 @@ class DirectorMaterialFact(DirectorModel):
     ]
     media_kind: Literal["video", "audio"]
     display_name: str = Field(min_length=1)
+    source_reference: str | None = Field(
+        default=None,
+        pattern=r"^material://source_[0-9a-f]{16}$",
+    )
     duration_seconds: FiniteFloat | None = Field(default=None, gt=0)
     width: int | None = Field(default=None, gt=0)
     height: int | None = Field(default=None, gt=0)
@@ -122,6 +126,12 @@ class DirectorMaterialFact(DirectorModel):
         ids = [item.evidence_id for item in self.evidence]
         if len(ids) != len(set(ids)):
             raise ValueError("Material evidence IDs must be unique")
+        if (
+            self.source_reference is not None
+            and self.source_reference
+            != f"material://{self.material_id}"
+        ):
+            raise ValueError("Material source reference crosses identity")
         return self
 
 
