@@ -27,6 +27,8 @@ venv/
 *.director.json.lock
 *.product.json
 *.product.json.lock
+*.materials.json
+*.materials.json.lock
 video/
 output/
 tests/test_data/*

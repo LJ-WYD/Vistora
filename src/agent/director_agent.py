@@ -19,6 +19,7 @@ from director import (
     DirectorAdapterTimeout,
     DirectorError,
     DirectorMaterialFact,
+    CreativeBriefReference,
     DirectorProposalResult,
     DirectorReadContext,
     DirectorReasoningAdapter,
@@ -28,6 +29,10 @@ from director import (
     DirectorSessionRecord,
     DirectorStore,
     DirectorTurnReport,
+    MaterialRequirementsChange,
+    MaterialRequirementsPlan,
+    MaterialRequirementsProposal,
+    MaterialRequirementsReview,
     digest_json,
 )
 from plan_review import (
@@ -400,11 +405,6 @@ class DirectorAgent:
                 "The request requires no-material generation or a later "
                 "creative-production stage that is not implemented."
             )
-        elif not context.materials:
-            readiness = "needs_materials"
-            reasons.append(
-                "No observed source materials are available to ground a plan."
-            )
         elif missing or content.unresolved_questions:
             readiness = "needs_clarification"
             if missing:
@@ -416,6 +416,18 @@ class DirectorAgent:
                     "Unresolved questions remain: "
                     + "; ".join(content.unresolved_questions)
                 )
+        elif not content.delivery_requirements:
+            readiness = "needs_clarification"
+            reasons.append("Delivery requirements are missing.")
+        elif not content.acceptance_criteria:
+            readiness = "needs_clarification"
+            reasons.append("Acceptance criteria are missing.")
+        elif not context.materials:
+            readiness = "ready_for_material_requirements"
+            reasons.append(
+                "The creative brief is complete and no observed materials "
+                "exist; a material requirements proposal may be reviewed."
+            )
         elif not content.material_ids:
             readiness = "needs_clarification"
             reasons.append(
@@ -426,12 +438,6 @@ class DirectorAgent:
             reasons.append(
                 "The brief has not bound any observed source evidence."
             )
-        elif not content.delivery_requirements:
-            readiness = "needs_clarification"
-            reasons.append("Delivery requirements are missing.")
-        elif not content.acceptance_criteria:
-            readiness = "needs_clarification"
-            reasons.append("Acceptance criteria are missing.")
         else:
             readiness = "ready_to_plan"
             reasons.append(
@@ -473,6 +479,11 @@ class DirectorAgent:
                 for entry in ledger.entries
                 if entry.record.report.proposal is not None
             }
+            known.update(
+                entry.record.report.material_requirements.proposal_id
+                for entry in ledger.entries
+                if entry.record.report.material_requirements is not None
+            )
             if output.withdraw_proposal_id not in known:
                 raise ValueError("Director withdrawal references unknown proposal")
             return self._report(
@@ -484,6 +495,34 @@ class DirectorAgent:
                 brief=brief,
                 assistant_message=output.assistant_message,
                 withdrawn_proposal_id=output.withdraw_proposal_id,
+            )
+        if brief.readiness == "ready_for_material_requirements":
+            if output.response_kind != "propose_material_requirements":
+                return self._report(
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    turn_index=turn_index,
+                    context=context,
+                    status="ready_for_material_requirements",
+                    brief=brief,
+                    assistant_message=output.assistant_message,
+                    clarification_questions=output.clarification_questions,
+                )
+            material_requirements = self._material_requirements(
+                ledger=ledger,
+                context=context,
+                brief=brief,
+                output=output,
+            )
+            return self._report(
+                session_id=session_id,
+                turn_id=turn_id,
+                turn_index=turn_index,
+                context=context,
+                status="material_requirements_ready",
+                brief=brief,
+                assistant_message=output.assistant_message,
+                material_requirements=material_requirements,
             )
         if brief.readiness != "ready_to_plan":
             return self._report(
@@ -636,6 +675,125 @@ class DirectorAgent:
             created_at=self._clock(),
         )
 
+    def _material_requirements(
+        self,
+        *,
+        ledger: DirectorSessionLedger,
+        context: DirectorReadContext,
+        brief: CreativeBriefVersion,
+        output: DirectorReasoningOutput,
+    ) -> MaterialRequirementsProposal:
+        draft = output.material_requirements_draft
+        assert draft is not None
+        if context.materials:
+            raise ValueError(
+                "Material requirements proposal requires no observed materials"
+            )
+        previous = [
+            entry.record.report.material_requirements
+            for entry in ledger.entries
+            if entry.record.report.material_requirements is not None
+        ]
+        plan_id = (
+            previous[-1].plan.plan_id
+            if previous
+            else self._id_factory("material_requirements_plan")
+        )
+        version = previous[-1].plan.plan_version + 1 if previous else 1
+        no_material_fact_digest = digest_json(
+            {
+                "snapshot_ref": context.snapshot_ref.model_dump(mode="json"),
+                "material_ids": [],
+            }
+        )
+        plan = MaterialRequirementsPlan(
+            plan_id=plan_id,
+            plan_version=version,
+            brief_ref=CreativeBriefReference.from_brief(brief),
+            no_material_snapshot_ref=context.snapshot_ref,
+            no_material_fact_digest=no_material_fact_digest,
+            created_at=self._clock(),
+            rationale=draft.rationale,
+            items=draft.items,
+            global_acceptance_criteria=draft.global_acceptance_criteria,
+            assumptions=draft.assumptions,
+            unresolved_constraints=draft.unresolved_constraints,
+        )
+        before = (
+            {item.item_id: item for item in previous[-1].plan.items}
+            if previous
+            else {}
+        )
+        after = {item.item_id: item for item in plan.items}
+        changes = []
+        for item_id in sorted(before.keys() | after.keys()):
+            old = before.get(item_id)
+            new = after.get(item_id)
+            if old is None:
+                change_type = "added"
+                summary = f"Add required {new.asset_type} material."
+            elif new is None:
+                change_type = "removed"
+                summary = f"Remove planned {old.asset_type} material."
+            elif old == new:
+                continue
+            else:
+                change_type = "changed"
+                summary = f"Revise required {new.asset_type} material."
+            changes.append(
+                MaterialRequirementsChange(
+                    change_id=self._id_factory("material_change"),
+                    change_type=change_type,
+                    item_id=item_id,
+                    before_digest=(
+                        digest_json(old.model_dump(mode="json"))
+                        if old is not None
+                        else None
+                    ),
+                    after_digest=(
+                        digest_json(new.model_dump(mode="json"))
+                        if new is not None
+                        else None
+                    ),
+                    summary=summary,
+                )
+            )
+        if not changes:
+            raise ValueError(
+                "Material requirements revision contains no changes"
+            )
+        review_values = {
+            "schema_version": "1.0.0",
+            "schema_name": "vistora.material-requirements-review",
+            "review_id": self._id_factory("material_review"),
+            "plan_id": plan.plan_id,
+            "plan_version": plan.plan_version,
+            "plan_digest": plan.digest(),
+            "brief_ref": plan.brief_ref,
+            "snapshot_ref": plan.no_material_snapshot_ref,
+            "previous_plan_digest": (
+                previous[-1].plan.digest() if previous else None
+            ),
+            "changes": tuple(changes),
+            "created_at": self._clock(),
+        }
+        shell = MaterialRequirementsReview.model_construct(
+            **review_values,
+            review_digest="sha256:" + ("0" * 64),
+        )
+        review = MaterialRequirementsReview(
+            **review_values,
+            review_digest=digest_json(
+                shell.model_dump(mode="json", exclude={"review_digest"})
+            ),
+        )
+        return MaterialRequirementsProposal(
+            proposal_id=self._id_factory("material_proposal"),
+            plan=plan,
+            review=review,
+            created_at=self._clock(),
+        )
+
     @staticmethod
     def _preview_materials(
         materials: tuple[DirectorMaterialFact, ...],
@@ -674,6 +832,7 @@ class DirectorAgent:
         assistant_message: str,
         clarification_questions: tuple[str, ...] = (),
         proposal: DirectorProposalResult | None = None,
+        material_requirements: MaterialRequirementsProposal | None = None,
         withdrawn_proposal_id: str | None = None,
     ) -> DirectorTurnReport:
         return DirectorTurnReport(
@@ -688,6 +847,7 @@ class DirectorAgent:
             assistant_message=assistant_message,
             clarification_questions=clarification_questions,
             proposal=proposal,
+            material_requirements=material_requirements,
             withdrawn_proposal_id=withdrawn_proposal_id,
             finished_at=self._clock(),
         )

@@ -49,6 +49,10 @@ ProductAction = Literal[
     "rollback_confirm",
     "rollback_reject",
     "rollback_apply",
+    "persist_material_review",
+    "confirm_materials",
+    "reject_materials",
+    "withdraw_materials",
 ]
 
 
@@ -207,6 +211,11 @@ class ProductEntryView(ProductEntryModel):
         "needs_clarification",
         "needs_materials",
         "proposal_ready",
+        "material_requirements_ready",
+        "material_reviewed",
+        "materials_confirmed",
+        "materials_rejected",
+        "materials_withdrawn",
         "reviewed",
         "confirmed",
         "rejected",
@@ -224,10 +233,11 @@ class ProductEntryView(ProductEntryModel):
     director: dict[str, Any]
     review: dict[str, Any] | None = None
     workflow: dict[str, Any]
+    material_requirements: dict[str, Any] | None = None
     latest_result: dict[str, Any] | None = None
     allowed_actions: tuple[ProductAction, ...] = ()
     limitations: tuple[str, ...] = (
-        "Only existing observed materials are supported.",
+        "No-material requirements can be reviewed, but not produced yet.",
         "A Director proposal is not user confirmation.",
         "Execution is delegated only to the constrained Editing Agent.",
         "The browser cannot call skills or mutate timeline/media directly.",

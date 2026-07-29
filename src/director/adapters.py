@@ -56,7 +56,10 @@ class OpenAICompatibleDirectorAdapter:
             "Return one JSON object matching the supplied schema. Use only "
             "material/evidence IDs present in the read context. Ask concise "
             "questions when creative constraints are missing. Do not invent "
-            "unobserved media facts."
+            "unobserved media facts. When the brief is complete but the "
+            "context has no materials, propose a structured material "
+            "requirements draft describing what is needed and why; do not "
+            "claim those planned items exist or attempt to generate them."
         )
         payload = {
             "request": request.model_dump(mode="json"),

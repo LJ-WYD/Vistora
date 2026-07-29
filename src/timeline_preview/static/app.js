@@ -459,6 +459,20 @@ function renderDirector() {
       ),
     );
   }
+  for (const proposal of history.material_requirements || []) {
+    ui.directorTurns.append(
+      workflowEvent(
+        `Material requirements ${proposal.plan_id} v${proposal.plan_version}`,
+        "reviewable",
+        [
+          `${proposal.item_count} required material item(s)`,
+          proposal.plan_digest,
+          proposal.review_digest,
+          "Planned materials are not existing evidence.",
+        ],
+      ),
+    );
+  }
   ui.directorLimitations.replaceChildren(
     ...history.limitations.map((item) => textElement("li", "", item)),
   );
@@ -478,6 +492,8 @@ function productTarget(action, view) {
   const rollbackReview = latest(workflow.rollback_reviews);
   const rollbackConfirmation = [...(workflow.rollback_confirmations || [])]
     .reverse().find((item) => item.decision === "confirmed");
+  const material = view.material_requirements || {};
+  const materialProposal = latest(material.proposals);
   return {
     persist_review: directorProposal?.proposal_id,
     confirm: review?.review_id,
@@ -487,6 +503,11 @@ function productTarget(action, view) {
     rollback_confirm: rollbackReview?.review_id,
     rollback_reject: rollbackReview?.review_id,
     rollback_apply: rollbackConfirmation?.confirmation_id,
+    persist_material_review: materialProposal?.proposal_id ||
+      latest(view.director?.material_requirements)?.proposal_id,
+    confirm_materials: materialProposal?.review_id,
+    reject_materials: materialProposal?.review_id,
+    withdraw_materials: materialProposal?.proposal_id,
   }[action] || null;
 }
 
@@ -500,6 +521,10 @@ function productActionLabel(action) {
     rollback_confirm: "Confirm timeline restore",
     rollback_reject: "Reject timeline restore",
     rollback_apply: "Apply confirmed restore",
+    persist_material_review: "Review material requirements",
+    confirm_materials: "Confirm material requirements",
+    reject_materials: "Reject material requirements",
+    withdraw_materials: "Withdraw material proposal",
   }[action] || action;
 }
 
@@ -527,6 +552,26 @@ function renderProduct() {
       ],
     ),
   );
+  const materialProposal = latest(
+    view.material_requirements?.proposals ||
+      view.director?.material_requirements ||
+      [],
+  );
+  if (materialProposal) {
+    ui.productSummary.append(
+      workflowEvent(
+        `Material requirements v${materialProposal.plan_version}`,
+        view.material_requirements?.state || "reviewable",
+        [
+          ...materialProposal.items.map(
+            (item) =>
+              `${item.priority} · ${item.asset_type} · ${item.purpose}`,
+          ),
+          "Planned items remain non-existent until a later production stage.",
+        ],
+      ),
+    );
+  }
   ui.productActions.replaceChildren();
   for (const action of view.allowed_actions) {
     if (action === "director_turn") {

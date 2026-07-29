@@ -21,6 +21,7 @@ class DirectorHistoryView(DirectorModel):
     latest_brief: dict[str, Any] | None = None
     turns: tuple[dict[str, Any], ...] = ()
     proposals: tuple[dict[str, Any], ...] = ()
+    material_requirements: tuple[dict[str, Any], ...] = ()
     limitations: tuple[str, ...] = (
         "Director proposals are not user confirmations.",
         "No-material creative planning or media generation is not implemented.",
@@ -35,6 +36,7 @@ class DirectorHistoryQuery:
     def project(ledger: DirectorSessionLedger) -> DirectorHistoryView:
         turns = []
         proposals = []
+        material_requirements = []
         latest_brief = None
         latest_status = "empty"
         for entry in ledger.entries:
@@ -112,6 +114,37 @@ class DirectorHistoryQuery:
                         ),
                     }
                 )
+            if report.material_requirements is not None:
+                proposal = report.material_requirements
+                material_requirements.append(
+                    {
+                        "proposal_id": proposal.proposal_id,
+                        "plan_id": proposal.plan.plan_id,
+                        "plan_version": proposal.plan.plan_version,
+                        "plan_digest": proposal.plan.digest(),
+                        "review_id": proposal.review.review_id,
+                        "review_digest": proposal.review.review_digest,
+                        "brief_version": (
+                            proposal.plan.brief_ref.brief_version
+                        ),
+                        "item_count": len(proposal.plan.items),
+                        "items": tuple(
+                            {
+                                "item_id": item.item_id,
+                                "asset_type": item.asset_type,
+                                "purpose": item.purpose,
+                                "narrative_position": (
+                                    item.narrative_position
+                                ),
+                                "priority": item.priority,
+                                "acceptance_criteria": (
+                                    item.acceptance_criteria
+                                ),
+                            }
+                            for item in proposal.plan.items
+                        ),
+                    }
+                )
         return DirectorHistoryView(
             session_id=ledger.session_id,
             project_id=ledger.project_id,
@@ -121,4 +154,5 @@ class DirectorHistoryQuery:
             latest_brief=latest_brief,
             turns=tuple(turns),
             proposals=tuple(proposals),
+            material_requirements=tuple(material_requirements),
         )

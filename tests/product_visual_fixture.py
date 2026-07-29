@@ -32,6 +32,16 @@ def _view(state: str) -> ProductEntryView:
         "dialogue": ("director_turn",),
         "needs_clarification": ("director_turn",),
         "proposal_ready": ("director_turn", "persist_review"),
+        "material_requirements_ready": (
+            "director_turn",
+            "persist_material_review",
+        ),
+        "material_reviewed": (
+            "confirm_materials",
+            "reject_materials",
+            "withdraw_materials",
+        ),
+        "materials_confirmed": (),
         "confirmed": ("execute",),
         "succeeded": ("rollback_review",),
         "error": ("director_turn",),
@@ -40,6 +50,9 @@ def _view(state: str) -> ProductEntryView:
         "dialogue": "empty",
         "needs_clarification": "needs_clarification",
         "proposal_ready": "proposal_ready",
+        "material_requirements_ready": "material_requirements_ready",
+        "material_reviewed": "material_requirements_ready",
+        "materials_confirmed": "material_requirements_ready",
         "confirmed": "proposal_ready",
         "succeeded": "proposal_ready",
         "error": "model_error",
@@ -64,6 +77,39 @@ def _view(state: str) -> ProductEntryView:
                     }
                 ]
                 if state not in {"dialogue", "needs_clarification", "error"}
+                else []
+            ),
+            "material_requirements": (
+                [
+                    {
+                        "proposal_id": "material_proposal_visual",
+                        "plan_id": "material_plan_visual",
+                        "plan_version": 1,
+                        "plan_digest": "sha256:" + "6" * 64,
+                        "review_id": "material_review_visual",
+                        "review_digest": "sha256:" + "7" * 64,
+                        "brief_version": 1,
+                        "item_count": 1,
+                        "items": [
+                            {
+                                "item_id": "material_need_visual",
+                                "asset_type": "video_shot",
+                                "purpose": "Show the product interaction.",
+                                "narrative_position": "Proof beat.",
+                                "priority": "required",
+                                "acceptance_criteria": [
+                                    "The UI interaction is readable."
+                                ],
+                            }
+                        ],
+                    }
+                ]
+                if state
+                in {
+                    "material_requirements_ready",
+                    "material_reviewed",
+                    "materials_confirmed",
+                }
                 else []
             ),
         },
@@ -93,6 +139,54 @@ def _view(state: str) -> ProductEntryView:
             "rollback_reviews": [],
             "rollback_confirmations": [],
         },
+        material_requirements=(
+            {
+                "state": (
+                    "reviewable"
+                    if state == "material_reviewed"
+                    else "confirmed"
+                ),
+                "proposals": [
+                    {
+                        "proposal_id": "material_proposal_visual",
+                        "plan_id": "material_plan_visual",
+                        "plan_version": 1,
+                        "plan_digest": "sha256:" + "6" * 64,
+                        "review_id": "material_review_visual",
+                        "review_digest": "sha256:" + "7" * 64,
+                        "brief_version": 1,
+                        "items": [
+                            {
+                                "item_id": "material_need_visual",
+                                "asset_type": "video_shot",
+                                "purpose": "Show the product interaction.",
+                                "narrative_position": "Proof beat.",
+                                "priority": "required",
+                                "acceptance_criteria": [
+                                    "The UI interaction is readable."
+                                ],
+                            }
+                        ],
+                    }
+                ],
+                "decisions": (
+                    [
+                        {
+                            "confirmation_id": (
+                                "material_confirmation_visual"
+                            ),
+                            "review_id": "material_review_visual",
+                            "decision": "confirmed",
+                            "confirmed_by": "local_user",
+                        }
+                    ]
+                    if state == "materials_confirmed"
+                    else []
+                ),
+            }
+            if state in {"material_reviewed", "materials_confirmed"}
+            else None
+        ),
         latest_result={"status": state},
         allowed_actions=allowed,
     )
@@ -106,6 +200,9 @@ def main() -> None:
             "dialogue",
             "needs_clarification",
             "proposal_ready",
+            "material_requirements_ready",
+            "material_reviewed",
+            "materials_confirmed",
             "confirmed",
             "succeeded",
             "error",

@@ -51,6 +51,10 @@ src/
     store.py                 Hash-chained idempotency/session ledger
     service.py               Director/review/confirmation/Editing composition
     factory.py               Current-workspace production entry wiring
+  material_requirements/
+    models.py                Frozen requirement decisions and ledger records
+    store.py                 Hash-chained atomic requirements sidecar
+    service.py               Read-only review and explicit decision boundary
   contracts/
     models.py                Versioned plan, confirmation, execution,
                               project, manual-edit, and tool envelopes
@@ -112,7 +116,7 @@ tests/
                                rollback, history API, and redaction checks
 ```
 
-The repository now contains production Director and constrained Editing Agent boundaries plus a framework-free loopback product entry. There is still no desktop GUI, remote API server, or no-material creation pipeline. Transient browser state is reconstructed from separate append-only Director, product-session, provenance, and workflow stores.
+The repository now contains production Director and constrained Editing Agent boundaries plus a framework-free loopback product entry. The Director can define and obtain separate confirmation for no-material requirements, but production planning and actual creation are not implemented yet. There is still no desktop GUI or remote API server. Transient browser state is reconstructed from separate append-only Director, material-requirements, product-session, provenance, and workflow stores.
 
 ## Implemented runtime
 
@@ -198,7 +202,33 @@ The creative brief covers objective, audience, platform, target duration, style,
 
 The Agent rejects malformed or extra model fields, requested tool calls, secrets or absolute paths, unobserved evidence, cross-context IDs, unavailable/unsafe tools, stale snapshots, and registry-schema drift. Structured-output retries are bounded; provider timeout, provider failure, malformed output, and stale context remain explicit report states rather than being presented as successful reasoning. Session records persist only redacted user text and browser-safe domain data in a hash-chained, atomically replaced `*.director.json` sidecar with optimistic revision checks and tamper detection.
 
-The Director cannot create a user confirmation, import or call the Editing Agent or workflow service, dispatch a registered skill, write timeline/media, render/export, or roll back. `proposal_ready` means ready for review only. No-material creative planning, source generation, AI packaging, and richer atomic editing remain outside the implemented boundary.
+The Director cannot create a user confirmation, import or call the Editing Agent or workflow service, dispatch a registered skill, write timeline/media, render/export, or roll back. `proposal_ready` and `material_requirements_ready` mean ready for separate review only. Source production planning, generation, AI packaging, and richer atomic editing remain outside the implemented boundary.
+
+### No-material requirements boundary
+
+When the read context contains no observed materials, missing creative fields
+still produce `needs_clarification`. Once the objective, audience, platform,
+duration, style, narrative/pacing, delivery constraints, and acceptance
+criteria are complete, readiness becomes
+`ready_for_material_requirements`. A structured reasoning response may then
+propose a frozen `MaterialRequirementsPlan`; it may not propose a normal
+timeline-edit plan.
+
+The plan binds the exact creative-brief version/digest, the exact empty
+snapshot, and a canonical no-material fact digest. Its typed items cover video
+shots, audio, images, narration, and reference assets with purpose, narrative
+position, format/duration, continuity, must/must-not constraints, acceptance
+criteria, priority, dependencies, alternatives, and explicit known/unknown
+budget and deadline values. Planned IDs are not material IDs and are never
+inserted into source evidence.
+
+`src/material_requirements/` records proposals, deterministic item-level
+added/removed/changed reviews, separate immutable confirmations/rejections,
+and withdrawals. The hash-chained store rejects drift, replay, duplicate
+decisions, stale revision, unknown dependency, conflicting constraints, and
+tampering. It performs no generation, import, media write, timeline mutation,
+or Agent invocation. The production UI exposes only its path-safe checklist
+and explicit review/decision actions.
 
 ### Production product-entry composition
 

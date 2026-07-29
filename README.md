@@ -66,9 +66,9 @@ confirmation or execution.
 The browser never calls a skill or timeline manager. Director dialogue can only
 produce or revise a reviewed proposal. Persisting the review, confirming or
 rejecting it, running the Editing Agent, and reviewing/confirming rollback are
-separate product state transitions. The current production entry supports only
-materials already observed through the read context. If none exist it reports
-that materials must be planned first; it does not generate them.
+separate product state transitions. With no observed material, the same entry
+can review and independently confirm or reject a Director-authored material
+requirements plan. It does not plan production or generate media.
 
 Render a declarative timeline:
 
@@ -130,9 +130,30 @@ Provenance describes recorded history; the separate plan-review boundary below d
 
 `src/agent/director_agent.py` implements the production creative boundary. It accepts natural-language turns through a provider-neutral structured-reasoning adapter, reads only a detached timeline/material/provenance/tool-schema context, and persists an append-only, hash-chained Director session ledger. Every creative-brief version records the objective, audience, platform, duration, style, narrative and pacing, required and forbidden elements, delivery requirements, selected materials and evidence, assumptions, open questions, and acceptance criteria.
 
-The Agent deterministically gates each turn as `needs_clarification`, `needs_materials`, `ready_to_plan`, `proposal_ready`, `unsupported_next_stage`, `withdrawn`, `model_error`, or `stale_context`. It validates all model output against frozen schemas, rejects tool-call payloads, unobserved evidence, unsafe paths, unavailable tools, workflow-only tools, stale snapshots, and registry drift, and retries malformed structured output only within a configured bound. The bundled OpenAI-compatible adapter uses JSON-only responses and exposes no tool callback; tests and the reference workflow use deterministic adapters with no external model call.
+The Agent deterministically gates each turn as `needs_clarification`, `ready_for_material_requirements`, `ready_to_plan`, `material_requirements_ready`, `proposal_ready`, `unsupported_next_stage`, `withdrawn`, `model_error`, or `stale_context`. It validates all model output against frozen schemas, rejects tool-call payloads, unobserved evidence, unsafe paths, unavailable tools, workflow-only tools, stale snapshots, and registry drift, and retries malformed structured output only within a configured bound. The bundled OpenAI-compatible adapter uses JSON-only responses and exposes no tool callback; tests and the reference workflow use deterministic adapters with no external model call.
 
-This step supports the existing-material main path only. Missing material is reported honestly; no-material creative planning, media generation, AI packaging, and richer editing capabilities are not implemented. A `proposal_ready` result includes an exact `DirectorPlan`, proposed execution plan, and current step-8 diff review. It does not create a confirmation, call the Editing Agent, execute tools, export, or roll back.
+With existing material, a `proposal_ready` result includes an exact `DirectorPlan`, proposed execution plan, and current step-8 diff review. With no observed material, the Director first completes the same creative brief and then may produce a versioned `MaterialRequirementsPlan`: a reviewable list of required video, audio, image, narration, or reference assets and why each is needed. Neither result creates a confirmation, calls another Agent, executes tools, generates media, exports, or rolls back.
+
+## No-material requirements workflow
+
+`src/material_requirements/` persists the Director's no-material proposal,
+read-only review, explicit confirmation/rejection, revision, and withdrawal in
+a separate hash-chained sidecar. Each requirement records its purpose,
+narrative position, type, duration/format specifications, continuity, required
+and forbidden traits, acceptance criteria, priority, dependencies,
+alternatives, and budget/deadline constraints. Unknown budget or deadline is
+represented explicitly rather than guessed.
+
+The plan is bound to one creative-brief version/digest and the exact empty
+timeline snapshot/fact digest. A requirements revision produces deterministic
+added/removed/changed items. Snapshot drift, changed brief/plan/review digest,
+duplicate decision, stale revision, or ledger tampering fails closed. Planned
+items are never exposed as observed materials or source evidence.
+
+The `studio` UI shows the requirements checklist and offers separate Review,
+Confirm, Reject, and Withdraw actions. Confirmation only approves what
+materials are required. It does not generate them: production planning and
+provider execution remain later stages.
 
 `src/plan_review/` provides strict version `1.0.0` contracts and a deterministic read-only diff engine for the period before confirmation. A `PlanDiffRequest` binds an exact timeline snapshot ID/revision/digest, Director plan ID/version/digest, non-executable proposed execution-plan digest, and the exact registered tool-schema set. The engine validates proposed arguments with the current registry schemas, simulates supported semantics on detached clip data, and returns stable before/after changes, source-evidence links, provenance summaries, warnings, and net counts. Repeating the same request produces the same document and digest; snapshot or registry drift requires regeneration.
 

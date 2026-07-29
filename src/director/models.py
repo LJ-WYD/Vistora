@@ -209,6 +209,7 @@ class CreativeBriefInput(DirectorModel):
 Readiness = Literal[
     "needs_clarification",
     "needs_materials",
+    "ready_for_material_requirements",
     "ready_to_plan",
     "unsupported_next_stage",
 ]
@@ -247,6 +248,193 @@ class DirectorPlanDraft(DirectorModel):
     risks: tuple[str, ...] = ()
 
 
+class RequirementConstraint(DirectorModel):
+    status: Literal["known", "unknown", "not_applicable"]
+    value: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def value_matches_status(self) -> RequirementConstraint:
+        if self.status == "known" and self.value is None:
+            raise ValueError("Known requirement constraint needs a value")
+        if self.status != "known" and self.value is not None:
+            raise ValueError("Unknown/not-applicable constraint has no value")
+        return self
+
+
+class MaterialRequirementItem(DirectorModel):
+    item_id: StableId
+    asset_type: Literal[
+        "video_shot",
+        "audio",
+        "image",
+        "narration",
+        "reference_asset",
+    ]
+    purpose: str = Field(min_length=1)
+    narrative_position: str = Field(min_length=1)
+    duration_seconds: FiniteFloat | None = Field(default=None, gt=0)
+    aspect_ratio: str | None = Field(default=None, min_length=1)
+    width: int | None = Field(default=None, gt=0)
+    height: int | None = Field(default=None, gt=0)
+    fps: FiniteFloat | None = Field(default=None, gt=0)
+    audio_requirements: tuple[str, ...] = ()
+    continuity_requirements: tuple[str, ...] = ()
+    must_haves: tuple[str, ...] = ()
+    must_not_haves: tuple[str, ...] = ()
+    acceptance_criteria: tuple[str, ...] = Field(min_length=1)
+    priority: Literal["required", "high", "medium", "low"]
+    dependency_ids: tuple[StableId, ...] = ()
+    alternatives: tuple[str, ...] = ()
+    budget_constraint: RequirementConstraint
+    deadline_constraint: RequirementConstraint
+
+    @model_validator(mode="after")
+    def item_is_unambiguous(self) -> MaterialRequirementItem:
+        if (self.width is None) != (self.height is None):
+            raise ValueError("Material width and height must be paired")
+        for values in (
+            self.audio_requirements,
+            self.continuity_requirements,
+            self.must_haves,
+            self.must_not_haves,
+            self.acceptance_criteria,
+            self.dependency_ids,
+            self.alternatives,
+        ):
+            if len(values) != len(set(values)):
+                raise ValueError("Material requirement lists must be unique")
+        if set(self.must_haves) & set(self.must_not_haves):
+            raise ValueError("Material requirement constraints conflict")
+        if self.item_id in self.dependency_ids:
+            raise ValueError("Material requirement cannot depend on itself")
+        return self
+
+
+class MaterialRequirementsDraft(DirectorModel):
+    rationale: str = Field(min_length=1)
+    items: tuple[MaterialRequirementItem, ...] = Field(min_length=1)
+    global_acceptance_criteria: tuple[str, ...] = Field(min_length=1)
+    assumptions: tuple[str, ...] = ()
+    unresolved_constraints: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def draft_graph_is_exact(self) -> MaterialRequirementsDraft:
+        ids = [item.item_id for item in self.items]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Material requirement item IDs must be unique")
+        known = set(ids)
+        for item in self.items:
+            unknown = set(item.dependency_ids) - known
+            if unknown:
+                raise ValueError(
+                    f"Material requirement {item.item_id} has unknown "
+                    f"dependencies: {sorted(unknown)}"
+                )
+        return self
+
+
+class CreativeBriefReference(DirectorModel):
+    session_id: StableId
+    brief_version: int = Field(ge=1)
+    brief_digest: Sha256Digest
+
+    @classmethod
+    def from_brief(
+        cls,
+        brief: CreativeBriefVersion,
+    ) -> CreativeBriefReference:
+        return cls(
+            session_id=brief.session_id,
+            brief_version=brief.brief_version,
+            brief_digest=brief.content_digest,
+        )
+
+
+class MaterialRequirementsPlan(DirectorModel):
+    schema_name: Literal["vistora.material-requirements-plan"] = (
+        "vistora.material-requirements-plan"
+    )
+    plan_id: StableId
+    plan_version: int = Field(ge=1)
+    brief_ref: CreativeBriefReference
+    no_material_snapshot_ref: TimelineSnapshotReference
+    no_material_fact_digest: Sha256Digest
+    created_at: AwareDatetime
+    rationale: str = Field(min_length=1)
+    items: tuple[MaterialRequirementItem, ...] = Field(min_length=1)
+    global_acceptance_criteria: tuple[str, ...] = Field(min_length=1)
+    assumptions: tuple[str, ...] = ()
+    unresolved_constraints: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def plan_is_no_material_and_exact(self) -> MaterialRequirementsPlan:
+        ids = [item.item_id for item in self.items]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Material requirement item IDs must be unique")
+        known = set(ids)
+        for item in self.items:
+            if not set(item.dependency_ids).issubset(known):
+                raise ValueError("Material requirement dependency is unknown")
+        return self
+
+    def digest(self) -> str:
+        return digest_json(self.model_dump(mode="json"))
+
+
+class MaterialRequirementsChange(DirectorModel):
+    change_id: StableId
+    change_type: Literal["added", "removed", "changed"]
+    item_id: StableId
+    before_digest: Sha256Digest | None = None
+    after_digest: Sha256Digest | None = None
+    summary: str = Field(min_length=1)
+
+
+class MaterialRequirementsReview(DirectorModel):
+    schema_name: Literal["vistora.material-requirements-review"] = (
+        "vistora.material-requirements-review"
+    )
+    review_id: StableId
+    plan_id: StableId
+    plan_version: int = Field(ge=1)
+    plan_digest: Sha256Digest
+    brief_ref: CreativeBriefReference
+    snapshot_ref: TimelineSnapshotReference
+    previous_plan_digest: Sha256Digest | None = None
+    changes: tuple[MaterialRequirementsChange, ...] = Field(min_length=1)
+    review_digest: Sha256Digest
+    created_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def review_digest_is_exact(self) -> MaterialRequirementsReview:
+        payload = self.model_dump(mode="json", exclude={"review_digest"})
+        if self.review_digest != digest_json(payload):
+            raise ValueError("Material requirements review digest mismatched")
+        return self
+
+
+class MaterialRequirementsProposal(DirectorModel):
+    schema_name: Literal["vistora.material-requirements-proposal"] = (
+        "vistora.material-requirements-proposal"
+    )
+    proposal_id: StableId
+    plan: MaterialRequirementsPlan
+    review: MaterialRequirementsReview
+    created_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def proposal_is_exact(self) -> MaterialRequirementsProposal:
+        if (
+            self.review.plan_id != self.plan.plan_id
+            or self.review.plan_version != self.plan.plan_version
+            or self.review.plan_digest != self.plan.digest()
+            or self.review.brief_ref != self.plan.brief_ref
+            or self.review.snapshot_ref != self.plan.no_material_snapshot_ref
+        ):
+            raise ValueError("Material requirements proposal linkage drifted")
+        return self
+
+
 class DirectorReasoningRequest(DirectorModel):
     schema_name: Literal["vistora.director-reasoning-request"] = (
         "vistora.director-reasoning-request"
@@ -269,6 +457,7 @@ class DirectorReasoningOutput(DirectorModel):
     response_kind: Literal[
         "clarify",
         "propose",
+        "propose_material_requirements",
         "withdraw",
         "unsupported_next_stage",
     ]
@@ -278,14 +467,31 @@ class DirectorReasoningOutput(DirectorModel):
     brief: CreativeBriefInput
     clarification_questions: tuple[str, ...] = ()
     plan_draft: DirectorPlanDraft | None = None
+    material_requirements_draft: MaterialRequirementsDraft | None = None
     withdraw_proposal_id: StableId | None = None
 
     @model_validator(mode="after")
     def response_shape_is_exact(self) -> DirectorReasoningOutput:
         if self.response_kind == "propose":
-            if self.plan_draft is None or self.withdraw_proposal_id is not None:
+            if (
+                self.plan_draft is None
+                or self.material_requirements_draft is not None
+                or self.withdraw_proposal_id is not None
+            ):
                 raise ValueError("Proposal output requires only a plan draft")
-        elif self.plan_draft is not None:
+        elif self.response_kind == "propose_material_requirements":
+            if (
+                self.material_requirements_draft is None
+                or self.plan_draft is not None
+                or self.withdraw_proposal_id is not None
+            ):
+                raise ValueError(
+                    "Material proposal requires only a requirements draft"
+                )
+        elif (
+            self.plan_draft is not None
+            or self.material_requirements_draft is not None
+        ):
             raise ValueError("Non-proposal output cannot include a plan draft")
         if self.response_kind == "withdraw":
             if self.withdraw_proposal_id is None:
@@ -327,6 +533,7 @@ DirectorTurnStatus = Literal[
     "needs_materials",
     "ready_to_plan",
     "proposal_ready",
+    "material_requirements_ready",
     "withdrawn",
     "unsupported_next_stage",
     "model_error",
@@ -349,6 +556,7 @@ class DirectorTurnReport(DirectorModel):
     assistant_message: str = Field(min_length=1)
     clarification_questions: tuple[str, ...] = ()
     proposal: DirectorProposalResult | None = None
+    material_requirements: MaterialRequirementsProposal | None = None
     withdrawn_proposal_id: StableId | None = None
     error: DirectorError | None = None
     finished_at: AwareDatetime
@@ -356,9 +564,22 @@ class DirectorTurnReport(DirectorModel):
     @model_validator(mode="after")
     def report_state_is_truthful(self) -> DirectorTurnReport:
         if self.status == "proposal_ready":
-            if self.proposal is None or self.error is not None:
+            if (
+                self.proposal is None
+                or self.material_requirements is not None
+                or self.error is not None
+            ):
                 raise ValueError("Ready proposal report is incomplete")
-        elif self.proposal is not None:
+        elif self.status == "material_requirements_ready":
+            if (
+                self.material_requirements is None
+                or self.proposal is not None
+                or self.error is not None
+            ):
+                raise ValueError(
+                    "Material requirements report is incomplete"
+                )
+        elif self.proposal is not None or self.material_requirements is not None:
             raise ValueError("Non-proposal report cannot claim a proposal")
         if self.status == "withdrawn":
             if self.withdrawn_proposal_id is None:
@@ -478,6 +699,8 @@ class DirectorSessionLedger(DirectorModel):
         previous_brief_version = 0
         plan_versions: list[int] = []
         plan_id: str | None = None
+        material_versions: list[int] = []
+        material_plan_id: str | None = None
         known_proposals: set[str] = set()
         for index, entry in enumerate(self.entries, start=1):
             if entry.sequence != index:
@@ -509,6 +732,20 @@ class DirectorSessionLedger(DirectorModel):
                 if plan_versions != sorted(set(plan_versions)):
                     raise ValueError("Director plan versions must increase")
                 known_proposals.add(proposal.proposal_id)
+            material = entry.record.report.material_requirements
+            if material is not None:
+                if material_plan_id is None:
+                    material_plan_id = material.plan.plan_id
+                elif material.plan.plan_id != material_plan_id:
+                    raise ValueError(
+                        "Material requirements session plan ID changed"
+                    )
+                material_versions.append(material.plan.plan_version)
+                if material_versions != sorted(set(material_versions)):
+                    raise ValueError(
+                        "Material requirements versions must increase"
+                    )
+                known_proposals.add(material.proposal_id)
             withdrawn = entry.record.report.withdrawn_proposal_id
             if withdrawn is not None and withdrawn not in known_proposals:
                 raise ValueError("Director withdrawal references unknown proposal")

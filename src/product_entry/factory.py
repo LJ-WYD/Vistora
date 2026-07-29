@@ -17,6 +17,10 @@ from director import (
 )
 from timeline_query import TimelineSnapshotService
 from workflow import WorkflowApplicationService
+from material_requirements import (
+    MaterialRequirementsService,
+    MaterialRequirementsStore,
+)
 
 from .service import ProductionEntryService
 from .store import ProductEntryStore
@@ -105,6 +109,13 @@ def build_current_product_entry(
         store=director_store,
     )
     workflow = WorkflowApplicationService.for_current_project(registry)
+    material_requirements = MaterialRequirementsService(
+        store=MaterialRequirementsStore.for_project_file(
+            timeline_manager.PROJECT_FILE
+        ),
+        session_id=session_id,
+        project_id=initial.project_id,
+    )
     return ProductionEntryService(
         director=director,
         director_store=director_store,
@@ -115,6 +126,7 @@ def build_current_product_entry(
         ),
         session_id=session_id,
         project_id=initial.project_id,
+        material_requirements=material_requirements,
     )
 
 

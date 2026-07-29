@@ -452,7 +452,7 @@ def test_no_materials_and_unsupported_next_stage_are_truthful(
         turn_id="turn_no_material_02",
         user_message="Generate all footage and package it with AI.",
     )
-    assert first.status == "needs_materials"
+    assert first.status == "needs_clarification"
     assert second.status == "unsupported_next_stage"
     assert first.proposal is second.proposal is None
 

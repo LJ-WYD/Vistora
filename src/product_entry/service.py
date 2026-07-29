@@ -10,6 +10,7 @@ from typing import Any
 
 from agent import DirectorAgent, EditingAgent
 from director import DirectorHistoryQuery, DirectorStore
+from material_requirements import MaterialRequirementsService
 from workflow import WorkflowApplicationService, WorkflowHistoryQuery
 
 from .models import (
@@ -54,6 +55,7 @@ class ProductionEntryService:
         store: ProductEntryStore,
         session_id: str,
         project_id: str,
+        material_requirements: MaterialRequirementsService | None = None,
         clock: Clock = _utc_now,
         id_factory: IdFactory = _random_id,
     ) -> None:
@@ -64,6 +66,7 @@ class ProductionEntryService:
         self.store = store
         self.session_id = session_id
         self.project_id = project_id
+        self.material_requirements = material_requirements
         self.clock = clock
         self.id_factory = id_factory
 
@@ -85,7 +88,17 @@ class ProductionEntryService:
         workflow = WorkflowHistoryQuery.project(workflow_ledger).model_dump(
             mode="json"
         )
-        state, allowed = self._state(ledger, director, workflow)
+        material_view = (
+            self.material_requirements.view().model_dump(mode="json")
+            if self.material_requirements is not None
+            else None
+        )
+        state, allowed = self._state(
+            ledger,
+            director,
+            workflow,
+            material_view,
+        )
         latest = ledger.events[-1].result if ledger.events else None
         review = self._latest_review(director_ledger)
         view = ProductEntryView(
@@ -96,6 +109,7 @@ class ProductionEntryService:
             director=director,
             review=review,
             workflow=workflow,
+            material_requirements=material_view,
             latest_result=latest,
             allowed_actions=allowed,
         )
@@ -132,7 +146,12 @@ class ProductionEntryService:
         return None
 
     @staticmethod
-    def _state(ledger, director: dict, workflow: dict):
+    def _state(
+        ledger,
+        director: dict,
+        workflow: dict,
+        material_view: dict | None,
+    ):
         if ledger.events:
             latest = ledger.events[-1]
             mapping = {
@@ -146,6 +165,10 @@ class ProductionEntryService:
                 "rollback_apply": (
                     "rolled_back" if latest.status == "succeeded" else latest.status
                 ),
+                "persist_material_review": "material_reviewed",
+                "confirm_materials": "materials_confirmed",
+                "reject_materials": "materials_rejected",
+                "withdraw_materials": "materials_withdrawn",
             }
             state = mapping.get(latest.action)
             if state is not None:
@@ -164,9 +187,21 @@ class ProductionEntryService:
                     "rolled_back": ("director_turn",),
                     "rejected": ("director_turn",),
                     "rollback_rejected": ("director_turn",),
+                    "material_reviewed": (
+                        "confirm_materials",
+                        "reject_materials",
+                        "withdraw_materials",
+                    ),
+                    "materials_rejected": ("director_turn",),
+                    "materials_withdrawn": ("director_turn",),
                 }.get(state, ())
                 return state, allowed
         status = director.get("latest_status", "empty")
+        if status == "material_requirements_ready":
+            return "material_requirements_ready", (
+                "director_turn",
+                "persist_material_review",
+            )
         if status == "proposal_ready":
             return "proposal_ready", ("director_turn", "persist_review")
         if status in {"needs_clarification", "needs_materials"}:
@@ -235,8 +270,90 @@ class ProductionEntryService:
                 "status": report.status,
                 "brief_version": report.brief.brief_version,
                 "proposal_id": (
-                    report.proposal.proposal_id if report.proposal else None
+                    report.proposal.proposal_id
+                    if report.proposal
+                    else (
+                        report.material_requirements.proposal_id
+                        if report.material_requirements
+                        else None
+                    )
                 ),
+            }
+        if command.action == "persist_material_review":
+            if self.material_requirements is None:
+                raise ProductEntryError(
+                    "Material requirements workflow is unavailable"
+                )
+            director_ledger = self.director_store.load(
+                session_id=self.session_id,
+                project_id=self.project_id,
+            )
+            proposal = next(
+                (
+                    entry.record.report.material_requirements
+                    for entry in reversed(director_ledger.entries)
+                    if entry.record.report.material_requirements is not None
+                ),
+                None,
+            )
+            if proposal is None or proposal.proposal_id != command.target_id:
+                raise ProductEntryError(
+                    "Exact material requirements proposal is unavailable"
+                )
+            ledger = self.material_requirements.store.load(
+                session_id=self.session_id,
+                project_id=self.project_id,
+            )
+            updated = self.material_requirements.record(
+                proposal,
+                expected_revision=ledger.revision,
+            )
+            return "reviewed", proposal.review.review_id, {
+                "proposal_id": proposal.proposal_id,
+                "review_id": proposal.review.review_id,
+                "plan_digest": proposal.plan.digest(),
+                "material_ledger_revision": updated.revision,
+            }
+        if command.action in {"confirm_materials", "reject_materials"}:
+            if self.material_requirements is None:
+                raise ProductEntryError(
+                    "Material requirements workflow is unavailable"
+                )
+            ledger = self.material_requirements.store.load(
+                session_id=self.session_id,
+                project_id=self.project_id,
+            )
+            confirmation, updated = self.material_requirements.decide(
+                command.target_id or "",
+                decision=(
+                    "confirmed"
+                    if command.action == "confirm_materials"
+                    else "rejected"
+                ),
+                confirmed_by=command.actor_id,
+                expected_revision=ledger.revision,
+            )
+            return confirmation.decision, confirmation.confirmation_id, {
+                "confirmation_id": confirmation.confirmation_id,
+                "decision": confirmation.decision,
+                "material_ledger_revision": updated.revision,
+            }
+        if command.action == "withdraw_materials":
+            if self.material_requirements is None:
+                raise ProductEntryError(
+                    "Material requirements workflow is unavailable"
+                )
+            ledger = self.material_requirements.store.load(
+                session_id=self.session_id,
+                project_id=self.project_id,
+            )
+            updated = self.material_requirements.withdraw(
+                command.target_id or "",
+                expected_revision=ledger.revision,
+            )
+            return "withdrawn", command.target_id, {
+                "proposal_id": command.target_id,
+                "material_ledger_revision": updated.revision,
             }
         if command.action == "persist_review":
             director_ledger = self.director_store.load(
