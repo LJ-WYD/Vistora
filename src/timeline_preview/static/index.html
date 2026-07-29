@@ -202,6 +202,29 @@
         </p>
       </section>
 
+      <section id="director-panel" class="panel workflow-panel" hidden>
+        <div class="plan-review-heading">
+          <div>
+            <p class="eyebrow">Director session / 导演简报</p>
+            <h2>需求、素材与方案状态</h2>
+            <p id="director-message" class="muted" aria-live="polite">
+              Loading path-safe Director history…
+            </p>
+          </div>
+          <span id="director-status" class="review-status">Loading</span>
+        </div>
+        <dl id="director-brief" class="review-summary"></dl>
+        <div id="director-turns" class="workflow-history"></div>
+        <details class="workflow-audit">
+          <summary>Director boundary and unavailable stages</summary>
+          <ul id="director-limitations"></ul>
+        </details>
+        <p class="review-boundary">
+          A Director proposal is not confirmation. This surface cannot confirm,
+          execute, call editing tools, generate missing media, or roll back.
+        </p>
+      </section>
+
       <section id="workflow-panel" class="panel workflow-panel" hidden>
         <div class="plan-review-heading">
           <div>

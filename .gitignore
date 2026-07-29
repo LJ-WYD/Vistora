@@ -23,6 +23,8 @@ venv/
 .workspace/
 *.workflow.json
 *.workflow.json.lock
+*.director.json
+*.director.json.lock
 video/
 output/
 tests/test_data/*

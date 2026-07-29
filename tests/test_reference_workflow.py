@@ -11,6 +11,13 @@ def test_reference_main_workflow_is_traceable_and_repeatable() -> None:
     second = run_reference_workflow()
 
     assert first.facts == second.facts
+    assert first.director_report == second.director_report
+    assert first.director_ledger == second.director_ledger
+    assert first.director_report.status == "proposal_ready"
+    assert first.director_report.proposal.plan == first.plan
+    assert first.director_report.proposal.review_request.director_plan == (
+        first.plan
+    )
     assert first.plan == second.plan
     assert first.pre_confirmation_diff == second.pre_confirmation_diff
     assert (
@@ -39,6 +46,10 @@ def test_reference_main_workflow_is_traceable_and_repeatable() -> None:
         assert first.output_metadata[field] == second.output_metadata[field]
 
     assert first.confirmation.confirms(first.plan)
+    assert first.director_report.proposal.review.diff == (
+        first.pre_confirmation_diff
+    )
+    assert first.director_ledger.revision == 1
     assert first.pre_confirmation_diff.plan_ref == PlanReference.from_plan(
         first.plan
     )

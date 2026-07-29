@@ -12,9 +12,11 @@ from .editing_agent import (
     EditingAgentRecoveryReport,
     EditingAgentStepReport,
 )
+from .director_agent import DirectorAgent
 
 __all__ = [
     "EDITING_AGENT_VERSION",
+    "DirectorAgent",
     "EditingAgent",
     "EditingAgentExecutionReport",
     "EditingAgentExecutionRequest",

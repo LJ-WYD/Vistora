@@ -12,7 +12,7 @@ The current public baseline contains the editing runtime, versioned review/prove
 - `TimelineRenderer` is responsible for producing media from that timeline.
 - `TimelineSnapshotService` exposes detached, immutable read models for inspection without changing timeline or media state.
 
-The architecture keeps creative planning separate from execution: a future Director Agent produces a structured plan for user confirmation, the constrained production `EditingAgent` validates and executes that exact confirmed plan, and only atomic tools mutate timeline or media state. The Director runtime is not implemented yet. The interactive `OperatorAgent` remains a compatibility prototype and is not part of the confirmed production path.
+The architecture keeps creative planning separate from execution: the production `DirectorAgent` maintains a versioned creative brief and produces a structured, reviewable proposal; a separate explicit user-confirmation action gates the constrained production `EditingAgent`; and only atomic tools mutate timeline or media state. The interactive `OperatorAgent` remains a compatibility prototype and is not part of the confirmed production path.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the implemented runtime, binding responsibility contracts, compatibility exceptions, and current-to-target gap register.
 
@@ -20,7 +20,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the implemented runtime, binding resp
 
 - Python 3.10 or newer
 - FFmpeg and `ffprobe` available on `PATH`
-- An OpenAI-compatible endpoint only when using interactive chat
+- An OpenAI-compatible endpoint only when using interactive chat or the production Director adapter
 
 ## Setup
 
@@ -103,7 +103,13 @@ clips = query.plan_to_clips(PlanReference.from_plan(director_plan))
 
 Provenance describes recorded history; the separate plan-review boundary below describes proposed, unapplied changes. The production Editing Agent consumes these existing workflow/provenance services but does not create Director intent.
 
-## Director plan review (reference/fixture mode)
+## Production Director Agent and plan review
+
+`src/agent/director_agent.py` implements the production creative boundary. It accepts natural-language turns through a provider-neutral structured-reasoning adapter, reads only a detached timeline/material/provenance/tool-schema context, and persists an append-only, hash-chained Director session ledger. Every creative-brief version records the objective, audience, platform, duration, style, narrative and pacing, required and forbidden elements, delivery requirements, selected materials and evidence, assumptions, open questions, and acceptance criteria.
+
+The Agent deterministically gates each turn as `needs_clarification`, `needs_materials`, `ready_to_plan`, `proposal_ready`, `unsupported_next_stage`, `withdrawn`, `model_error`, or `stale_context`. It validates all model output against frozen schemas, rejects tool-call payloads, unobserved evidence, unsafe paths, unavailable tools, workflow-only tools, stale snapshots, and registry drift, and retries malformed structured output only within a configured bound. The bundled OpenAI-compatible adapter uses JSON-only responses and exposes no tool callback; tests and the reference workflow use deterministic adapters with no external model call.
+
+This step supports the existing-material main path only. Missing material is reported honestly; no-material creative planning, media generation, AI packaging, and richer editing capabilities are not implemented. A `proposal_ready` result includes an exact `DirectorPlan`, proposed execution plan, and current step-8 diff review. It does not create a confirmation, call the Editing Agent, execute tools, export, or roll back.
 
 `src/plan_review/` provides strict version `1.0.0` contracts and a deterministic read-only diff engine for the period before confirmation. A `PlanDiffRequest` binds an exact timeline snapshot ID/revision/digest, Director plan ID/version/digest, non-executable proposed execution-plan digest, and the exact registered tool-schema set. The engine validates proposed arguments with the current registry schemas, simulates supported semantics on detached clip data, and returns stable before/after changes, source-evidence links, provenance summaries, warnings, and net counts. Repeating the same request produces the same document and digest; snapshot or registry drift requires regeneration.
 
@@ -120,7 +126,7 @@ python src/main.py preview `
 
 The **方案审阅 / 变更预览** panel groups additions, removals, changes, and warnings; synchronizes rows with affected timeline clips and the evidence inspector; and marks stale, invalid, unsupported, or blocked proposals clearly. **Back**, **Reject locally**, and **Ready to confirm** still change browser view state only. They never create a confirmation.
 
-For a current-workspace preview, the separate workflow panel can deliberately persist the exact review, record an explicit immutable confirmation or rejection, run the confirmed steps through the registered atomic-tool application boundary, and show execution/rollback history. External `--timeline` documents remain read-only. This fixture-driven surface still constructs Director inputs from fixtures because the production Director runtime is absent; the browser workflow routes continue to use the same application service and do not bypass the Editing Agent's constraints.
+For a current-workspace preview, the separate workflow panel can deliberately persist the exact review, record an explicit immutable confirmation or rejection, run the confirmed steps through the registered atomic-tool application boundary, and show execution/rollback history. External `--timeline` documents remain read-only. The preview can also display a browser-safe Director history projection supplied with `--director-history`; this display is read-only and never turns `proposal_ready` into confirmation. The browser workflow routes continue to use the same application service and do not bypass the Editing Agent's constraints.
 
 ## Persistent workflow ledger and rollback
 
@@ -167,7 +173,7 @@ Run the deterministic review → confirmation → recorded execution → rollbac
 python -m pytest -q tests/test_reference_workflow.py
 ```
 
-This reference constructs Director data as a deterministic fixture, then exercises the production constrained Editing Agent. It does not implement a production Director.
+This reference runs a deterministic fake Director adapter through the production `DirectorAgent`, feeds its proposal into the read-only review boundary, records a separate explicit confirmation, and then exercises the production constrained Editing Agent.
 
 Generated validation media and local runtime state are ignored by Git.
 

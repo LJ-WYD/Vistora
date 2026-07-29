@@ -18,6 +18,12 @@ from media_analysis import (
     MediaAnalysisRequest,
     MediaAnalysisService,
 )
+from director import (
+    DirectorHistoryQuery,
+    DirectorHistoryView,
+    DirectorIntegrityError,
+    DirectorSessionLedger,
+)
 from plan_review import (
     PlanDiffRequest,
     PlanReviewEnvelope,
@@ -148,6 +154,9 @@ class PreviewApplication:
             [], PlanDiffRequest
         ] | None = None,
         workflow_service: WorkflowApplicationService | None = None,
+        director_history_provider: Callable[
+            [], DirectorHistoryView
+        ] | None = None,
     ) -> None:
         self._snapshot_provider = snapshot_provider
         self.media_resolver = MediaResolver(media_roots)
@@ -157,6 +166,7 @@ class PreviewApplication:
             plan_review_request_provider
         )
         self.workflow = workflow_service
+        self._director_history_provider = director_history_provider
         if manual_edits_enabled and skill_registry is None:
             raise PreviewConfigurationError(
                 "Manual editing requires an explicit atomic skill registry"
@@ -265,8 +275,30 @@ class PreviewApplication:
                 "workflow_explicit_confirmation": self.workflow is not None,
                 "workflow_confirmed_execution": self.workflow is not None,
                 "workflow_reviewed_rollback": self.workflow is not None,
+                "director_history": (
+                    self._director_history_provider is not None
+                ),
             },
         }
+
+    def director_payload(self) -> dict[str, Any]:
+        """Return only the browser-safe Director history projection."""
+
+        if self._director_history_provider is None:
+            return {
+                "schema_name": "vistora.director-history-unavailable",
+                "schema_version": "1.0.0",
+                "latest_status": "unavailable",
+                "message": (
+                    "No Director session history was supplied to this preview."
+                ),
+            }
+        history = self._director_history_provider()
+        if not isinstance(history, DirectorHistoryView):
+            raise TypeError(
+                "Director history provider must return DirectorHistoryView"
+            )
+        return history.model_dump(mode="json")
 
     def plan_review_payload(self) -> dict[str, Any]:
         """Return a path-redacted review or an explicit availability state."""
@@ -275,8 +307,8 @@ class PreviewApplication:
             return PlanReviewEnvelope(
                 review_state="unavailable",
                 message=(
-                    "No Director plan-review fixture was supplied. "
-                    "The production Director runtime is absent."
+                    "No Director plan-review input was supplied to this "
+                    "preview."
                 ),
             ).model_dump(mode="json")
         try:
@@ -649,6 +681,27 @@ def _handler_class(
                 return
             self._send_json(HTTPStatus.OK, payload, head_only=head_only)
 
+        def _serve_director(self, head_only: bool) -> None:
+            try:
+                payload = application.director_payload()
+            except DirectorIntegrityError:
+                self._send_error_json(
+                    HTTPStatus.CONFLICT,
+                    "director_integrity_failed",
+                    "The Director session ledger failed integrity validation.",
+                    head_only=head_only,
+                )
+                return
+            except Exception:
+                self._send_error_json(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    "director_history_unavailable",
+                    "Director history could not be loaded safely.",
+                    head_only=head_only,
+                )
+                return
+            self._send_json(HTTPStatus.OK, payload, head_only=head_only)
+
         def _serve_analysis_artifact(
             self,
             analysis_id: str,
@@ -752,6 +805,9 @@ def _handler_class(
                 return
             if route == "/api/workflow":
                 self._serve_workflow(head_only)
+                return
+            if route == "/api/director":
+                self._serve_director(head_only)
                 return
             if route.startswith("/analysis/thumbnail/"):
                 parts = route.split("/")
@@ -1026,6 +1082,32 @@ def _plan_review_provider(
     return lambda: request
 
 
+def _director_history_provider(
+    director_history_path: str | Path | None,
+) -> Callable[[], DirectorHistoryView] | None:
+    if director_history_path is None:
+        return None
+    path = Path(director_history_path).expanduser().resolve(strict=True)
+    if not path.is_file():
+        raise PreviewConfigurationError(
+            f"Director history path is not a file: {director_history_path}"
+        )
+
+    def load_history() -> DirectorHistoryView:
+        try:
+            ledger = DirectorSessionLedger.model_validate_json(
+                path.read_text(encoding="utf-8")
+            )
+        except Exception as exc:
+            raise DirectorIntegrityError(
+                "Director history fixture failed validation"
+            ) from exc
+        return DirectorHistoryQuery.project(ledger)
+
+    load_history()
+    return load_history
+
+
 def run_preview_server(
     *,
     timeline_path: str | Path | None = None,
@@ -1034,6 +1116,7 @@ def run_preview_server(
     port: int = 8765,
     skill_registry: Mapping[str, Any] | None = None,
     plan_review_path: str | Path | None = None,
+    director_history_path: str | Path | None = None,
 ) -> None:
     """Run the blocking local preview server until interrupted."""
 
@@ -1051,6 +1134,9 @@ def run_preview_server(
             WorkflowApplicationService.for_current_project(skill_registry)
             if timeline_path is None and skill_registry is not None
             else None
+        ),
+        director_history_provider=_director_history_provider(
+            director_history_path
         ),
     )
     server = create_preview_server(application, host=host, port=port)

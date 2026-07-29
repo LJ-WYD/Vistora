@@ -49,6 +49,12 @@ const ui = {
   reviewBack: document.querySelector("#review-back"),
   reviewReject: document.querySelector("#review-reject"),
   reviewReady: document.querySelector("#review-ready"),
+  directorPanel: document.querySelector("#director-panel"),
+  directorMessage: document.querySelector("#director-message"),
+  directorStatus: document.querySelector("#director-status"),
+  directorBrief: document.querySelector("#director-brief"),
+  directorTurns: document.querySelector("#director-turns"),
+  directorLimitations: document.querySelector("#director-limitations"),
   workflowPanel: document.querySelector("#workflow-panel"),
   workflowMessage: document.querySelector("#workflow-message"),
   workflowStatus: document.querySelector("#workflow-status"),
@@ -75,6 +81,7 @@ const state = {
   applying: false,
   planReview: null,
   selectedPlanChange: null,
+  director: null,
   workflow: null,
   workflowBusy: false,
 };
@@ -366,6 +373,114 @@ function workflowEvent(title, status, details) {
     article.append(textElement("small", "", detail));
   }
   return article;
+}
+
+function renderDirector() {
+  const history = state.director;
+  ui.directorPanel.hidden = !history ||
+    history.schema_name === "vistora.director-history-unavailable";
+  if (ui.directorPanel.hidden) {
+    return;
+  }
+  ui.directorStatus.textContent = history.latest_status;
+  ui.directorStatus.className =
+    `review-status ${history.latest_status}`;
+  ui.directorMessage.textContent =
+    `Append-only Director revision ${history.ledger_revision} · ` +
+    `${history.integrity_digest.slice(0, 20)}…`;
+  ui.directorBrief.replaceChildren();
+  const brief = history.latest_brief;
+  if (brief) {
+    const values = [
+      ["Readiness", brief.readiness],
+      ["Brief version", `v${brief.brief_version}`],
+      ["Objective", brief.objective || "Unresolved"],
+      ["Audience", brief.audience || "Unresolved"],
+      ["Platform", brief.platform || "Unresolved"],
+      [
+        "Duration",
+        brief.target_duration_seconds == null
+          ? "Unresolved"
+          : formatSeconds(brief.target_duration_seconds),
+      ],
+      ["Style", brief.style || "Unresolved"],
+      ["Pacing", brief.pacing || "Unresolved"],
+      ["Materials", `${brief.material_ids.length} observed`],
+      ["Evidence", `${brief.evidence_ids.length} bound`],
+    ];
+    for (const [label, value] of values) {
+      ui.directorBrief.append(detailRow(label, value));
+    }
+    ui.directorBrief.append(
+      detailRow("Reason", brief.readiness_reasons.join(" ")),
+    );
+  }
+  ui.directorTurns.replaceChildren();
+  for (const turn of history.turns) {
+    const details = [
+      `brief v${turn.brief_version}`,
+      turn.assistant_message,
+      ...turn.clarification_questions.map(
+        (question) => `Question: ${question}`,
+      ),
+    ];
+    if (turn.error) {
+      details.push(`${turn.error.code}: ${turn.error.message}`);
+    }
+    ui.directorTurns.append(
+      workflowEvent(
+        `Director turn ${turn.turn_index}`,
+        turn.status,
+        details,
+      ),
+    );
+  }
+  for (const proposal of history.proposals) {
+    ui.directorTurns.append(
+      workflowEvent(
+        `Proposal ${proposal.plan_id} v${proposal.plan_version}`,
+        proposal.review_status || proposal.review_state,
+        [
+          proposal.plan_digest,
+          proposal.diff_digest || "No review diff",
+          "Awaiting a separate explicit user decision.",
+        ],
+      ),
+    );
+  }
+  ui.directorLimitations.replaceChildren(
+    ...history.limitations.map((item) => textElement("li", "", item)),
+  );
+}
+
+async function loadDirector() {
+  try {
+    const response = await fetch("/api/director", {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(
+        payload.error?.message || `Director HTTP ${response.status}.`,
+      );
+    }
+    state.director = payload;
+  } catch (error) {
+    state.director = {
+      schema_name: "vistora.director-history",
+      latest_status: "error",
+      ledger_revision: 0,
+      integrity_digest: "sha256:unavailable",
+      latest_brief: null,
+      turns: [],
+      proposals: [],
+      limitations: [],
+    };
+    ui.directorMessage.textContent =
+      error instanceof Error ? error.message : String(error);
+  }
+  renderDirector();
 }
 
 function renderWorkflow() {
@@ -1482,6 +1597,7 @@ async function loadPreview({ preserveSuccess = false } = {}) {
       await loadAnalysis();
     }
     await loadPlanReview();
+    await loadDirector();
     await loadWorkflow();
   } catch (error) {
     showFatal(error instanceof Error ? error.message : String(error));

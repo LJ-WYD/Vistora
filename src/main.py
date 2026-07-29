@@ -114,6 +114,7 @@ def preview_timeline(
     host: str,
     port: int,
     plan_review_path: str | None,
+    director_history_path: str | None,
 ):
     """Start Vistora's local snapshot-first visual timeline preview."""
     from timeline_preview import run_preview_server
@@ -125,6 +126,7 @@ def preview_timeline(
         port=port,
         skill_registry=SKILLS,
         plan_review_path=plan_review_path,
+        director_history_path=director_history_path,
     )
 
 
@@ -187,6 +189,13 @@ def main():
             "read-only; this command never confirms or executes the plan."
         ),
     )
+    preview_parser.add_argument(
+        "--director-history",
+        help=(
+            "Optional versioned Director session ledger JSON. It is exposed "
+            "as a read-only, path-redacted history projection."
+        ),
+    )
 
     args = parser.parse_args()
     
@@ -206,6 +215,7 @@ def main():
             args.host,
             args.port,
             args.plan_review,
+            args.director_history,
         )
     else:
         parser.print_help()

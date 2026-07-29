@@ -135,7 +135,7 @@ class DirectorOperation(ContractModel):
 
 
 class DirectorPlan(ContractModel):
-    """A versioned creative plan authored by the future Director Agent."""
+    """A versioned creative plan authored by the production Director Agent."""
 
     schema_name: Literal["vistora.director-plan"] = "vistora.director-plan"
     plan_id: StableId

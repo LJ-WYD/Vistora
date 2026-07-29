@@ -22,6 +22,7 @@ from contracts import (  # noqa: E402
 )
 from core import timeline_manager  # noqa: E402
 from core.timeline import ClipConfig, TimelineConfig, TrackConfig  # noqa: E402
+from director import DirectorHistoryView  # noqa: E402
 from skills.video_apply_manual_edits import (  # noqa: E402
     VideoApplyManualEditsSkill,
 )
@@ -145,7 +146,7 @@ def test_snapshot_endpoint_and_static_assets_are_read_only(
         for route, content_type, marker in [
             ("/", "text/html", b"Confirm &amp; apply"),
             ("/app.css", "text/css", b".waveform"),
-            ("/app.js", "text/javascript", b"/api/analysis"),
+            ("/app.js", "text/javascript", b"/api/director"),
         ]:
             asset_status, asset_headers, asset_body = _request(
                 f"{base_url}{route}"
@@ -153,6 +154,74 @@ def test_snapshot_endpoint_and_static_assets_are_read_only(
             assert asset_status == 200
             assert asset_headers["Content-Type"].startswith(content_type)
             assert marker in asset_body
+
+
+def test_director_history_endpoint_is_read_only_and_path_safe(
+    tmp_path: Path,
+) -> None:
+    snapshot = TimelineSnapshotService.snapshot(_timeline("missing.mp4"))
+    history = DirectorHistoryView(
+        session_id="session_preview_director",
+        project_id=snapshot.project_id,
+        ledger_revision=1,
+        integrity_digest="sha256:" + ("1" * 64),
+        latest_status="needs_clarification",
+        latest_brief={
+            "brief_version": 1,
+            "content_digest": "sha256:" + ("2" * 64),
+            "readiness": "needs_clarification",
+            "readiness_reasons": ["Audience is unresolved."],
+            "objective": "Prepare a grounded cut.",
+            "audience": None,
+            "platform": "Web",
+            "target_duration_seconds": 15.0,
+            "style": "Clean",
+            "narrative": "Single source",
+            "pacing": "Steady",
+            "must_haves": [],
+            "must_not_haves": [],
+            "delivery_requirements": ["H.264 MP4"],
+            "material_ids": [],
+            "evidence_ids": [],
+            "assumptions": [],
+            "unresolved_questions": ["Who is the audience?"],
+            "acceptance_criteria": [],
+        },
+        turns=(
+            {
+                "turn_id": "turn_preview_director",
+                "turn_index": 1,
+                "status": "needs_clarification",
+                "assistant_message": "Who is the intended audience?",
+                "clarification_questions": ["Who is the intended audience?"],
+                "brief_version": 1,
+                "context_digest": "sha256:" + ("3" * 64),
+                "error": None,
+                "withdrawn_proposal_id": None,
+            },
+        ),
+    )
+    application = PreviewApplication(
+        lambda: snapshot,
+        [tmp_path],
+        director_history_provider=lambda: history,
+    )
+    with _server(application) as base_url:
+        status, _, body = _request(f"{base_url}/api/director")
+        assert status == 200
+        payload = json.loads(body)
+        assert payload["schema_name"] == "vistora.director-history"
+        assert payload["latest_status"] == "needs_clarification"
+        assert "arguments" not in payload
+        assert str(tmp_path).encode() not in body
+        write_status, headers, write_body = _request(
+            f"{base_url}/api/director",
+            method="POST",
+            json_body={},
+        )
+        assert write_status == 405
+        assert headers["Allow"] == "GET, HEAD"
+        assert json.loads(write_body)["error"]["code"] == "read_only"
 
 
 def test_analysis_endpoint_is_cached_safe_aligned_and_isolated(

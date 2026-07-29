@@ -1,8 +1,8 @@
 """Deterministic test-only reference for Vistora's intended main workflow.
 
-This module constructs planning data directly because the production Director
-does not exist yet. The constrained Editing Agent consumes the exact persisted
-confirmation and delegates mutation to the workflow/atomic-tool boundary.
+The deterministic Director adapter produces the structured proposal from
+analyzed facts. A separate user confirmation still gates the constrained
+Editing Agent and atomic-tool mutation boundary.
 """
 
 from __future__ import annotations
@@ -26,7 +26,11 @@ SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
 import main as vistora_main  # noqa: E402
-from agent import EditingAgent, EditingAgentExecutionReport  # noqa: E402
+from agent import (  # noqa: E402
+    DirectorAgent,
+    EditingAgent,
+    EditingAgentExecutionReport,
+)
 from contracts import (  # noqa: E402
     AtomicToolRequestEnvelope,
     AtomicToolResultEnvelope,
@@ -39,19 +43,21 @@ from contracts import (  # noqa: E402
     UserConfirmationRecord,
 )
 from core import timeline_manager  # noqa: E402
+from director import (  # noqa: E402
+    CreativeBriefInput,
+    DirectorContextService,
+    DirectorMaterialFact,
+    DirectorPlanDraft,
+    DirectorReasoningOutput,
+    DirectorSessionLedger,
+    DirectorStore,
+    DirectorTurnReport,
+)
 from moviepy import ColorClip  # noqa: E402
 from plan_review import (  # noqa: E402
     PlanDiffDocument,
-    PlanDiffEngine,
-    PlanDiffRequest,
-    PreviewMaterialFact,
-    ProposedEditingExecutionPlan,
-    RegistrySchemaReference,
 )
-from timeline_query import (  # noqa: E402
-    TimelineSnapshotReference,
-    TimelineSnapshotService,
-)
+from timeline_query import TimelineSnapshotService  # noqa: E402
 from traceability.models import TimelineTraceDocument  # noqa: E402
 from traceability.query import TraceabilityQuery  # noqa: E402
 from traceability.store import TraceabilityStore  # noqa: E402
@@ -90,6 +96,8 @@ class AnalyzedMediaFacts:
 @dataclass(frozen=True)
 class ReferenceWorkflowReport:
     facts: AnalyzedMediaFacts
+    director_report: DirectorTurnReport
+    director_ledger: DirectorSessionLedger
     plan: DirectorPlan
     pre_confirmation_diff: PlanDiffDocument
     confirmation: UserConfirmationRecord
@@ -109,6 +117,10 @@ class ReferenceWorkflowReport:
     def summary(self) -> dict[str, Any]:
         return {
             "facts": asdict(self.facts),
+            "director_status": self.director_report.status,
+            "director_brief_version": (
+                self.director_report.brief.brief_version
+            ),
             "plan_id": self.plan.plan_id,
             "plan_version": self.plan.plan_version,
             "plan_digest": self.plan.digest(),
@@ -328,6 +340,63 @@ def _build_plan(
     )
 
 
+class DeterministicReferenceDirectorAdapter:
+    """Test-only fake reasoning adapter with deterministic directing output."""
+
+    def __init__(
+        self,
+        facts: AnalyzedMediaFacts,
+        output_path: str,
+    ) -> None:
+        self.facts = facts
+        self.output_path = output_path
+        self.requests = []
+
+    def complete(self, request):
+        self.requests.append(request)
+        intended = _build_plan(self.facts, self.output_path)
+        evidence = request.context.materials[0].evidence[0]
+        brief = CreativeBriefInput(
+            objective=intended.objective,
+            audience="Vistora regression reviewers.",
+            platform="Automated local validation.",
+            target_duration_seconds=1.5,
+            style="Deterministic single-shot reference.",
+            narrative="Present one concise analyzed source range.",
+            pacing="single concise 1.5 second shot",
+            must_haves=intended.requirements,
+            must_not_haves=("Do not invent unobserved source facts.",),
+            delivery_requirements=("Export one H.264 MP4.",),
+            material_ids=(evidence.material_id,),
+            evidence_ids=(evidence.evidence_id,),
+            assumptions=intended.assumptions,
+            acceptance_criteria=(
+                "Output is 320x180 at 24 fps.",
+                "Output duration is 1.5 seconds.",
+                "Timeline is clear after export.",
+            ),
+        )
+        return DirectorReasoningOutput(
+            response_kind="propose",
+            assistant_message=(
+                "The analyzed source and requirements are sufficient; "
+                "I prepared a deterministic proposal for review."
+            ),
+            context_snapshot_ref=request.context.snapshot_ref,
+            registry_ref=request.context.registry_ref,
+            brief=brief,
+            plan_draft=DirectorPlanDraft(
+                objective=intended.objective,
+                requirements=intended.requirements,
+                assumptions=intended.assumptions,
+                creative_direction=intended.creative_direction,
+                operations=intended.operations,
+                outputs=intended.outputs,
+                risks=intended.risks,
+            ),
+        ).model_dump(mode="json")
+
+
 def _fixed_execution(
     plan: DirectorPlan,
     confirmation: UserConfirmationRecord,
@@ -353,6 +422,9 @@ def _isolated_timeline(work_dir: Path) -> Iterator[Path]:
     timeline_manager.PROJECT_FILE = str(project_file)
     TraceabilityStore.trace_path(project_file).unlink(missing_ok=True)
     WorkflowStore.for_project_file(project_file).path.unlink(missing_ok=True)
+    DirectorStore(
+        project_file.with_name("reference.director.json")
+    ).path.unlink(missing_ok=True)
     try:
         yield project_file
     finally:
@@ -397,53 +469,104 @@ def run_reference_workflow(
         source_path = (work_dir / "source.mp4").as_posix()
         output_path = (work_dir / "output.mp4").as_posix()
         facts = _generate_source(source_path)
-        plan = _build_plan(facts, output_path)
-        if plan.digest() != REFERENCE_PLAN_DIGEST:
-            raise AssertionError(
-                "Reference DirectorPlan digest changed; review the fixture "
-                "and update REFERENCE_PLAN_DIGEST intentionally"
-            )
         with _isolated_timeline(work_dir) as project_file:
             preview_snapshot = TimelineSnapshotService.snapshot_current()
-            proposed_execution = (
-                ProposedEditingExecutionPlan.from_director_plan(
-                    proposal_execution_id=(
+            intended = _build_plan(facts, output_path)
+            material = DirectorMaterialFact(
+                material_id=intended.source_evidence[0].material_id,
+                media_kind="video",
+                display_name="source.mp4",
+                duration_seconds=facts.duration_seconds,
+                width=facts.width,
+                height=facts.height,
+                has_audio=facts.has_audio,
+                evidence=intended.source_evidence,
+            )
+
+            def director_context():
+                current = TimelineSnapshotService.snapshot_current()
+                return (
+                    DirectorContextService.build(
+                        current,
+                        vistora_main.SKILLS,
+                        materials=(material,),
+                    ),
+                    current,
+                )
+
+            director_tick = -1
+
+            def director_clock() -> datetime:
+                nonlocal director_tick
+                director_tick += 1
+                return REFERENCE_TIME + timedelta(
+                    seconds=director_tick - 1
+                )
+
+            director_counts = {}
+
+            def director_id(prefix: str) -> str:
+                exact = {
+                    "director_plan": "plan_reference_main_flow",
+                    "proposed_execution": (
                         "proposal_execution_reference_main_flow"
                     ),
-                    project_id=preview_snapshot.project_id,
-                    director_plan=plan,
-                )
-            )
-            preview_request = PlanDiffRequest(
-                request_id="review_reference_main_flow",
-                snapshot_ref=TimelineSnapshotReference.from_snapshot(
-                    preview_snapshot
-                ),
-                director_plan=plan,
-                proposed_execution=proposed_execution,
-                registry_ref=RegistrySchemaReference.from_registry(
-                    vistora_main.SKILLS
-                ),
-                material_facts=(
-                    PreviewMaterialFact(
-                        material_id=(
-                            TimelineSnapshotService
-                            .source_id_for_configured_path(
-                                facts.source_path
-                            )
-                        ),
-                        media_kind="video",
-                        duration_seconds=facts.duration_seconds,
-                        width=facts.width,
-                        height=facts.height,
+                    "plan_review_request": "review_reference_main_flow",
+                    "director_proposal": (
+                        "director_proposal_reference_main_flow"
                     ),
+                }
+                if prefix in exact:
+                    return exact[prefix]
+                director_counts[prefix] = (
+                    director_counts.get(prefix, 0) + 1
+                )
+                return (
+                    f"{prefix}_reference_"
+                    f"{director_counts[prefix]:03d}"
+                )
+
+            director_adapter = DeterministicReferenceDirectorAdapter(
+                facts,
+                output_path,
+            )
+            director_store = DirectorStore(
+                project_file.with_name("reference.director.json")
+            )
+            director = DirectorAgent(
+                adapter=director_adapter,
+                context_provider=director_context,
+                registry=vistora_main.SKILLS,
+                store=director_store,
+                clock=director_clock,
+                id_factory=director_id,
+            )
+            director_report = director.converse(
+                session_id="session_reference_main_flow",
+                turn_id="turn_reference_main_flow_001",
+                user_message=(
+                    "Create the deterministic 1.5 second silent reference "
+                    "cut from the observed analyzed source, export it, and "
+                    "clear the timeline afterward."
                 ),
             )
-            pre_confirmation_diff = PlanDiffEngine.generate(
-                preview_request,
-                preview_snapshot,
-                vistora_main.SKILLS,
-            )
+            if (
+                director_report.status != "proposal_ready"
+                or director_report.proposal is None
+            ):
+                raise AssertionError(
+                    "Reference Director did not create a reviewable proposal"
+                )
+            plan = director_report.proposal.plan
+            preview_request = director_report.proposal.review_request
+            pre_confirmation_diff = director_report.proposal.review.diff
+            director_ledger = director_store.load()
+            if plan.digest() != REFERENCE_PLAN_DIGEST:
+                raise AssertionError(
+                    "Reference DirectorPlan digest changed; review the "
+                    "deterministic adapter and update REFERENCE_PLAN_DIGEST "
+                    "intentionally"
+                )
             counter = 0
 
             def reference_id(prefix: str) -> str:
@@ -540,6 +663,8 @@ def run_reference_workflow(
 
         return ReferenceWorkflowReport(
             facts=facts,
+            director_report=director_report,
+            director_ledger=director_ledger,
             plan=plan,
             pre_confirmation_diff=pre_confirmation_diff,
             confirmation=confirmation,

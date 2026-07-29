@@ -36,9 +36,16 @@ The Director may inspect read-only context and tool schemas. It MUST NOT call mu
 src/
   main.py                    CLI entry point and hard-coded skill registry
   agent/
+    director_agent.py        Production dialogue/brief/proposal boundary
     editing_agent.py         Production confirmed-plan mechanical executor
     llm_client.py            OpenAI-compatible model client
     operator_agent.py        Legacy hybrid conversational/tool-calling prototype
+  director/
+    models.py                Frozen brief, turn, proposal, and ledger contracts
+    adapters.py              Provider-neutral structured reasoning boundary
+    context.py               Detached timeline/material/tool-schema projection
+    store.py                 Hash-chained atomic Director session store
+    query.py                 Browser-safe deterministic history projection
   contracts/
     models.py                Versioned plan, confirmation, execution,
                               project, manual-edit, and tool envelopes
@@ -82,6 +89,8 @@ tests/
                               Static agent-boundary and registry checks
   test_editing_agent.py       Production gate, failure, concurrency, and
                               restart-recovery checks
+  test_director_agent.py      Clarification, readiness, evidence, model error,
+                              review handoff, persistence, and boundary checks
   test_contracts.py           Versioning, confirmation, compatibility,
                               serialization, and envelope checks
   test_reference_workflow.py  Repeatability, traceability, and media checks
@@ -98,7 +107,7 @@ tests/
                                rollback, history API, and redaction checks
 ```
 
-The repository now contains a framework-free local visual timeline preview and a production constrained Editing Agent library boundary. There is still no production frontend application, desktop GUI, remote API server, or Director runtime. Browser view/draft state is transient; current-workspace workflow decisions and runs are persisted only through the dedicated application service and ledger.
+The repository now contains a production Director library boundary, a production constrained Editing Agent boundary, and a framework-free local visual timeline preview. There is still no production frontend application, desktop GUI, remote API server, or no-material creation pipeline. Browser view/draft state is transient; Director turns and current-workspace workflow decisions/runs use separate append-only stores.
 
 ## Implemented runtime
 
@@ -161,7 +170,29 @@ This flow validates individual tool arguments through `BaseSkill.execute`, but i
 | `PlanDiffDocument` | `vistora.plan-diff` | Deterministic changes, evidence/provenance, warnings, step status, and net summary. |
 | `PlanReviewEnvelope` | `vistora.plan-review-envelope` | Browser-safe `current`, `stale`, `invalid`, or `unavailable` freshness state. |
 
-The Director contracts are not wired into `OperatorAgent`, and no production Director exists. The confirmed contracts are wired into the separate production `EditingAgent`, which can consume only a persisted exact confirmation binding. This does not authorize `OperatorAgent` or the browser to execute unconfirmed Director intent. The CLI can load an explicit plan-review fixture only. The separate manual-edit contracts are wired only into the local preview application service and the dedicated confirmed atomic skill described below; they do not represent Director decisions.
+The Director contracts are wired into the separate production `DirectorAgent`, not into `OperatorAgent`. Its proposal is directly consumable by the read-only review service, while the production `EditingAgent` can consume only a separately persisted exact confirmation binding. This does not authorize `OperatorAgent`, the Director, or the browser to execute unconfirmed Director intent. The separate manual-edit contracts are wired only into the local preview application service and the dedicated confirmed atomic skill described below; they do not represent Director decisions.
+
+### Production Director Agent boundary
+
+`src/agent/director_agent.py` is the implemented general-capability creative entry boundary. A provider-neutral `DirectorReasoningAdapter` supplies structured reasoning; the production OpenAI-compatible adapter requests JSON only and exposes no tool callback, while tests use deterministic fakes. The Agent accepts natural-language turns, but only frozen `DirectorReasoningOutput` objects cross into the domain.
+
+```text
+user turn
+  -> exact detached DirectorReadContext
+  -> structured reasoning adapter (no tools)
+  -> schema, safety, evidence, snapshot, and registry validation
+  -> versioned CreativeBriefVersion + readiness
+  -> optional DirectorPlan + ProposedEditingExecutionPlan
+  -> deterministic read-only PlanReviewService
+  -> append-only DirectorSessionLedger
+  -> stop before confirmation
+```
+
+The creative brief covers objective, audience, platform, target duration, style, narrative, pacing, must/must-not constraints, delivery requirements, existing material/evidence IDs, assumptions, unresolved questions, and acceptance criteria. Deterministic readiness reports missing clarification, missing materials, a complete brief, or an unsupported next stage. A plan can be proposed only from a complete brief with observed material and exact evidence references. A later accepted revision increments the brief and plan versions without changing the stable plan identity; withdrawal is audited.
+
+The Agent rejects malformed or extra model fields, requested tool calls, secrets or absolute paths, unobserved evidence, cross-context IDs, unavailable/unsafe tools, stale snapshots, and registry-schema drift. Structured-output retries are bounded; provider timeout, provider failure, malformed output, and stale context remain explicit report states rather than being presented as successful reasoning. Session records persist only redacted user text and browser-safe domain data in a hash-chained, atomically replaced `*.director.json` sidecar with optimistic revision checks and tamper detection.
+
+The Director cannot create a user confirmation, import or call the Editing Agent or workflow service, dispatch a registered skill, write timeline/media, render/export, or roll back. `proposal_ready` means ready for review only. No-material creative planning, source generation, AI packaging, and richer atomic editing remain outside the implemented boundary.
 
 ### Pre-confirmation plan-review boundary
 
@@ -294,6 +325,7 @@ The loopback-only server has a deliberately narrow route surface:
 | `/`, `/index.html`, `/app.css`, `/app.js` | `GET`, `HEAD` | Fixed packaged preview assets only. |
 | `/api/snapshot` | `GET`, `HEAD` | A read-only envelope around the current immutable timeline snapshot and derived media availability. |
 | `/api/analysis` | `GET`, `HEAD` | A versioned deterministic thumbnail/waveform collection for the current snapshot. |
+| `/api/director` | `GET`, `HEAD` | Optional browser-safe projection of an integrity-checked Director session ledger. |
 | `/api/plan-review` | `GET`, `HEAD` | Browser-safe freshness envelope and structured proposed changes from an optional exact fixture. |
 | `/api/workflow` | `GET`, `HEAD` | Path-redacted append-only plan/review/decision/execution/rollback history. |
 | `/media/<source_id>` | `GET`, `HEAD` | Browser-safe audio/video bytes for a source already present in the snapshot, including single-range support. |
@@ -377,9 +409,11 @@ Versioned atomic request/result envelopes now define the target agent boundary a
 - agent modules do not directly import timeline state, renderers, proxy writers, hardware encoders, or `subprocess`;
 - every object in the public registry is a `BaseSkill` with a unique, object-shaped JSON schema whose exported name matches its registry key.
 
-This lightweight check does not claim that the missing Director, confirmation gate, or Editing Agent exists.
+The static boundary check complements the dedicated production Director, confirmation/workflow, and Editing Agent tests; it does not by itself prove their runtime behavior.
 
 `tests/test_contracts.py` covers schema/version rejection, plan digests and confirmation mismatches, prohibition of unconfirmed execution, creative-step drift, JSON round trips, deterministic legacy timeline migration, existing registry/schema validation, and consistent tool result states. These are contract tests, not end-to-end Director or Editing Agent tests.
+
+`tests/test_director_agent.py` covers the clarification loop, deterministic readiness gate, brief and plan revision, exact material/evidence binding, absent-material and unsupported-stage states, contradictory requirements, prompt/tool-call escalation attempts, provider timeout and malformed output, bounded retry, stale snapshot/registry rejection, read-only review handoff, withdrawal, path/secret redaction, ledger tamper detection, and the prohibition on confirmation, workflow, Editing Agent, mutation-engine, renderer, and skill-implementation imports.
 
 `tests/test_timeline_snapshot.py` proves deterministic ordering/serialization, derived summaries, immutable detachment, legacy and versioned compatibility, project/revision guard failures, clear invalid-reference/timing failures, persistence read isolation, and the absence of mutation/media-engine calls from the query package. The existing static agent-import test continues to prevent agent modules from importing mutation engines.
 
@@ -393,12 +427,13 @@ This lightweight check does not claim that the missing Director, confirmation ga
 
 ### Reference main-workflow regression
 
-`tests/reference_workflow.py` is the deterministic reference for the intended main workflow while production Director and Editing Agents remain absent:
+`tests/reference_workflow.py` is the deterministic reference for the implemented separated Director, confirmation, and Editing boundaries:
 
 ```text
 generated 320x180/24 fps silent source
   -> fixed analyzed media facts
-  -> DirectorPlan data constructed by the harness
+  -> deterministic fake adapter through production DirectorAgent
+  -> versioned creative brief and DirectorPlan proposal
   -> exact detached pre-confirmation PlanDiffDocument
   -> persisted review plus immutable matching UserConfirmationRecord
   -> recorded EditingExecutionPlan derived without creative drift
@@ -426,7 +461,7 @@ Or run the harness directly to print its trace summary:
 python tests/reference_workflow.py
 ```
 
-This is fixture orchestration, not an implementation of either agent. Source generation and `ffprobe` are test setup/verification; every timeline or exported-media mutation in the workflow is dispatched through the registered atomic skills.
+This is deterministic fixture orchestration around the production agent boundaries, not a real external-model call or a production UI. Source generation and `ffprobe` are test setup/verification; the Director stops at review, explicit confirmation remains separate, and every timeline or exported-media mutation is dispatched through the registered atomic skills by the confirmed workflow/Editing boundary.
 
 ## Target contracts
 
@@ -439,10 +474,10 @@ The Director Agent MUST:
 - inspect read-only project/media context and available tool schemas;
 - produce a structured creative plan and explain material assumptions;
 - revise or reject a draft in response to the user;
-- record explicit user confirmation before handoff;
+- present the reviewed proposal for a separate explicit user-confirmation action;
 - receive the execution report and communicate results to the user.
 
-The Director Agent MUST NOT execute atomic editing tools, mutate timelines, write media, or mark its own plan as user-confirmed.
+The Director Agent MUST NOT create or record confirmation, call the Editing Agent, execute atomic editing tools, mutate timelines, write media, export, roll back, or mark its own plan as user-confirmed.
 
 ### Structured creative plan
 
@@ -505,17 +540,15 @@ Mutation-capable utilities and core objects are implementation details behind to
 
 | ID | Gap | Evidence today | Required future outcome |
 | --- | --- | --- | --- |
-| G-01 | Director Agent absent | `DirectorPlan` contracts and reference fixtures exist, but there is no Director runtime/class or directing prompt. | Add the general-capability Director without mutation authority. |
-| G-02 | Production chat is not wired into the confirmation gate | The fixture/application workflow enforces exact review and confirmation, but `OperatorAgent` still executes LLM tool calls immediately. | Make the future Director/Editing runtimes produce and consume these records. |
+| G-02 | Production end-user chat is not wired into the separated gates | The Director and Editing library boundaries enforce their roles, but the `chat` CLI still launches legacy `OperatorAgent`. | Build a separately approved product entry point that composes Director, explicit confirmation, and Editing services without merging them. |
 | G-03 | Operator combines incompatible roles | `OperatorAgent` owns dialogue, planning, and execution. | Separate/retire the hybrid behind Director and Editing contracts. |
 | G-05 | Runtime registry is hard-coded | `SKILLS` is defined in `src/main.py`; plan review binds a versioned digest of its schemas, but that read reference does not replace the runtime registry. | Provide a reusable registry contract with durable schema/version metadata. |
 | G-06 | Direct CLI render bypass | `render` instantiates `TimelineRenderer` directly. | Route mutations through an explicit atomic tool or clearly isolated maintenance interface. |
 | G-07 | Canonical timeline persistence remains legacy | Workflow checkpoints and confirmed restore add guarded history/recovery, but the canonical timeline is still one legacy JSON file with content-derived snapshot identity. | Introduce a first-class versioned project store only in a separately approved migration. |
 | G-08 | Production tools still return ad hoc payloads | The workflow service wraps confirmed dispatch in atomic envelopes, but direct CLI/chat calls still receive dictionaries or exceptions. | Route future production execution through the same application boundary. |
-| G-09 | Workflow UI is local and fixture-driven | The loopback UI persists review/confirmation/execution/rollback history, but there is no production Director-generated workflow or remote application. | Connect a future Director without weakening exact confirmation and atomic mutation gates. |
+| G-09 | Workflow UI is local and input-driven | The loopback UI can display Director history and persist review/confirmation/execution/rollback records, but it does not host Director dialogue or a production remote application. | Add a separately approved product interface without weakening exact confirmation and atomic mutation gates. |
 | G-11 | Visualization/manual editing remains local and narrow | The loopback UI now provides snapshot lanes, safe material preview, deterministic thumbnails/waveforms, a detailed inspector, and a confirmed basic video-clip edit slice, but no production frontend or broader editing controls. | Extend only through separately approved read contracts and atomic tools while preserving confirmation and mutation boundaries. |
-| G-13 | Plan creation is fixture-only | Strict deterministic diffs and the workflow service consume exact reviewed fixtures, but no Director runtime generates proposals. | Connect later production runtimes without allowing the Director or browser to bypass confirmation/atomic tools. |
 
 This gap register is descriptive. Closing any gap requires a separate approved implementation task.
 
-Resolved in the production Editing Agent step: G-04 (constrained executor), G-10's Editing-Agent gate coverage, and G-12 (confirmed Agent execution reuses the existing workflow/provenance recorder). Director-side coverage remains open under G-01, G-02, and G-13.
+Resolved in the production Editing Agent step: G-04 (constrained executor), G-10's Editing-Agent gate coverage, and G-12 (confirmed Agent execution reuses the existing workflow/provenance recorder). Resolved in the production Director step: G-01 (general-capability, directing-specialized runtime) and G-13 (runtime proposal creation). G-02 remains a product-entry composition gap because the legacy `chat` command is intentionally unchanged.
