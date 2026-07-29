@@ -276,7 +276,7 @@ class PreviewApplication:
                 review_state="unavailable",
                 message=(
                     "No Director plan-review fixture was supplied. "
-                    "Production Director and Editing Agent runtimes are absent."
+                    "The production Director runtime is absent."
                 ),
             ).model_dump(mode="json")
         try:

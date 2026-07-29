@@ -20,6 +20,12 @@ def test_reference_main_workflow_is_traceable_and_repeatable() -> None:
     assert first.plan.digest() == second.plan.digest() == REFERENCE_PLAN_DIGEST
     assert first.confirmation == second.confirmation
     assert first.execution == second.execution
+    assert first.editing_agent_report == second.editing_agent_report
+    assert first.editing_agent_report.status == "succeeded"
+    assert first.editing_agent_report.disposition == "executed"
+    assert tuple(
+        step.tool_name for step in first.editing_agent_report.steps
+    ) == REFERENCE_TOOL_ORDER
     assert first.requests == second.requests
     assert first.results == second.results
     for field in (

@@ -1,8 +1,8 @@
 """Deterministic test-only reference for Vistora's intended main workflow.
 
-This module constructs planning data directly because production Director and
-Editing Agents do not exist yet. Timeline/media mutation is still dispatched
-only through the registered atomic skills.
+This module constructs planning data directly because the production Director
+does not exist yet. The constrained Editing Agent consumes the exact persisted
+confirmation and delegates mutation to the workflow/atomic-tool boundary.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
 import main as vistora_main  # noqa: E402
+from agent import EditingAgent, EditingAgentExecutionReport  # noqa: E402
 from contracts import (  # noqa: E402
     AtomicToolRequestEnvelope,
     AtomicToolResultEnvelope,
@@ -35,7 +36,6 @@ from contracts import (  # noqa: E402
     MediaTimeRangeLocator,
     PlanReference,
     SourceEvidenceReference,
-    ToolError,
     UserConfirmationRecord,
 )
 from core import timeline_manager  # noqa: E402
@@ -54,7 +54,6 @@ from timeline_query import (  # noqa: E402
 )
 from traceability.models import TimelineTraceDocument  # noqa: E402
 from traceability.query import TraceabilityQuery  # noqa: E402
-from traceability.recording import ConfirmedTraceRecorder  # noqa: E402
 from traceability.store import TraceabilityStore  # noqa: E402
 from workflow import (  # noqa: E402
     RollbackProposal,
@@ -95,6 +94,7 @@ class ReferenceWorkflowReport:
     pre_confirmation_diff: PlanDiffDocument
     confirmation: UserConfirmationRecord
     execution: EditingExecutionPlan
+    editing_agent_report: EditingAgentExecutionReport
     requests: tuple[AtomicToolRequestEnvelope, ...]
     results: tuple[AtomicToolResultEnvelope, ...]
     trace_document: TimelineTraceDocument
@@ -121,6 +121,8 @@ class ReferenceWorkflowReport:
             ),
             "confirmation_id": self.confirmation.confirmation_id,
             "execution_id": self.execution.execution_id,
+            "editing_agent_status": self.editing_agent_report.status,
+            "editing_agent_report_id": self.editing_agent_report.report_id,
             "request_ids": [request.request_id for request in self.requests],
             "result_ids": [result.result_id for result in self.results],
             "tool_order": [request.tool_name for request in self.requests],
@@ -358,77 +360,6 @@ def _isolated_timeline(work_dir: Path) -> Iterator[Path]:
         timeline_manager.PROJECT_FILE = original_project_file
 
 
-def _dispatch_execution(
-    execution: EditingExecutionPlan,
-) -> tuple[
-    tuple[AtomicToolRequestEnvelope, ...],
-    tuple[AtomicToolResultEnvelope, ...],
-]:
-    requests: list[AtomicToolRequestEnvelope] = []
-    results: list[AtomicToolResultEnvelope] = []
-
-    for index, step in enumerate(execution.steps, start=1):
-        started_at = REFERENCE_TIME + timedelta(minutes=3, seconds=index)
-        request = AtomicToolRequestEnvelope.from_execution_plan(
-            request_id=f"request_reference_{index:02d}",
-            execution_plan=execution,
-            step_id=step.step_id,
-        )
-        request_data = request.model_dump(mode="json")
-        request_data["requested_at"] = started_at.isoformat()
-        request = AtomicToolRequestEnvelope.model_validate(request_data)
-        requests.append(request)
-
-        validated = request.validate_against_registry(vistora_main.SKILLS)
-        normalized_arguments = validated.model_dump(mode="python")
-        skill = vistora_main.SKILLS[request.tool_name]
-        before_snapshot = TimelineSnapshotService.snapshot_current()
-        try:
-            payload = skill.execute(normalized_arguments)
-        except Exception as exc:
-            error_result = AtomicToolResultEnvelope(
-                result_id=f"result_reference_{index:02d}",
-                request_id=request.request_id,
-                execution_id=request.execution_id,
-                step_id=request.step_id,
-                tool_name=request.tool_name,
-                status="error",
-                error=ToolError(
-                    code="reference_dispatch_failed",
-                    message=str(exc),
-                ),
-                started_at=started_at,
-                finished_at=started_at,
-            )
-            results.append(error_result)
-            raise AssertionError(
-                f"Atomic reference dispatch failed: {error_result.model_dump()}"
-            ) from exc
-
-        result = AtomicToolResultEnvelope(
-            result_id=f"result_reference_{index:02d}",
-            request_id=request.request_id,
-            execution_id=request.execution_id,
-            step_id=request.step_id,
-            tool_name=request.tool_name,
-            status="success",
-            payload=payload,
-            started_at=started_at,
-            finished_at=started_at,
-        )
-        results.append(result)
-        after_snapshot = TimelineSnapshotService.snapshot_current()
-        ConfirmedTraceRecorder.record(
-            execution,
-            request,
-            result,
-            before_snapshot,
-            after_snapshot,
-        )
-
-    return tuple(requests), tuple(results)
-
-
 def _verify_output(path: str) -> dict[str, Any]:
     metadata = _probe_media(path)
     expected = {
@@ -540,17 +471,34 @@ def run_reference_workflow(
                 confirmed_by="user_reference",
                 decision="confirmed",
             )
+            editing_agent = EditingAgent(
+                workflow,
+                clock=reference_clock,
+                id_factory=reference_id,
+            )
+            agent_request = editing_agent.prepare_execution(
+                request_id="editing_request_reference_main_flow",
+                confirmation_record_id=(
+                    confirmation_record.confirmation_record_id
+                ),
+            )
             with patch(
                 "skills.video_add_clip.uuid.uuid4",
                 return_value=REFERENCE_CLIP_UUID,
             ):
-                execution_run = workflow.run_confirmed_execution(
-                    confirmation_record.confirmation_record_id
-                )
-            if execution_run.status != "succeeded":
+                editing_agent_report = editing_agent.execute(agent_request)
+            if editing_agent_report.status != "succeeded":
                 raise AssertionError(
-                    f"Reference execution ended as {execution_run.status}"
+                    "Reference Editing Agent execution ended as "
+                    f"{editing_agent_report.status}"
                 )
+            execution_runs = [
+                entry.record
+                for entry in workflow.store.load().entries
+                if entry.record.schema_name
+                == "vistora.workflow.execution-run"
+            ]
+            execution_run = execution_runs[-1]
             confirmation = confirmation_record.user_confirmation
             execution = execution_run.execution_plan
             requests = tuple(step.request for step in execution_run.steps)
@@ -596,6 +544,7 @@ def run_reference_workflow(
             pre_confirmation_diff=pre_confirmation_diff,
             confirmation=confirmation,
             execution=execution,
+            editing_agent_report=editing_agent_report,
             requests=requests,
             results=results,
             trace_document=trace_document,

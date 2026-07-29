@@ -32,6 +32,7 @@ from timeline_query import (
 from traceability.recording import ConfirmedTraceRecorder
 
 from .models import (
+    ConfirmedExecutionBinding,
     DirectorPlanVersionRecord,
     EditingExecutionRunRecord,
     ExecutionStepHistory,
@@ -226,6 +227,89 @@ class WorkflowApplicationService:
             if isinstance(entry.record, kind)
         ]
 
+    def confirmed_execution_binding(
+        self,
+        confirmation_record_id: str,
+    ) -> ConfirmedExecutionBinding:
+        """Resolve and revalidate the exact immutable execution gate."""
+
+        ledger = self.store.load()
+        confirmations = {
+            record.confirmation_record_id: record
+            for record in self._records(
+                ledger,
+                WorkflowConfirmationRecord,
+            )
+        }
+        confirmation = confirmations.get(confirmation_record_id)
+        if confirmation is None or confirmation.decision != "confirmed":
+            raise WorkflowApplicationError(
+                "Execution requires an exact persisted confirmation"
+            )
+        if any(
+            record.confirmation_record_id == confirmation_record_id
+            for record in self._records(
+                ledger,
+                EditingExecutionRunRecord,
+            )
+        ):
+            raise WorkflowApplicationError(
+                "Confirmation has already been used for an execution run"
+            )
+        reviews = {
+            record.review_id: record
+            for record in self._records(ledger, ReviewSessionRecord)
+        }
+        review = reviews.get(confirmation.review_id)
+        if review is None:
+            raise WorkflowApplicationError(
+                "Confirmation references a missing review"
+            )
+        plan_ref = PlanReference.from_plan(review.request.director_plan)
+        if confirmation.user_confirmation.plan_ref != plan_ref:
+            raise WorkflowApplicationError(
+                "Confirmation crosses the reviewed Director plan"
+            )
+        if confirmation.proposed_execution_ref != review.diff.execution_ref:
+            raise WorkflowApplicationError(
+                "Confirmation crosses the reviewed execution proposal"
+            )
+        if confirmation.diff_digest != review.diff_digest:
+            raise WorkflowApplicationError(
+                "Confirmation crosses the reviewed plan diff"
+            )
+        if confirmation.snapshot_ref != review.diff.snapshot_ref:
+            raise WorkflowApplicationError(
+                "Confirmation crosses the reviewed timeline snapshot"
+            )
+        if confirmation.registry_ref != review.diff.registry_ref:
+            raise WorkflowApplicationError(
+                "Confirmation crosses the reviewed registry schemas"
+            )
+
+        self._current(confirmation.snapshot_ref)
+        self._registry(confirmation.registry_ref)
+        regenerated = PlanReviewService.review(
+            review.request,
+            self.snapshot_provider(),
+            self.registry,
+        )
+        if regenerated.diff_digest != confirmation.diff_digest:
+            raise WorkflowApplicationError(
+                "Plan diff drifted immediately before execution"
+            )
+        return ConfirmedExecutionBinding(
+            project_id=confirmation.project_id,
+            workflow_revision=ledger.revision,
+            confirmation_record_id=confirmation.confirmation_record_id,
+            review_id=review.review_id,
+            plan_ref=plan_ref,
+            proposed_execution_ref=confirmation.proposed_execution_ref,
+            diff_digest=confirmation.diff_digest,
+            snapshot_ref=confirmation.snapshot_ref,
+            registry_ref=confirmation.registry_ref,
+        )
+
     def record_review(self, request: PlanDiffRequest) -> ReviewSessionRecord:
         snapshot = self._current(request.snapshot_ref)
         self._registry(request.registry_ref)
@@ -351,8 +435,15 @@ class WorkflowApplicationService:
     def run_confirmed_execution(
         self,
         confirmation_record_id: str,
+        *,
+        expected_binding: ConfirmedExecutionBinding | None = None,
     ) -> EditingExecutionRunRecord:
-        ledger = self.store.load()
+        binding = self.confirmed_execution_binding(confirmation_record_id)
+        if expected_binding is not None and binding != expected_binding:
+            raise WorkflowApplicationError(
+                "Confirmed execution binding changed before dispatch"
+            )
+        ledger = self.store.load(binding.project_id)
         confirmations = {
             record.confirmation_record_id: record
             for record in self._records(
@@ -361,19 +452,9 @@ class WorkflowApplicationService:
             )
         }
         confirmation = confirmations.get(confirmation_record_id)
-        if confirmation is None or confirmation.decision != "confirmed":
+        if confirmation is None:
             raise WorkflowApplicationError(
-                "Execution requires an exact persisted confirmation"
-            )
-        if any(
-            record.confirmation_record_id == confirmation_record_id
-            for record in self._records(
-                ledger,
-                EditingExecutionRunRecord,
-            )
-        ):
-            raise WorkflowApplicationError(
-                "Confirmation has already been used for an execution run"
+                "Confirmed execution binding disappeared before dispatch"
             )
         reviews = {
             record.review_id: record
@@ -383,8 +464,25 @@ class WorkflowApplicationService:
 
         with self.store.exclusive(
             project_id=ledger.project_id,
-            expected_revision=ledger.revision,
+            expected_revision=binding.workflow_revision,
         ) as session:
+            current_binding = ConfirmedExecutionBinding(
+                project_id=confirmation.project_id,
+                workflow_revision=session.ledger.revision,
+                confirmation_record_id=confirmation.confirmation_record_id,
+                review_id=review.review_id,
+                plan_ref=PlanReference.from_plan(
+                    review.request.director_plan
+                ),
+                proposed_execution_ref=confirmation.proposed_execution_ref,
+                diff_digest=confirmation.diff_digest,
+                snapshot_ref=confirmation.snapshot_ref,
+                registry_ref=confirmation.registry_ref,
+            )
+            if current_binding != binding:
+                raise WorkflowApplicationError(
+                    "Confirmed execution binding changed before dispatch"
+                )
             self._current(confirmation.snapshot_ref)
             self._registry(confirmation.registry_ref)
             regenerated = PlanReviewService.review(

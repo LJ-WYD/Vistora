@@ -1,6 +1,7 @@
 """Persistent Vistora workflow ledger and confirmed application services."""
 
 from .models import (
+    ConfirmedExecutionBinding,
     DirectorPlanVersionRecord,
     EditingExecutionRunRecord,
     ExecutionStepHistory,
@@ -32,6 +33,7 @@ from .service import (
 from .query import WorkflowHistoryQuery, WorkflowHistoryView
 
 __all__ = [
+    "ConfirmedExecutionBinding",
     "DirectorPlanVersionRecord",
     "EditingExecutionRunRecord",
     "ExecutionStepHistory",

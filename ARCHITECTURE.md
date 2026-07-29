@@ -36,8 +36,9 @@ The Director may inspect read-only context and tool schemas. It MUST NOT call mu
 src/
   main.py                    CLI entry point and hard-coded skill registry
   agent/
+    editing_agent.py         Production confirmed-plan mechanical executor
     llm_client.py            OpenAI-compatible model client
-    operator_agent.py        Current hybrid conversational/tool-calling agent
+    operator_agent.py        Legacy hybrid conversational/tool-calling prototype
   contracts/
     models.py                Versioned plan, confirmation, execution,
                               project, manual-edit, and tool envelopes
@@ -79,6 +80,8 @@ tests/
   run_validation.py          Synthetic end-to-end timeline/render validation
   test_architecture_boundaries.py
                               Static agent-boundary and registry checks
+  test_editing_agent.py       Production gate, failure, concurrency, and
+                              restart-recovery checks
   test_contracts.py           Versioning, confirmation, compatibility,
                               serialization, and envelope checks
   test_reference_workflow.py  Repeatability, traceability, and media checks
@@ -95,7 +98,7 @@ tests/
                                rollback, history API, and redaction checks
 ```
 
-The repository now contains a framework-free local visual timeline preview launched from the command line. There is still no production frontend application, desktop GUI, remote API server, Director runtime, or Editing Agent runtime. Browser view/draft state is transient; current-workspace workflow decisions and runs are persisted only through the dedicated application service and ledger.
+The repository now contains a framework-free local visual timeline preview and a production constrained Editing Agent library boundary. There is still no production frontend application, desktop GUI, remote API server, or Director runtime. Browser view/draft state is transient; current-workspace workflow decisions and runs are persisted only through the dedicated application service and ledger.
 
 ## Implemented runtime
 
@@ -158,7 +161,7 @@ This flow validates individual tool arguments through `BaseSkill.execute`, but i
 | `PlanDiffDocument` | `vistora.plan-diff` | Deterministic changes, evidence/provenance, warnings, step status, and net summary. |
 | `PlanReviewEnvelope` | `vistora.plan-review-envelope` | Browser-safe `current`, `stale`, `invalid`, or `unavailable` freshness state. |
 
-The Director/Editing contracts are not wired into `OperatorAgent` or production agent execution. Their presence does not create a Director Agent or Editing Agent and does not authorize execution. The CLI can load an explicit plan-review fixture only. The separate manual-edit contracts are wired only into the local preview application service and the dedicated confirmed atomic skill described below; they do not represent Director decisions.
+The Director contracts are not wired into `OperatorAgent`, and no production Director exists. The confirmed contracts are wired into the separate production `EditingAgent`, which can consume only a persisted exact confirmation binding. This does not authorize `OperatorAgent` or the browser to execute unconfirmed Director intent. The CLI can load an explicit plan-review fixture only. The separate manual-edit contracts are wired only into the local preview application service and the dedicated confirmed atomic skill described below; they do not represent Director decisions.
 
 ### Pre-confirmation plan-review boundary
 
@@ -194,7 +197,29 @@ persisted plan version
   -> succeeded | failed | partial | recovery_required
 ```
 
-`WorkflowApplicationService` regenerates the exact review and rechecks snapshot, plan, proposed execution, diff, and registry-schema digests immediately before execution. It dispatches in order through `BaseSkill.execute`, records each correlated result/provenance/checkpoint, and stops on the first failure. Abandoned pending/running records can only recover to `recovery_required`; they are never inferred as successful. This application service supplies the current constrained boundary for fixtures and the local workflow panel, but it is not a production Editing Agent.
+`WorkflowApplicationService` regenerates the exact review and rechecks snapshot, plan, proposed execution, diff, and registry-schema digests immediately before execution. It dispatches in order through `BaseSkill.execute`, records each correlated result/provenance/checkpoint, and stops on the first failure. Abandoned pending/running records can only recover to `recovery_required`; they are never inferred as successful. This service is the mutation-capable application boundary used by fixtures, the local workflow panel, and the production Editing Agent.
+
+### Production Editing Agent execution boundary
+
+`src/agent/editing_agent.py` is the implemented production mechanical executor. It has no LLM client, prompt, chat history, Director logic, timeline manager, renderer, skill implementation, trace writer, or registry-dispatch code. Its only mutation-capable dependency is an injected `WorkflowApplicationService`.
+
+The boundary is deliberately two-phase:
+
+```text
+persisted confirmed workflow
+  -> prepare exact ConfirmedExecutionBinding
+  -> frozen EditingAgentExecutionRequest
+  -> revalidate ledger revision + plan/review/confirmation/diff
+  -> revalidate current snapshot + registry schemas
+  -> WorkflowApplicationService ordered atomic dispatch
+  -> frozen EditingAgentExecutionReport
+```
+
+`ConfirmedExecutionBinding` includes the exact project and ledger revision, confirmation and review IDs, Director plan ID/version/digest, proposed execution digest, reviewed diff digest, timeline snapshot reference, and registry/schema digest. Both the Agent and application service compare the complete binding, and the service repeats the freshness checks under its optimistic exclusive workflow lock before any atomic request is dispatched.
+
+The Agent returns no prose interpretation. Its versioned report carries exact run/step/request/result linkage, before/after snapshots, ledger revisions, and the persisted terminal state. Rejected confirmations, replay, stale state, registry drift, tampering, or concurrent work return a rejected report without a claimed run. Atomic failures preserve the service's `failed` or `partial` result; trace persistence failure remains `recovery_required`. A restart method delegates to the ledger recovery transition and never guesses that an abandoned run succeeded.
+
+`OperatorAgent` remains a compatibility prototype. It still combines conversation, LLM planning, and immediate tool calls and is not upgraded, wrapped, or relabeled by this production execution boundary.
 
 Rollback is a second workflow, never an automatic failure handler. The service requires the current timeline to equal the execution's latest checkpoint, creates a deterministic current-to-start-checkpoint proposal, records its limitations, and requires a separate immutable decision. Only `VideoRestoreTimelineCheckpointSkill` mutates during restore. That skill verifies the exact current checkpoint, atomically replaces the legacy timeline JSON, verifies the restored digest, and restores the prior bytes if validation fails. It does not delete exports, reverse generated media, or erase the original execution/provenance history. Manual edits or any other current-state drift invalidate rollback and require a new safe review; unsupported media-file inverses fail closed.
 
@@ -483,15 +508,14 @@ Mutation-capable utilities and core objects are implementation details behind to
 | G-01 | Director Agent absent | `DirectorPlan` contracts and reference fixtures exist, but there is no Director runtime/class or directing prompt. | Add the general-capability Director without mutation authority. |
 | G-02 | Production chat is not wired into the confirmation gate | The fixture/application workflow enforces exact review and confirmation, but `OperatorAgent` still executes LLM tool calls immediately. | Make the future Director/Editing runtimes produce and consume these records. |
 | G-03 | Operator combines incompatible roles | `OperatorAgent` owns dialogue, planning, and execution. | Separate/retire the hybrid behind Director and Editing contracts. |
-| G-04 | Editing Agent absent | No constrained plan executor exists. | Add an executor that accepts only confirmed structured plans. |
 | G-05 | Runtime registry is hard-coded | `SKILLS` is defined in `src/main.py`; plan review binds a versioned digest of its schemas, but that read reference does not replace the runtime registry. | Provide a reusable registry contract with durable schema/version metadata. |
 | G-06 | Direct CLI render bypass | `render` instantiates `TimelineRenderer` directly. | Route mutations through an explicit atomic tool or clearly isolated maintenance interface. |
 | G-07 | Canonical timeline persistence remains legacy | Workflow checkpoints and confirmed restore add guarded history/recovery, but the canonical timeline is still one legacy JSON file with content-derived snapshot identity. | Introduce a first-class versioned project store only in a separately approved migration. |
 | G-08 | Production tools still return ad hoc payloads | The workflow service wraps confirmed dispatch in atomic envelopes, but direct CLI/chat calls still receive dictionaries or exceptions. | Route future production execution through the same application boundary. |
 | G-09 | Workflow UI is local and fixture-driven | The loopback UI persists review/confirmation/execution/rollback history, but there is no production Director-generated workflow or remote application. | Connect a future Director without weakening exact confirmation and atomic mutation gates. |
-| G-10 | Production agent gates remain untested | The reference harness covers pre-confirmation diff, contract confirmation, atomic dispatch, traceability, and media output, but no Director or Editing runtime exists. | Add agent-level gate tests as those components are implemented. |
 | G-11 | Visualization/manual editing remains local and narrow | The loopback UI now provides snapshot lanes, safe material preview, deterministic thumbnails/waveforms, a detailed inspector, and a confirmed basic video-clip edit slice, but no production frontend or broader editing controls. | Extend only through separately approved read contracts and atomic tools while preserving confirmation and mutation boundaries. |
-| G-12 | Trace recording is not yet wired to a production Editing Agent | Strict sidecar contracts, confirmed/manual recorders, queries, snapshot summaries, and the reference harness exist; production Director and Editing runtimes remain absent. | Invoke the same confirmed recorder from a future Editing Agent dispatcher without weakening the atomic boundary. |
 | G-13 | Plan creation is fixture-only | Strict deterministic diffs and the workflow service consume exact reviewed fixtures, but no Director runtime generates proposals. | Connect later production runtimes without allowing the Director or browser to bypass confirmation/atomic tools. |
 
 This gap register is descriptive. Closing any gap requires a separate approved implementation task.
+
+Resolved in the production Editing Agent step: G-04 (constrained executor), G-10's Editing-Agent gate coverage, and G-12 (confirmed Agent execution reuses the existing workflow/provenance recorder). Director-side coverage remains open under G-01, G-02, and G-13.

@@ -621,10 +621,19 @@ def test_workflow_import_boundaries_keep_queries_and_agents_non_mutating():
         "core.timeline_manager",
         "skills",
         "timeline_preview",
-        "agent",
     }
     for name in ("models.py", "store.py", "query.py"):
         imported = imports(SRC / "workflow" / name)
         assert not imported.intersection(forbidden_read_imports)
-    for path in (SRC / "agent").glob("*.py"):
-        assert "workflow" not in imports(path)
+    assert "workflow" not in imports(SRC / "agent" / "operator_agent.py")
+    editing_imports = imports(SRC / "agent" / "editing_agent.py")
+    assert "workflow" in editing_imports
+    assert not editing_imports.intersection(
+        {
+            "core.timeline",
+            "core.timeline_manager",
+            "skills",
+            "traceability",
+            "traceability.recording",
+        }
+    )

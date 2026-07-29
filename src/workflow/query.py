@@ -48,7 +48,8 @@ class WorkflowHistoryView(WorkflowModel):
     rollbacks: tuple[dict[str, Any], ...] = ()
     limitations: tuple[str, ...] = (
         "Timeline/project-state rollback only; external media is not removed.",
-        "Production Director and Editing Agent runtimes remain absent.",
+        "Production Director runtime remains absent.",
+        "Browser workflow actions use the application service directly.",
     )
 
 

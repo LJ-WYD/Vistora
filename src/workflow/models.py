@@ -158,6 +158,23 @@ class WorkflowConfirmationRecord(WorkflowModel):
         return self
 
 
+class ConfirmedExecutionBinding(WorkflowModel):
+    """Exact persisted and runtime binding required before atomic execution."""
+
+    schema_name: Literal["vistora.workflow.confirmed-execution-binding"] = (
+        "vistora.workflow.confirmed-execution-binding"
+    )
+    project_id: StableId
+    workflow_revision: int = Field(ge=1)
+    confirmation_record_id: StableId
+    review_id: StableId
+    plan_ref: PlanReference
+    proposed_execution_ref: ProposedExecutionReference
+    diff_digest: Sha256Digest
+    snapshot_ref: TimelineSnapshotReference
+    registry_ref: RegistrySchemaReference
+
+
 class ProjectCheckpoint(WorkflowModel):
     schema_name: Literal["vistora.workflow.project-checkpoint"] = (
         "vistora.workflow.project-checkpoint"

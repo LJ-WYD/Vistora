@@ -12,7 +12,7 @@ The current public baseline contains the editing runtime, versioned review/prove
 - `TimelineRenderer` is responsible for producing media from that timeline.
 - `TimelineSnapshotService` exposes detached, immutable read models for inspection without changing timeline or media state.
 
-The intended architecture keeps creative planning separate from execution: a Director Agent produces a structured plan for user confirmation, an Editing Agent validates and executes that confirmed plan, and only atomic tools mutate timeline or media state. The current implementation is a prototype and does not yet implement every part of that target contract.
+The architecture keeps creative planning separate from execution: a future Director Agent produces a structured plan for user confirmation, the constrained production `EditingAgent` validates and executes that exact confirmed plan, and only atomic tools mutate timeline or media state. The Director runtime is not implemented yet. The interactive `OperatorAgent` remains a compatibility prototype and is not part of the confirmed production path.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the implemented runtime, binding responsibility contracts, compatibility exceptions, and current-to-target gap register.
 
@@ -101,7 +101,7 @@ query = TraceabilityQuery(TraceabilityStore.load(), snapshot)
 clips = query.plan_to_clips(PlanReference.from_plan(director_plan))
 ```
 
-This is provenance infrastructure, not a production Director or Editing Agent. Provenance describes recorded history; the separate plan-review boundary below describes proposed, unapplied changes.
+Provenance describes recorded history; the separate plan-review boundary below describes proposed, unapplied changes. The production Editing Agent consumes these existing workflow/provenance services but does not create Director intent.
 
 ## Director plan review (reference/fixture mode)
 
@@ -120,7 +120,7 @@ python src/main.py preview `
 
 The **方案审阅 / 变更预览** panel groups additions, removals, changes, and warnings; synchronizes rows with affected timeline clips and the evidence inspector; and marks stale, invalid, unsupported, or blocked proposals clearly. **Back**, **Reject locally**, and **Ready to confirm** still change browser view state only. They never create a confirmation.
 
-For a current-workspace preview, the separate workflow panel can deliberately persist the exact review, record an explicit immutable confirmation or rejection, run the confirmed steps through the registered atomic-tool application boundary, and show execution/rollback history. External `--timeline` documents remain read-only. This fixture-driven surface exists because production Director and Editing Agent runtimes are still absent.
+For a current-workspace preview, the separate workflow panel can deliberately persist the exact review, record an explicit immutable confirmation or rejection, run the confirmed steps through the registered atomic-tool application boundary, and show execution/rollback history. External `--timeline` documents remain read-only. This fixture-driven surface still constructs Director inputs from fixtures because the production Director runtime is absent; the browser workflow routes continue to use the same application service and do not bypass the Editing Agent's constraints.
 
 ## Persistent workflow ledger and rollback
 
@@ -128,7 +128,28 @@ For a current-workspace preview, the separate workflow panel can deliberately pe
 
 The ledger keeps one stable logical identity for the workspace while every review/checkpoint retains the exact timeline snapshot ID, revision, and digest it observed. This permits a second reviewed plan after a legacy content-derived `project_legacy_*` snapshot ID changes, without weakening freshness checks or changing legacy timeline JSON.
 
-`WorkflowApplicationService` is the current application boundary—not a production Editing Agent. It regenerates the exact reviewed diff immediately before confirmation/execution, dispatches registered atomic requests in order, records every result and provenance effect, stops on the first failure, and records `failed`, `partial`, or `recovery_required` truthfully. A restart helper converts abandoned pending/running records to `recovery_required` rather than guessing success.
+`WorkflowApplicationService` is the mutation-capable application boundary under the production Editing Agent. It regenerates the exact reviewed diff immediately before confirmation/execution, dispatches registered atomic requests in order, records every result and provenance effect, stops on the first failure, and records `failed`, `partial`, or `recovery_required` truthfully. A restart helper converts abandoned pending/running records to `recovery_required` rather than guessing success.
+
+## Constrained Editing Agent
+
+`src/agent/editing_agent.py` implements the production mechanical executor. `prepare_execution` resolves a frozen `vistora.workflow.confirmed-execution-binding` containing the exact ledger revision, plan reference, review/diff, proposed execution, snapshot, and registry-schema references. `execute` accepts only the versioned `vistora.editing-agent.execution-request`, rechecks that complete binding, and delegates the declared steps to `WorkflowApplicationService`. It cannot chat, infer creative choices, add or reorder operations, import timeline/rendering engines, or invoke a skill directly.
+
+The returned `vistora.editing-agent.execution-report` is frozen and serializable. It identifies the confirmation, workflow revisions, execution run, exact ordered atomic request/result IDs, snapshot changes, and truthful terminal state. Rejected, stale, replayed, tampered, or concurrent requests produce a structured fail-closed report with no claimed run. Atomic failures remain `failed` or `partial`; interrupted runs are explicitly recovered as `recovery_required`.
+
+Library use starts from an already persisted explicit confirmation:
+
+```python
+from agent import EditingAgent
+
+agent = EditingAgent(workflow_service)
+request = agent.prepare_execution(
+    request_id="editing_request_001",
+    confirmation_record_id=confirmation.confirmation_record_id,
+)
+report = agent.execute(request)
+```
+
+This API does not create reviews or confirmations. The caller must use the existing review and confirmation application actions first. `OperatorAgent` and the `chat` command remain legacy conversational/tool-calling compatibility paths; they do not gain or represent this confirmation gate.
 
 Rollback is never automatic. The service first creates a deterministic proposal from the current exact checkpoint to the run's start checkpoint. Manual edits or other revision drift make the proposal unavailable or stale. A second immutable user decision is required before `VideoRestoreTimelineCheckpointSkill` atomically restores the validated timeline document. This restores timeline/project JSON only: generated/exported external media is neither deleted nor promised reversible, and original execution/provenance history remains append-only.
 
@@ -146,7 +167,7 @@ Run the deterministic review → confirmation → recorded execution → rollbac
 python -m pytest -q tests/test_reference_workflow.py
 ```
 
-This reference is a test harness; it does not implement production Director or Editing Agents.
+This reference constructs Director data as a deterministic fixture, then exercises the production constrained Editing Agent. It does not implement a production Director.
 
 Generated validation media and local runtime state are ignored by Git.
 
