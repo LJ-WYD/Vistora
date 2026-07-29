@@ -47,6 +47,29 @@ Start the interactive editing agent:
 python src/main.py chat
 ```
 
+The `chat` command remains the legacy `OperatorAgent` compatibility path. Start
+the separated production workflow instead with:
+
+```powershell
+python src/main.py studio --media-root C:\path\to\your\media
+```
+
+Then open `http://127.0.0.1:8765`. The production entry composes the
+`DirectorAgent`, deterministic plan review, a separate explicit user decision,
+the confirmed `EditingAgent`, workflow history, and reviewed rollback. Each
+browser action carries an exact session/project/revision and a unique request
+ID; duplicate, stale, cross-session, cross-project, non-loopback, and
+CSRF-missing requests fail closed. Refresh and restart reload the append-only
+Director, product-session, and workflow ledgers instead of repeating a
+confirmation or execution.
+
+The browser never calls a skill or timeline manager. Director dialogue can only
+produce or revise a reviewed proposal. Persisting the review, confirming or
+rejecting it, running the Editing Agent, and reviewing/confirming rollback are
+separate product state transitions. The current production entry supports only
+materials already observed through the read context. If none exist it reports
+that materials must be planned first; it does not generate them.
+
 Render a declarative timeline:
 
 ```powershell

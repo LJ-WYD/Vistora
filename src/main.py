@@ -130,6 +130,32 @@ def preview_timeline(
     )
 
 
+def production_studio(
+    media_roots: list[str],
+    host: str,
+    port: int,
+    session_id: str,
+):
+    """Start the separated Director-to-confirmed-Editing product entry."""
+
+    from product_entry import build_current_product_entry
+    from timeline_preview import run_preview_server
+
+    product = build_current_product_entry(
+        SKILLS,
+        session_id=session_id,
+    )
+    run_preview_server(
+        media_roots=media_roots,
+        host=host,
+        port=port,
+        skill_registry=SKILLS,
+        product_entry_service=product,
+        plan_review_request_provider=product.latest_review_request,
+        director_history_provider=product.director_history,
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description="Vistora 命令行交互入口")
     subparsers = parser.add_subparsers(dest="command", help="可选子命令")
@@ -160,6 +186,32 @@ def main():
             "Optional legacy or versioned timeline JSON path. "
             "Defaults to the current TimelineManager state."
         ),
+    )
+
+    studio_parser = subparsers.add_parser(
+        "studio",
+        help=(
+            "Start the production Director, review, confirmation, and "
+            "constrained Editing workflow"
+        ),
+    )
+    studio_parser.add_argument(
+        "--media-root",
+        action="append",
+        default=[],
+        help="Explicit local media root; repeat to allow multiple roots.",
+    )
+    studio_parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        choices=["127.0.0.1", "::1", "localhost"],
+        help="Loopback interface to bind.",
+    )
+    studio_parser.add_argument("--port", type=int, default=8765)
+    studio_parser.add_argument(
+        "--session-id",
+        default="session_local_product",
+        help="Stable opaque local product session ID.",
     )
     preview_parser.add_argument(
         "--media-root",
@@ -216,6 +268,13 @@ def main():
             args.port,
             args.plan_review,
             args.director_history,
+        )
+    elif args.command == "studio":
+        production_studio(
+            args.media_root,
+            args.host,
+            args.port,
+            args.session_id,
         )
     else:
         parser.print_help()

@@ -1,0 +1,344 @@
+"""Constrained composition of Director, review, confirmation, and Editing."""
+
+from __future__ import annotations
+
+import re
+import uuid
+from collections.abc import Callable
+from datetime import datetime, timezone
+from typing import Any
+
+from agent import DirectorAgent, EditingAgent
+from director import DirectorHistoryQuery, DirectorStore
+from workflow import WorkflowApplicationService, WorkflowHistoryQuery
+
+from .models import (
+    ProductEntryCommand,
+    ProductEntryResponse,
+    ProductEntryView,
+)
+from .store import (
+    ProductEntryConcurrencyError,
+    ProductEntryIntegrityError,
+    ProductEntryStore,
+)
+
+
+Clock = Callable[[], datetime]
+IdFactory = Callable[[str], str]
+_PATH = re.compile(r"(?:[A-Za-z]:\\|file://|/(?:Users|home)/)")
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _random_id(prefix: str) -> str:
+    return f"{prefix}_{uuid.uuid4().hex}"
+
+
+class ProductEntryError(ValueError):
+    pass
+
+
+class ProductionEntryService:
+    """One product state machine; no direct timeline or skill dependency."""
+
+    def __init__(
+        self,
+        *,
+        director: DirectorAgent,
+        director_store: DirectorStore,
+        workflow: WorkflowApplicationService,
+        editing_agent: EditingAgent,
+        store: ProductEntryStore,
+        session_id: str,
+        project_id: str,
+        clock: Clock = _utc_now,
+        id_factory: IdFactory = _random_id,
+    ) -> None:
+        self.director = director
+        self.director_store = director_store
+        self.workflow = workflow
+        self.editing_agent = editing_agent
+        self.store = store
+        self.session_id = session_id
+        self.project_id = project_id
+        self.clock = clock
+        self.id_factory = id_factory
+
+    def view(self) -> ProductEntryView:
+        ledger = self.store.load(
+            session_id=self.session_id,
+            project_id=self.project_id,
+        )
+        director_ledger = self.director_store.load(
+            session_id=self.session_id,
+            project_id=self.project_id,
+        )
+        director = DirectorHistoryQuery.project(director_ledger).model_dump(
+            mode="json"
+        )
+        workflow_ledger = self.workflow.store.load(
+            None if self.workflow.store.path.exists() else self.project_id
+        )
+        workflow = WorkflowHistoryQuery.project(workflow_ledger).model_dump(
+            mode="json"
+        )
+        state, allowed = self._state(ledger, director, workflow)
+        latest = ledger.events[-1].result if ledger.events else None
+        review = self._latest_review(director_ledger)
+        view = ProductEntryView(
+            session_id=self.session_id,
+            project_id=self.project_id,
+            revision=ledger.revision,
+            state=state,
+            director=director,
+            review=review,
+            workflow=workflow,
+            latest_result=latest,
+            allowed_actions=allowed,
+        )
+        if _PATH.search(view.model_dump_json()):
+            raise ProductEntryIntegrityError(
+                "Product view contains an absolute path"
+            )
+        return view
+
+    def director_history(self):
+        ledger = self.director_store.load(
+            session_id=self.session_id,
+            project_id=self.project_id,
+        )
+        return DirectorHistoryQuery.project(ledger)
+
+    def latest_review_request(self):
+        ledger = self.director_store.load(
+            session_id=self.session_id,
+            project_id=self.project_id,
+        )
+        for entry in reversed(ledger.entries):
+            proposal = entry.record.report.proposal
+            if proposal is not None:
+                return proposal.review_request
+        raise ProductEntryError("No Director proposal is ready for review")
+
+    @staticmethod
+    def _latest_review(director_ledger) -> dict[str, Any] | None:
+        for entry in reversed(director_ledger.entries):
+            proposal = entry.record.report.proposal
+            if proposal is not None:
+                return proposal.review.model_dump(mode="json")
+        return None
+
+    @staticmethod
+    def _state(ledger, director: dict, workflow: dict):
+        if ledger.events:
+            latest = ledger.events[-1]
+            mapping = {
+                "persist_review": "reviewed",
+                "confirm": "confirmed",
+                "reject": "rejected",
+                "execute": latest.status,
+                "rollback_review": "rollback_reviewed",
+                "rollback_confirm": "rollback_confirmed",
+                "rollback_reject": "rollback_rejected",
+                "rollback_apply": (
+                    "rolled_back" if latest.status == "succeeded" else latest.status
+                ),
+            }
+            state = mapping.get(latest.action)
+            if state is not None:
+                allowed = {
+                    "reviewed": ("confirm", "reject"),
+                    "confirmed": ("execute",),
+                    "succeeded": ("rollback_review", "director_turn"),
+                    "failed": ("rollback_review", "director_turn"),
+                    "partial": ("rollback_review",),
+                    "recovery_required": ("rollback_review",),
+                    "rollback_reviewed": (
+                        "rollback_confirm",
+                        "rollback_reject",
+                    ),
+                    "rollback_confirmed": ("rollback_apply",),
+                    "rolled_back": ("director_turn",),
+                    "rejected": ("director_turn",),
+                    "rollback_rejected": ("director_turn",),
+                }.get(state, ())
+                return state, allowed
+        status = director.get("latest_status", "empty")
+        if status == "proposal_ready":
+            return "proposal_ready", ("director_turn", "persist_review")
+        if status in {"needs_clarification", "needs_materials"}:
+            return status, ("director_turn",)
+        if status in {"model_error", "stale_context"}:
+            return "error", ("director_turn",)
+        return "dialogue", ("director_turn",)
+
+    def command(self, command: ProductEntryCommand) -> ProductEntryResponse:
+        if command.session_id != self.session_id:
+            raise ProductEntryError("Command crosses product session")
+        if command.project_id != self.project_id:
+            raise ProductEntryError("Command crosses product project")
+        existing = self.store.load(
+            session_id=self.session_id,
+            project_id=self.project_id,
+        )
+        for event in existing.events:
+            if event.request_id == command.request_id:
+                if event.request_digest != command.content_digest():
+                    raise ProductEntryError(
+                        "Request ID was replayed with different content"
+                    )
+                return ProductEntryResponse(
+                    request_id=command.request_id,
+                    replayed=True,
+                    view=self.view(),
+                )
+        with self.store.exclusive(
+            session_id=self.session_id,
+            project_id=self.project_id,
+            expected_revision=command.expected_revision,
+        ) as ledger:
+            current = self.view()
+            if command.action not in current.allowed_actions:
+                raise ProductEntryError(
+                    f"Action {command.action} is illegal from {current.state}"
+                )
+            status, target_id, result = self._perform(command)
+            self.store.append(
+                ledger,
+                command,
+                event_id=self.id_factory("product_event"),
+                status=status,
+                target_id=target_id,
+                result=result,
+                recorded_at=self.clock(),
+            )
+        return ProductEntryResponse(
+            request_id=command.request_id,
+            view=self.view(),
+        )
+
+    def _perform(
+        self,
+        command: ProductEntryCommand,
+    ) -> tuple[str, str | None, dict[str, Any]]:
+        if command.action == "director_turn":
+            report = self.director.converse(
+                session_id=self.session_id,
+                turn_id=self.id_factory("director_turn"),
+                user_message=command.user_message or "",
+            )
+            return report.status, report.report_id, {
+                "report_id": report.report_id,
+                "status": report.status,
+                "brief_version": report.brief.brief_version,
+                "proposal_id": (
+                    report.proposal.proposal_id if report.proposal else None
+                ),
+            }
+        if command.action == "persist_review":
+            director_ledger = self.director_store.load(
+                session_id=self.session_id,
+                project_id=self.project_id,
+            )
+            proposal = next(
+                (
+                    entry.record.report.proposal
+                    for entry in reversed(director_ledger.entries)
+                    if entry.record.report.proposal is not None
+                ),
+                None,
+            )
+            if proposal is None or proposal.proposal_id != command.target_id:
+                raise ProductEntryError("Exact Director proposal is unavailable")
+            record = self.workflow.record_review(proposal.review_request)
+            return "reviewed", record.review_id, {
+                "review_id": record.review_id,
+                "proposal_id": proposal.proposal_id,
+                "diff_digest": record.diff_digest,
+            }
+        if command.action in {"confirm", "reject"}:
+            record = self.workflow.confirm_review(
+                command.target_id or "",
+                confirmed_by=command.actor_id,
+                decision=(
+                    "confirmed" if command.action == "confirm" else "rejected"
+                ),
+            )
+            return record.decision, record.confirmation_record_id, {
+                "review_id": record.review_id,
+                "confirmation_record_id": record.confirmation_record_id,
+                "decision": record.decision,
+            }
+        if command.action == "execute":
+            request = self.editing_agent.prepare_execution(
+                request_id=self.id_factory("editing_request"),
+                confirmation_record_id=command.target_id or "",
+            )
+            report = self.editing_agent.execute(request)
+            return report.status, report.report_id, {
+                "report_id": report.report_id,
+                "request_id": report.request_id,
+                "status": report.status,
+                "disposition": report.disposition,
+                "run_id": report.run_id,
+                "execution_id": report.execution_id,
+                "confirmation_record_id": report.confirmation_record_id,
+                "workflow_revision_before": report.workflow_revision_before,
+                "workflow_revision_after": report.workflow_revision_after,
+                "steps": [
+                    {
+                        "sequence": step.sequence,
+                        "step_id": step.step_id,
+                        "tool_name": step.tool_name,
+                        "request_id": step.atomic_request_id,
+                        "result_id": step.atomic_result_id,
+                        "status": step.status,
+                    }
+                    for step in report.steps
+                ],
+                "error": (
+                    report.error.model_dump(mode="json")
+                    if report.error is not None
+                    else None
+                ),
+            }
+        if command.action == "rollback_review":
+            record = self.workflow.propose_rollback(command.target_id or "")
+            return "reviewed", record.review_id, {
+                "review_id": record.review_id,
+                "proposal_id": record.proposal.proposal_id,
+                "source_run_id": record.proposal.source_run_id,
+            }
+        if command.action in {"rollback_confirm", "rollback_reject"}:
+            record = self.workflow.confirm_rollback(
+                command.target_id or "",
+                confirmed_by=command.actor_id,
+                decision=(
+                    "confirmed"
+                    if command.action == "rollback_confirm"
+                    else "rejected"
+                ),
+            )
+            return record.decision, record.confirmation_id, {
+                "review_id": record.review_id,
+                "confirmation_id": record.confirmation_id,
+                "decision": record.decision,
+            }
+        if command.action == "rollback_apply":
+            record = self.workflow.apply_rollback(command.target_id or "")
+            return record.status, record.rollback_run_id, {
+                "rollback_run_id": record.rollback_run_id,
+                "status": record.status,
+            }
+        raise ProductEntryError("Unknown product action")
+
+
+__all__ = [
+    "ProductEntryConcurrencyError",
+    "ProductEntryError",
+    "ProductEntryIntegrityError",
+    "ProductionEntryService",
+]

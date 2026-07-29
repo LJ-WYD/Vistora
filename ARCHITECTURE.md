@@ -46,6 +46,11 @@ src/
     context.py               Detached timeline/material/tool-schema projection
     store.py                 Hash-chained atomic Director session store
     query.py                 Browser-safe deterministic history projection
+  product_entry/
+    models.py                Frozen product commands/events/views
+    store.py                 Hash-chained idempotency/session ledger
+    service.py               Director/review/confirmation/Editing composition
+    factory.py               Current-workspace production entry wiring
   contracts/
     models.py                Versioned plan, confirmation, execution,
                               project, manual-edit, and tool envelopes
@@ -107,13 +112,13 @@ tests/
                                rollback, history API, and redaction checks
 ```
 
-The repository now contains a production Director library boundary, a production constrained Editing Agent boundary, and a framework-free local visual timeline preview. There is still no production frontend application, desktop GUI, remote API server, or no-material creation pipeline. Browser view/draft state is transient; Director turns and current-workspace workflow decisions/runs use separate append-only stores.
+The repository now contains production Director and constrained Editing Agent boundaries plus a framework-free loopback product entry. There is still no desktop GUI, remote API server, or no-material creation pipeline. Transient browser state is reconstructed from separate append-only Director, product-session, provenance, and workflow stores.
 
 ## Implemented runtime
 
 ### CLI entry points
 
-`src/main.py` exposes five commands:
+`src/main.py` exposes six commands:
 
 | Command | Implemented behavior | Architectural status |
 | --- | --- | --- |
@@ -122,6 +127,7 @@ The repository now contains a production Director library boundary, a production
 | `render` | Loads `TimelineConfig` and invokes `TimelineRenderer` directly. | Current compatibility path; it bypasses the target atomic-tool-only mutation boundary. |
 | `chat` | Creates `OperatorAgent` with the registry and enters a conversational loop. | Prototype flow; not the target Director/Editing split. |
 | `preview` | Starts the loopback-only timeline snapshot UI, optionally for a supplied timeline document and explicit media roots. Current-workspace mode can submit an explicitly confirmed manual proposal to one registered atomic tool. | The browser and HTTP handler never mutate directly; external documents remain read-only. |
+| `studio` | Starts the loopback production entry that composes Director dialogue, review, explicit decision, confirmed Editing execution, history, and reviewed rollback. | Primary existing-material product path; it does not use `OperatorAgent`. |
 
 The registry is currently a module-level dictionary named `SKILLS`. It contains:
 
@@ -193,6 +199,32 @@ The creative brief covers objective, audience, platform, target duration, style,
 The Agent rejects malformed or extra model fields, requested tool calls, secrets or absolute paths, unobserved evidence, cross-context IDs, unavailable/unsafe tools, stale snapshots, and registry-schema drift. Structured-output retries are bounded; provider timeout, provider failure, malformed output, and stale context remain explicit report states rather than being presented as successful reasoning. Session records persist only redacted user text and browser-safe domain data in a hash-chained, atomically replaced `*.director.json` sidecar with optimistic revision checks and tamper detection.
 
 The Director cannot create a user confirmation, import or call the Editing Agent or workflow service, dispatch a registered skill, write timeline/media, render/export, or roll back. `proposal_ready` means ready for review only. No-material creative planning, source generation, AI packaging, and richer atomic editing remain outside the implemented boundary.
+
+### Production product-entry composition
+
+`src/product_entry/` closes the existing-material composition gap without
+merging roles. `ProductionEntryService` is a state machine over injected
+`DirectorAgent`, `WorkflowApplicationService`, and `EditingAgent` instances.
+Its browser-safe state proceeds through dialogue/clarification/material need,
+proposal, persisted review, explicit confirmation or rejection, confirmed
+execution, and separately reviewed/confirmed rollback. It has no timeline,
+renderer, skill implementation, or registry-dispatch import.
+
+Every command carries the exact session ID, logical project ID, expected
+product revision, action, actor, target ID, and unique request ID. A
+hash-chained `*.product.json` sidecar atomically records successful
+transitions. Exact duplicate requests are idempotent; changed-payload replay,
+stale revision, illegal transition, cross-session/project target, workflow
+drift, and concurrent actions fail closed. Workflow confirmation and execution
+services revalidate their own snapshot/plan/diff/registry bindings again.
+
+The loopback `/api/product` endpoint returns only path-safe projections and an
+ephemeral CSRF token. `/api/product/actions` requires that token, accepts only
+JSON, rejects non-loopback origins, and delegates to the product service.
+Double-clicks are disabled in the browser and still protected by server-side
+request IDs/revision locks. The UI cannot fabricate a confirmation or invoke a
+skill. Refresh/restart reloads ledgers; an abandoned workflow run continues to
+use the existing `recovery_required` semantics.
 
 ### Pre-confirmation plan-review boundary
 
@@ -326,6 +358,8 @@ The loopback-only server has a deliberately narrow route surface:
 | `/api/snapshot` | `GET`, `HEAD` | A read-only envelope around the current immutable timeline snapshot and derived media availability. |
 | `/api/analysis` | `GET`, `HEAD` | A versioned deterministic thumbnail/waveform collection for the current snapshot. |
 | `/api/director` | `GET`, `HEAD` | Optional browser-safe projection of an integrity-checked Director session ledger. |
+| `/api/product` | `GET`, `HEAD` | Browser-safe production state plus an ephemeral loopback CSRF token. |
+| `/api/product/actions` | `POST` | Exact idempotent state-machine command delegated to the product application service. |
 | `/api/plan-review` | `GET`, `HEAD` | Browser-safe freshness envelope and structured proposed changes from an optional exact fixture. |
 | `/api/workflow` | `GET`, `HEAD` | Path-redacted append-only plan/review/decision/execution/rollback history. |
 | `/media/<source_id>` | `GET`, `HEAD` | Browser-safe audio/video bytes for a source already present in the snapshot, including single-range support. |
@@ -540,15 +574,13 @@ Mutation-capable utilities and core objects are implementation details behind to
 
 | ID | Gap | Evidence today | Required future outcome |
 | --- | --- | --- | --- |
-| G-02 | Production end-user chat is not wired into the separated gates | The Director and Editing library boundaries enforce their roles, but the `chat` CLI still launches legacy `OperatorAgent`. | Build a separately approved product entry point that composes Director, explicit confirmation, and Editing services without merging them. |
 | G-03 | Operator combines incompatible roles | `OperatorAgent` owns dialogue, planning, and execution. | Separate/retire the hybrid behind Director and Editing contracts. |
 | G-05 | Runtime registry is hard-coded | `SKILLS` is defined in `src/main.py`; plan review binds a versioned digest of its schemas, but that read reference does not replace the runtime registry. | Provide a reusable registry contract with durable schema/version metadata. |
 | G-06 | Direct CLI render bypass | `render` instantiates `TimelineRenderer` directly. | Route mutations through an explicit atomic tool or clearly isolated maintenance interface. |
 | G-07 | Canonical timeline persistence remains legacy | Workflow checkpoints and confirmed restore add guarded history/recovery, but the canonical timeline is still one legacy JSON file with content-derived snapshot identity. | Introduce a first-class versioned project store only in a separately approved migration. |
 | G-08 | Production tools still return ad hoc payloads | The workflow service wraps confirmed dispatch in atomic envelopes, but direct CLI/chat calls still receive dictionaries or exceptions. | Route future production execution through the same application boundary. |
-| G-09 | Workflow UI is local and input-driven | The loopback UI can display Director history and persist review/confirmation/execution/rollback records, but it does not host Director dialogue or a production remote application. | Add a separately approved product interface without weakening exact confirmation and atomic mutation gates. |
 | G-11 | Visualization/manual editing remains local and narrow | The loopback UI now provides snapshot lanes, safe material preview, deterministic thumbnails/waveforms, a detailed inspector, and a confirmed basic video-clip edit slice, but no production frontend or broader editing controls. | Extend only through separately approved read contracts and atomic tools while preserving confirmation and mutation boundaries. |
 
 This gap register is descriptive. Closing any gap requires a separate approved implementation task.
 
-Resolved in the production Editing Agent step: G-04 (constrained executor), G-10's Editing-Agent gate coverage, and G-12 (confirmed Agent execution reuses the existing workflow/provenance recorder). Resolved in the production Director step: G-01 (general-capability, directing-specialized runtime) and G-13 (runtime proposal creation). G-02 remains a product-entry composition gap because the legacy `chat` command is intentionally unchanged.
+Resolved in the production Editing Agent step: G-04 (constrained executor), G-10's Editing-Agent gate coverage, and G-12 (confirmed Agent execution reuses the existing workflow/provenance recorder). Resolved in the production Director step: G-01 (general-capability, directing-specialized runtime) and G-13 (runtime proposal creation). Resolved in the production-entry step: G-02 and G-09 for the local existing-material path. The legacy `chat` command remains explicitly compatible rather than becoming the primary workflow.

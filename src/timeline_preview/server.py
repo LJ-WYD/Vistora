@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 import socket
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
@@ -29,6 +30,13 @@ from plan_review import (
     PlanReviewEnvelope,
     PlanReviewService,
     load_plan_diff_request,
+)
+from product_entry import (
+    ProductEntryCommand,
+    ProductEntryConcurrencyError,
+    ProductEntryError,
+    ProductEntryIntegrityError,
+    ProductionEntryService,
 )
 from timeline_query import TimelineSnapshot, TimelineSnapshotService
 from traceability.store import TraceabilityStore
@@ -157,6 +165,8 @@ class PreviewApplication:
         director_history_provider: Callable[
             [], DirectorHistoryView
         ] | None = None,
+        product_entry_service: ProductionEntryService | None = None,
+        product_csrf_token: str | None = None,
     ) -> None:
         self._snapshot_provider = snapshot_provider
         self.media_resolver = MediaResolver(media_roots)
@@ -167,6 +177,10 @@ class PreviewApplication:
         )
         self.workflow = workflow_service
         self._director_history_provider = director_history_provider
+        self.product_entry = product_entry_service
+        self.product_csrf_token = (
+            product_csrf_token or secrets.token_urlsafe(32)
+        )
         if manual_edits_enabled and skill_registry is None:
             raise PreviewConfigurationError(
                 "Manual editing requires an explicit atomic skill registry"
@@ -278,8 +292,32 @@ class PreviewApplication:
                 "director_history": (
                     self._director_history_provider is not None
                 ),
+                "production_entry": self.product_entry is not None,
             },
         }
+
+    def product_payload(self) -> dict[str, Any]:
+        """Return the path-safe product state plus an ephemeral CSRF token."""
+
+        if self.product_entry is None:
+            return {
+                "schema_name": "vistora.product-entry-unavailable",
+                "schema_version": "1.0.0",
+                "state": "unavailable",
+                "message": "The production entry service is not configured.",
+            }
+        return {
+            "csrf_token": self.product_csrf_token,
+            "view": self.product_entry.view().model_dump(mode="json"),
+        }
+
+    def product_action(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if self.product_entry is None:
+            raise ProductEntryError(
+                "The production entry service is not configured"
+            )
+        command = ProductEntryCommand.model_validate(payload)
+        return self.product_entry.command(command).model_dump(mode="json")
 
     def director_payload(self) -> dict[str, Any]:
         """Return only the browser-safe Director history projection."""
@@ -317,6 +355,11 @@ class PreviewApplication:
                 raise TypeError(
                     "Plan review provider must return PlanDiffRequest"
                 )
+        except ProductEntryError as exc:
+            return PlanReviewEnvelope(
+                review_state="unavailable",
+                message=str(exc),
+            ).model_dump(mode="json")
         except Exception:
             return PlanReviewEnvelope(
                 review_state="invalid",
@@ -702,6 +745,27 @@ def _handler_class(
                 return
             self._send_json(HTTPStatus.OK, payload, head_only=head_only)
 
+        def _serve_product(self, head_only: bool) -> None:
+            try:
+                payload = application.product_payload()
+            except ProductEntryIntegrityError:
+                self._send_error_json(
+                    HTTPStatus.CONFLICT,
+                    "product_integrity_failed",
+                    "The product session failed integrity validation.",
+                    head_only=head_only,
+                )
+                return
+            except Exception:
+                self._send_error_json(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    "product_entry_unavailable",
+                    "The product session could not be loaded safely.",
+                    head_only=head_only,
+                )
+                return
+            self._send_json(HTTPStatus.OK, payload, head_only=head_only)
+
         def _serve_analysis_artifact(
             self,
             analysis_id: str,
@@ -808,6 +872,9 @@ def _handler_class(
                 return
             if route == "/api/director":
                 self._serve_director(head_only)
+                return
+            if route == "/api/product":
+                self._serve_product(head_only)
                 return
             if route.startswith("/analysis/thumbnail/"):
                 parts = route.split("/")
@@ -969,6 +1036,68 @@ def _handler_class(
                 return
             self._send_json(HTTPStatus.OK, result)
 
+        def _product(self) -> None:
+            if application.product_entry is None:
+                self._send_error_json(
+                    HTTPStatus.NOT_FOUND,
+                    "product_entry_unavailable",
+                    "The production entry service is not configured.",
+                )
+                return
+            token = self.headers.get("X-Vistora-CSRF", "")
+            if not secrets.compare_digest(
+                token,
+                application.product_csrf_token,
+            ):
+                self._send_error_json(
+                    HTTPStatus.FORBIDDEN,
+                    "csrf_rejected",
+                    "The product action did not include the session token.",
+                )
+                return
+            origin = self.headers.get("Origin")
+            if origin and urlsplit(origin).hostname not in LOOPBACK_HOSTS:
+                self._send_error_json(
+                    HTTPStatus.FORBIDDEN,
+                    "origin_rejected",
+                    "Product actions are accepted only from loopback.",
+                )
+                return
+            payload = self._read_json_body()
+            if payload is None:
+                return
+            try:
+                result = application.product_action(payload)
+            except ProductEntryConcurrencyError as exc:
+                self._send_error_json(
+                    HTTPStatus.CONFLICT,
+                    "product_state_stale",
+                    str(exc),
+                )
+                return
+            except ProductEntryIntegrityError:
+                self._send_error_json(
+                    HTTPStatus.CONFLICT,
+                    "product_integrity_failed",
+                    "The product session failed integrity validation.",
+                )
+                return
+            except (ProductEntryError, TypeError, ValueError) as exc:
+                self._send_error_json(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    "invalid_product_action",
+                    str(exc),
+                )
+                return
+            except Exception:
+                self._send_error_json(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    "product_action_failed",
+                    "The action failed and was not reported as successful.",
+                )
+                return
+            self._send_json(HTTPStatus.OK, result)
+
         def do_GET(self) -> None:
             self._read(head_only=False)
 
@@ -977,6 +1106,9 @@ def _handler_class(
 
         def do_POST(self) -> None:
             route = unquote(urlsplit(self.path).path)
+            if route == "/api/product/actions":
+                self._product()
+                return
             if route in {
                 "/api/manual-edits/validate",
                 "/api/manual-edits/apply",
@@ -1117,6 +1249,13 @@ def run_preview_server(
     skill_registry: Mapping[str, Any] | None = None,
     plan_review_path: str | Path | None = None,
     director_history_path: str | Path | None = None,
+    product_entry_service: ProductionEntryService | None = None,
+    plan_review_request_provider: Callable[
+        [], PlanDiffRequest
+    ] | None = None,
+    director_history_provider: Callable[
+        [], DirectorHistoryView
+    ] | None = None,
 ) -> None:
     """Run the blocking local preview server until interrupted."""
 
@@ -1127,17 +1266,20 @@ def run_preview_server(
         manual_edits_enabled=(
             timeline_path is None and skill_registry is not None
         ),
-        plan_review_request_provider=_plan_review_provider(
-            plan_review_path
+        plan_review_request_provider=(
+            plan_review_request_provider
+            or _plan_review_provider(plan_review_path)
         ),
         workflow_service=(
             WorkflowApplicationService.for_current_project(skill_registry)
             if timeline_path is None and skill_registry is not None
             else None
         ),
-        director_history_provider=_director_history_provider(
-            director_history_path
+        director_history_provider=(
+            director_history_provider
+            or _director_history_provider(director_history_path)
         ),
+        product_entry_service=product_entry_service,
     )
     server = create_preview_server(application, host=host, port=port)
     bound_host, bound_port = server.server_address[:2]

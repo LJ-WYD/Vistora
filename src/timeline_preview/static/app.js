@@ -55,6 +55,14 @@ const ui = {
   directorBrief: document.querySelector("#director-brief"),
   directorTurns: document.querySelector("#director-turns"),
   directorLimitations: document.querySelector("#director-limitations"),
+  productPanel: document.querySelector("#product-panel"),
+  productMessage: document.querySelector("#product-message"),
+  productStatus: document.querySelector("#product-status"),
+  productDialogue: document.querySelector("#product-dialogue"),
+  productUserMessage: document.querySelector("#product-user-message"),
+  productSend: document.querySelector("#product-send"),
+  productSummary: document.querySelector("#product-summary"),
+  productActions: document.querySelector("#product-actions"),
   workflowPanel: document.querySelector("#workflow-panel"),
   workflowMessage: document.querySelector("#workflow-message"),
   workflowStatus: document.querySelector("#workflow-status"),
@@ -82,6 +90,9 @@ const state = {
   planReview: null,
   selectedPlanChange: null,
   director: null,
+  product: null,
+  productCsrf: null,
+  productBusy: false,
   workflow: null,
   workflowBusy: false,
 };
@@ -451,6 +462,165 @@ function renderDirector() {
   ui.directorLimitations.replaceChildren(
     ...history.limitations.map((item) => textElement("li", "", item)),
   );
+}
+
+function latest(items) {
+  return items && items.length ? items[items.length - 1] : null;
+}
+
+function productTarget(action, view) {
+  const directorProposal = latest(view.director?.proposals);
+  const workflow = view.workflow || {};
+  const review = latest(workflow.reviews);
+  const confirmation = [...(workflow.confirmations || [])]
+    .reverse().find((item) => item.decision === "confirmed");
+  const execution = latest(workflow.executions);
+  const rollbackReview = latest(workflow.rollback_reviews);
+  const rollbackConfirmation = [...(workflow.rollback_confirmations || [])]
+    .reverse().find((item) => item.decision === "confirmed");
+  return {
+    persist_review: directorProposal?.proposal_id,
+    confirm: review?.review_id,
+    reject: review?.review_id,
+    execute: confirmation?.confirmation_record_id,
+    rollback_review: execution?.run_id,
+    rollback_confirm: rollbackReview?.review_id,
+    rollback_reject: rollbackReview?.review_id,
+    rollback_apply: rollbackConfirmation?.confirmation_id,
+  }[action] || null;
+}
+
+function productActionLabel(action) {
+  return {
+    persist_review: "Persist exact review",
+    confirm: "Explicitly confirm",
+    reject: "Reject proposal",
+    execute: "Run confirmed Editing Agent",
+    rollback_review: "Review timeline restore",
+    rollback_confirm: "Confirm timeline restore",
+    rollback_reject: "Reject timeline restore",
+    rollback_apply: "Apply confirmed restore",
+  }[action] || action;
+}
+
+function renderProduct() {
+  const view = state.product;
+  ui.productPanel.hidden = !view;
+  if (!view) {
+    return;
+  }
+  ui.productStatus.textContent = view.state;
+  ui.productStatus.className = `review-status ${view.state}`;
+  ui.productMessage.textContent =
+    `Session ${view.session_id} · revision ${view.revision}`;
+  ui.productSummary.replaceChildren(
+    workflowEvent(
+      "Exact state machine",
+      view.state,
+      [
+        `Project ${view.project_id}`,
+        `Director ${view.director.latest_status}`,
+        `Workflow ${view.workflow.state}`,
+        ...(view.latest_result
+          ? [`Latest result ${JSON.stringify(view.latest_result)}`]
+          : []),
+      ],
+    ),
+  );
+  ui.productActions.replaceChildren();
+  for (const action of view.allowed_actions) {
+    if (action === "director_turn") {
+      continue;
+    }
+    const target = productTarget(action, view);
+    const button = workflowButton(
+      productActionLabel(action),
+      () => productPost(action, target),
+      action.includes("reject") ? "" : "confirm",
+    );
+    button.disabled = state.productBusy || !target;
+    ui.productActions.append(button);
+  }
+  ui.productSend.disabled = state.productBusy ||
+    !view.allowed_actions.includes("director_turn");
+}
+
+async function loadProduct() {
+  try {
+    const response = await fetch("/api/product", {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(
+        payload.error?.message || `Product HTTP ${response.status}.`,
+      );
+    }
+    if (payload.schema_name === "vistora.product-entry-unavailable") {
+      state.product = null;
+      state.productCsrf = null;
+    } else {
+      state.product = payload.view;
+      state.productCsrf = payload.csrf_token;
+    }
+  } catch (error) {
+    state.product = null;
+    state.productCsrf = null;
+    ui.productPanel.hidden = false;
+    ui.productStatus.textContent = "error";
+    ui.productMessage.textContent =
+      error instanceof Error ? error.message : String(error);
+  }
+  renderProduct();
+}
+
+async function productPost(action, targetId = null, userMessage = null) {
+  if (state.productBusy || !state.product || !state.productCsrf) {
+    return;
+  }
+  state.productBusy = true;
+  renderProduct();
+  try {
+    const requestId = newStableId("product_request");
+    const payload = {
+      schema_name: "vistora.product-entry-command",
+      schema_version: "1.0.0",
+      request_id: requestId,
+      session_id: state.product.session_id,
+      project_id: state.product.project_id,
+      expected_revision: state.product.revision,
+      action,
+      actor_id: "local_user",
+      user_message: userMessage,
+      target_id: targetId,
+    };
+    const response = await fetch("/api/product/actions", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-Vistora-CSRF": state.productCsrf,
+      },
+      body: JSON.stringify(payload),
+    });
+    const body = await response.json();
+    if (!response.ok) {
+      throw new Error(
+        body.error?.message || `Product HTTP ${response.status}.`,
+      );
+    }
+    state.product = body.view;
+    await loadDirector();
+    await loadPlanReview();
+    await loadWorkflow();
+  } catch (error) {
+    ui.productMessage.textContent =
+      error instanceof Error ? error.message : String(error);
+  } finally {
+    state.productBusy = false;
+    renderProduct();
+  }
 }
 
 async function loadDirector() {
@@ -1598,11 +1768,24 @@ async function loadPreview({ preserveSuccess = false } = {}) {
     }
     await loadPlanReview();
     await loadDirector();
+    await loadProduct();
     await loadWorkflow();
   } catch (error) {
     showFatal(error instanceof Error ? error.message : String(error));
   }
 }
+
+ui.productDialogue?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const message = ui.productUserMessage.value.trim();
+  if (!message) {
+    ui.productMessage.textContent = "Describe the request before sending.";
+    return;
+  }
+  productPost("director_turn", null, message).then(() => {
+    ui.productUserMessage.value = "";
+  });
+});
 
 function readFiniteInput(input, label) {
   input.removeAttribute("aria-invalid");

@@ -225,6 +225,37 @@
         </p>
       </section>
 
+      <section id="product-panel" class="panel workflow-panel" hidden>
+        <div class="plan-review-heading">
+          <div>
+            <p class="eyebrow">Production entry / 产品主流程</p>
+            <h2>从导演对话到已确认执行</h2>
+            <p id="product-message" class="muted" aria-live="polite">
+              Loading production workflow…
+            </p>
+          </div>
+          <span id="product-status" class="review-status">Loading</span>
+        </div>
+        <form id="product-dialogue" class="manual-form">
+          <label for="product-user-message">Tell the Director what you need</label>
+          <textarea
+            id="product-user-message"
+            rows="3"
+            maxlength="8000"
+            placeholder="Describe the audience, platform, duration, style, pacing, constraints, and deliverable."
+          ></textarea>
+          <button id="product-send" type="submit" class="confirm">
+            Send to Director
+          </button>
+        </form>
+        <div id="product-summary" class="workflow-history"></div>
+        <div id="product-actions" class="workflow-actions"></div>
+        <p class="review-boundary">
+          Review and confirmation are separate. Buttons are disabled while a
+          request is in flight; stale or replayed state fails closed.
+        </p>
+      </section>
+
       <section id="workflow-panel" class="panel workflow-panel" hidden>
         <div class="plan-review-heading">
           <div>
