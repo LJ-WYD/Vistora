@@ -11,6 +11,7 @@ from contracts import (
     AtomicToolResultEnvelope,
     EditingExecutionPlan,
     ManualClipRemove,
+    ManualClipSplit,
     ManualEditConfirmationRecord,
     ManualEditProposal,
     PlanReference,
@@ -81,6 +82,7 @@ class ConfirmedEntityRelation(TraceModel):
     relation_id: TraceId
     relation_sequence: int = Field(ge=1)
     relation_type: Literal["creates", "modifies", "deletes", "generates"]
+    effect_kind: Literal["direct", "consequential"] = "direct"
     origin_kind: Literal["director_plan", "generated_media"]
     entity: TraceEntityReference
     source_operation_id: TraceId
@@ -88,6 +90,11 @@ class ConfirmedEntityRelation(TraceModel):
     request_id: TraceId
     result_id: TraceId
     evidence_ids: tuple[TraceId, ...] = ()
+    inherited_from_entity_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=160,
+    )
     before_snapshot: SnapshotTraceReference
     after_snapshot: SnapshotTraceReference
 
@@ -102,6 +109,13 @@ class ConfirmedEntityRelation(TraceModel):
                 raise ValueError(
                     "Confirmed clip effects originate from Director intent"
                 )
+            if (
+                self.inherited_from_entity_id is not None
+                and self.relation_type != "creates"
+            ):
+                raise ValueError(
+                    "Only a created clip can inherit another clip's origin"
+                )
         elif (
             self.relation_type != "generates"
             or self.origin_kind != "generated_media"
@@ -109,6 +123,8 @@ class ConfirmedEntityRelation(TraceModel):
             raise ValueError(
                 "Generated media outputs require generated-media provenance"
             )
+        elif self.inherited_from_entity_id is not None:
+            raise ValueError("Generated media cannot inherit clip provenance")
         return self
 
 
@@ -219,11 +235,16 @@ class ManualEntityRelation(TraceModel):
 
     relation_id: TraceId
     relation_sequence: int = Field(ge=1)
-    relation_type: Literal["modifies", "deletes"]
+    relation_type: Literal["creates", "modifies", "deletes"]
     origin_kind: Literal["user_manual"] = "user_manual"
     effect_kind: Literal["direct", "consequential"] = "direct"
     entity: TraceEntityReference
     operation_id: TraceId
+    inherited_from_entity_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=160,
+    )
     before_snapshot: SnapshotTraceReference
     after_snapshot: SnapshotTraceReference
 
@@ -231,6 +252,13 @@ class ManualEntityRelation(TraceModel):
     def entity_is_a_clip(self) -> ManualEntityRelation:
         if self.entity.entity_kind != "clip":
             raise ValueError("Manual edit traces may reference clips only")
+        if (
+            self.inherited_from_entity_id is not None
+            and self.relation_type != "creates"
+        ):
+            raise ValueError(
+                "Only a manually created clip can inherit clip provenance"
+            )
         return self
 
 
@@ -287,11 +315,25 @@ class ManualEditTrace(TraceModel):
                 for relation in operation_relations
                 if relation.effect_kind == "direct"
             )
-            if len(direct) != 1:
+            expected_direct_count = (
+                2 if isinstance(edit, ManualClipSplit) else 1
+            )
+            if len(direct) != expected_direct_count:
                 raise ValueError(
-                    "Each manual operation requires one direct relation"
+                    "Manual operation direct relation count is invalid"
                 )
-            relation = direct[0]
+            relation = next(
+                (
+                    item
+                    for item in direct
+                    if item.entity.entity_id == edit.clip_id
+                ),
+                None,
+            )
+            if relation is None:
+                raise ValueError(
+                    "Manual trace is missing its exact target relation"
+                )
             expected_type = (
                 "deletes"
                 if isinstance(edit, ManualClipRemove)
@@ -305,6 +347,21 @@ class ManualEditTrace(TraceModel):
                 raise ValueError(
                     "Manual trace entity effect differs from proposal"
                 )
+            if isinstance(edit, ManualClipSplit):
+                created = tuple(
+                    item
+                    for item in direct
+                    if item.relation_type == "creates"
+                )
+                if (
+                    len(created) != 1
+                    or created[0].entity.entity_id != edit.right_clip_id
+                    or created[0].entity.track_key != edit.track_key
+                    or created[0].inherited_from_entity_id != edit.clip_id
+                ):
+                    raise ValueError(
+                        "Manual split trace must create its exact right clip"
+                    )
             for effect in operation_relations:
                 before = effect.before_snapshot
                 if (

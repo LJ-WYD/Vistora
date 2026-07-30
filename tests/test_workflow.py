@@ -155,6 +155,55 @@ def _review_confirm(service):
     return review, confirmation
 
 
+def test_core_edit_trace_failure_restores_exact_timeline_bytes(
+    service,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application, project_file = service
+    snapshot = TimelineSnapshotService.snapshot_current()
+    request = _request(
+        snapshot,
+        operations=(
+            DirectorOperation(
+                operation_id="operation_split",
+                tool_name="VideoSplitClipSkill",
+                arguments={
+                    "track_key": "video",
+                    "clip_id": "clip_existing",
+                    "split_at_seconds": 1.0,
+                    "right_clip_id": "clip_existing_right",
+                },
+                rationale="Split the exact confirmed clip.",
+                expected_effect="Create two source-contiguous clips.",
+            ),
+        ),
+        plan_id="plan_trace_failure_split",
+    )
+    review = application.record_review(request)
+    confirmation = application.confirm_review(
+        review.review_id,
+        confirmed_by="workflow_test_user",
+        decision="confirmed",
+    )
+    before = project_file.read_bytes()
+
+    def fail_trace(*args, **kwargs):
+        raise OSError("simulated trace persistence failure")
+
+    monkeypatch.setattr(
+        "workflow.service.ConfirmedTraceRecorder.record",
+        fail_trace,
+    )
+    run = application.run_confirmed_execution(
+        confirmation.confirmation_record_id
+    )
+
+    assert run.status == "recovery_required"
+    assert run.steps[0].result.error.code == "trace_persistence_failed"
+    assert project_file.read_bytes() == before
+    assert not TraceabilityStore.trace_path(project_file).exists()
+
+
 @contextmanager
 def _server(application):
     server = create_preview_server(application, port=0)

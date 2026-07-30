@@ -103,11 +103,12 @@ from workflow import (  # noqa: E402
 REFERENCE_TIME = datetime(2026, 7, 24, tzinfo=timezone.utc)
 REFERENCE_CLIP_UUID = UUID("12345678-1234-5678-1234-567812345678")
 REFERENCE_PLAN_DIGEST = (
-    "sha256:c8535c33ccf6539ba5604ab8ab339994580b0bd4e9c54f6b8b7a203ce59ece80"
+    "sha256:2ca88546e1abe3e48ce4a3210f7bbb06a65e0087d4c16a244c366ce4a77b86f2"
 )
 REFERENCE_TOOL_ORDER = (
     "VideoClearTimelineSkill",
-    "VideoAddClipSkill",
+    "VideoInsertOverwriteClipSkill",
+    "VideoTrimClipSkill",
     "VideoExportSkill",
 )
 
@@ -322,7 +323,7 @@ def _build_plan(
         ),
         creative_direction={
             "analyzed_facts": asdict(facts),
-            "pacing": "single concise 1.5 second shot",
+            "pacing": "single concise 1.25 second shot",
             "audio": "silent",
         },
         source_evidence=(
@@ -359,19 +360,38 @@ def _build_plan(
                 expected_effect="No prior clips remain.",
             ),
             DirectorOperation(
-                operation_id="operation_add_reference_clip",
-                tool_name="VideoAddClipSkill",
+                operation_id="operation_insert_reference_clip",
+                tool_name="VideoInsertOverwriteClipSkill",
                 arguments={
+                    "track_key": "video",
                     "source_path": facts.source_path,
+                    "timeline_start": 0.0,
+                    "mode": "insert",
+                    "clip_id": "clip_reference_main",
                     "trim_in": 0.25,
                     "trim_out": 1.75,
                     "speed_factor": 1.0,
-                    "reverse": False,
                     "rotate": 0,
                     "keep_audio": False,
                 },
                 rationale="Use the confirmed deterministic trim.",
                 expected_effect="One silent 1.5 second timeline clip.",
+                evidence_ids=(evidence_id,),
+            ),
+            DirectorOperation(
+                operation_id="operation_trim_reference_clip",
+                tool_name="VideoTrimClipSkill",
+                arguments={
+                    "track_key": "video",
+                    "clip_id": "clip_reference_main",
+                    "trim_in": 0.25,
+                    "trim_out": 1.5,
+                    "ripple": False,
+                },
+                rationale="Tighten the source end at the reviewed boundary.",
+                expected_effect=(
+                    "One exact 1.25 second source range remains."
+                ),
                 evidence_ids=(evidence_id,),
             ),
             DirectorOperation(
@@ -410,10 +430,10 @@ class DeterministicReferenceDirectorAdapter:
             objective=intended.objective,
             audience="Vistora regression reviewers.",
             platform="Automated local validation.",
-            target_duration_seconds=1.5,
+            target_duration_seconds=1.25,
             style="Deterministic single-shot reference.",
             narrative="Present one concise analyzed source range.",
-            pacing="single concise 1.5 second shot",
+            pacing="single concise 1.25 second shot",
             must_haves=intended.requirements,
             must_not_haves=("Do not invent unobserved source facts.",),
             delivery_requirements=("Export one H.264 MP4.",),
@@ -422,7 +442,7 @@ class DeterministicReferenceDirectorAdapter:
             assumptions=intended.assumptions,
             acceptance_criteria=(
                 "Output is 320x180 at 24 fps.",
-                "Output duration is 1.5 seconds.",
+                "Output duration is 1.25 seconds.",
                 "Timeline is clear after export.",
             ),
         )
@@ -659,7 +679,7 @@ def _verify_output(path: str) -> dict[str, Any]:
             raise AssertionError(
                 f"Unexpected output {field}: {metadata[field]!r} != {value!r}"
             )
-    if abs(metadata["duration_seconds"] - 1.5) > 0.08:
+    if abs(metadata["duration_seconds"] - 1.25) > 0.08:
         raise AssertionError(
             "Reference output duration is outside the deterministic tolerance"
         )
@@ -976,7 +996,7 @@ def run_reference_workflow(
                 session_id="session_reference_main_flow",
                 turn_id="turn_reference_main_flow_001",
                 user_message=(
-                    "Create the deterministic 1.5 second silent reference "
+                    "Create the deterministic 1.25 second silent reference "
                     "cut from the observed analyzed source, export it, and "
                     "clear the timeline afterward."
                 ),

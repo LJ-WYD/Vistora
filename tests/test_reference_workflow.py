@@ -65,12 +65,12 @@ def test_reference_main_workflow_is_traceable_and_repeatable() -> None:
     )
 
     plan_ref = first.confirmation.plan_ref
-    assert len({request.request_id for request in first.requests}) == 3
+    assert len({request.request_id for request in first.requests}) == 4
     assert all(
         request.request_id.startswith("atomic_request_reference_")
         for request in first.requests
     )
-    assert len({result.result_id for result in first.results}) == 3
+    assert len({result.result_id for result in first.results}) == 4
     assert all(
         result.result_id.startswith("atomic_result_reference_")
         for result in first.results
@@ -90,8 +90,13 @@ def test_reference_main_workflow_is_traceable_and_repeatable() -> None:
             first.pre_confirmation_diff.registry_ref.registry_digest
         )
 
-    assert first.results[1].payload["clip_id"] == "clip_12345678"
-    assert first.results[2].payload["output_path"] == (
+    assert first.results[1].payload["created_clip_ids"] == [
+        "clip_reference_main"
+    ]
+    assert first.results[2].payload["modified_clip_ids"] == [
+        "clip_reference_main"
+    ]
+    assert first.results[3].payload["output_path"] == (
         "tests/test_data/reference_workflow/output.mp4"
     )
     assert first.output_metadata["video_codec"] == "h264"
@@ -99,7 +104,7 @@ def test_reference_main_workflow_is_traceable_and_repeatable() -> None:
     assert first.output_metadata["height"] == 180
     assert first.output_metadata["frame_rate"] == "24/1"
     assert first.output_metadata["audio_stream_count"] == 0
-    assert abs(first.output_metadata["duration_seconds"] - 1.5) <= 0.08
+    assert abs(first.output_metadata["duration_seconds"] - 1.25) <= 0.08
     assert first.timeline_state_removed is True
     assert first.trace_document == second.trace_document
     assert first.workflow_ledger == second.workflow_ledger
@@ -119,19 +124,23 @@ def test_reference_main_workflow_is_traceable_and_repeatable() -> None:
     assert first.no_material_chain["artifact_accepted"] is True
     assert first.no_material_chain["catalog_revision"] == 1
     assert first.no_material_chain["catalog_material_id"].startswith("source_")
-    assert first.trace_document.revision == 4
+    assert first.trace_document.revision == 5
     assert tuple(
         trace.trace_sequence
         for trace in first.trace_document.confirmed_traces
-    ) == (1, 2, 3)
-    add_relation = first.trace_document.confirmed_traces[1].relations[0]
-    assert add_relation.origin_kind == "director_plan"
-    assert add_relation.entity.entity_id == "clip_12345678"
-    assert add_relation.evidence_ids == (
+    ) == (1, 2, 3, 4)
+    insert_relation = first.trace_document.confirmed_traces[1].relations[0]
+    assert insert_relation.origin_kind == "director_plan"
+    assert insert_relation.entity.entity_id == "clip_reference_main"
+    assert insert_relation.evidence_ids == (
         "evidence_catalog_"
         + first.no_material_chain["catalog_material_id"][7:],
     )
-    export_relations = first.trace_document.confirmed_traces[2].relations
+    trim_relation = first.trace_document.confirmed_traces[2].relations[0]
+    assert trim_relation.relation_type == "modifies"
+    assert trim_relation.entity.entity_id == "clip_reference_main"
+    assert trim_relation.evidence_ids == insert_relation.evidence_ids
+    export_relations = first.trace_document.confirmed_traces[3].relations
     generated = [
         relation
         for relation in export_relations

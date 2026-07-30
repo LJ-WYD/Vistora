@@ -403,7 +403,8 @@ h3 {
   font-size: 0.68rem;
 }
 
-.field-grid input {
+.field-grid input,
+.field-grid select {
   width: 100%;
   min-width: 0;
   padding: 9px 10px;
@@ -414,6 +415,15 @@ h3 {
   background: #0b1017;
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 0.76rem;
+}
+
+.editor-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 0.7rem;
 }
 
 .field-grid input:focus {

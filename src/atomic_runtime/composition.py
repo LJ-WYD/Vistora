@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -15,6 +15,14 @@ from skills.video_restore_timeline_checkpoint import (
     VideoRestoreTimelineCheckpointSkill,
 )
 from skills.video_timelapse import VideoTimelapseSkill
+from skills.video_timeline_edits import (
+    VideoInsertOverwriteClipSkill,
+    VideoMoveClipSkill,
+    VideoRemoveClipSkill,
+    VideoSetClipPropertiesSkill,
+    VideoSplitClipSkill,
+    VideoTrimClipSkill,
+)
 
 from .models import SkillDescriptor, digest_json
 from .registry import AtomicSkillRegistry
@@ -77,6 +85,31 @@ class RestoreResult(_Result):
     external_artifacts_changed: bool
 
 
+class CoreTimelineEditResult(_Result):
+    status: Literal["success"]
+    operation: Literal[
+        "split",
+        "trim",
+        "move",
+        "insert",
+        "overwrite",
+        "remove",
+        "set_properties",
+    ]
+    track_key: Literal["video", "audio"]
+    direct_clip_ids: list[str]
+    consequential_clip_ids: list[str]
+    created_clip_ids: list[str]
+    modified_clip_ids: list[str]
+    deleted_clip_ids: list[str]
+    warnings: list[str]
+    before_snapshot_id: str
+    after_snapshot_id: str
+    project_id: str
+    revision: int
+    timeline_digest: str
+
+
 def _entry(
     skill: Any,
     output_model: type[BaseModel],
@@ -114,6 +147,12 @@ def _entry(
 def build_production_registry() -> AtomicSkillRegistry:
     """Build a fresh immutable registry; no process-global mutable singleton."""
 
+    legacy_modify = VideoModifyClipSkill()
+    legacy_modify.description = (
+        "Legacy index-addressed video property editor retained for backward "
+        "compatibility; new plans should use exact clip_id tools. Enabling "
+        "reverse may still generate a best-effort proxy."
+    )
     return AtomicSkillRegistry(
         registry_id="registry_atomic_skills",
         registry_revision=1,
@@ -129,7 +168,7 @@ def build_production_registry() -> AtomicSkillRegistry:
                 required_capabilities=("ffmpeg", "local_media_read"),
             ),
             _entry(
-                VideoModifyClipSkill(),
+                legacy_modify,
                 ModifyClipResult,
                 side_effects=("files", "timeline"),
                 transactionality="best_effort",
@@ -187,6 +226,33 @@ def build_production_registry() -> AtomicSkillRegistry:
                 preview_supported=True,
                 rollback_support="checkpoint_restore",
                 required_capabilities=(),
+            ),
+            *tuple(
+                _entry(
+                    skill,
+                    CoreTimelineEditResult,
+                    side_effects=("files", "timeline"),
+                    transactionality="atomic_project_state",
+                    retry_safety="gateway_replay_only",
+                    preview_supported=True,
+                    rollback_support="checkpoint_restore",
+                    required_capabilities=(
+                        ("local_media_read",)
+                        if isinstance(
+                            skill,
+                            VideoInsertOverwriteClipSkill,
+                        )
+                        else ()
+                    ),
+                )
+                for skill in (
+                    VideoSplitClipSkill(),
+                    VideoTrimClipSkill(),
+                    VideoMoveClipSkill(),
+                    VideoInsertOverwriteClipSkill(),
+                    VideoRemoveClipSkill(),
+                    VideoSetClipPropertiesSkill(),
+                )
             ),
         ),
     )

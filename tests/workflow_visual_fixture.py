@@ -289,6 +289,7 @@ def main() -> None:
         TimelineSnapshotService.snapshot_current,
         [ROOT],
         skill_registry=vistora_main.SKILLS,
+        manual_edits_enabled=True,
         plan_review_request_provider=lambda: request,
         workflow_service=service,
     )

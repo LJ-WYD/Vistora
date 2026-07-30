@@ -10,6 +10,7 @@ from contracts import (
     AtomicToolRequestEnvelope,
     AtomicToolResultEnvelope,
     EditingExecutionPlan,
+    ManualClipSplit,
     ManualEditConfirmationRecord,
     ManualEditProposal,
 )
@@ -76,6 +77,47 @@ class ConfirmedTraceRecorder:
             elif before[key] != after[key]:
                 effects.append(("modifies", track_key, clip_id))
 
+        inherited: dict[tuple[str, str], str] = {}
+        changed_before_ids = {
+            (track_key, clip_id)
+            for relation_type, track_key, clip_id in effects
+            if relation_type in {"modifies", "deletes"}
+        }
+        if request.tool_name in {
+            "VideoSplitClipSkill",
+            "VideoInsertOverwriteClipSkill",
+        }:
+            inserted_id = None
+            if (
+                request.tool_name == "VideoInsertOverwriteClipSkill"
+                and isinstance(result.payload, dict)
+            ):
+                created_ids = result.payload.get("created_clip_ids")
+                if isinstance(created_ids, list) and created_ids:
+                    inserted_id = created_ids[0]
+            for relation_type, track_key, clip_id in effects:
+                if relation_type != "creates":
+                    continue
+                if clip_id == inserted_id:
+                    continue
+                created = after[(track_key, clip_id)]
+                source = created["source"]["source_id"]
+                candidates = []
+                for candidate_key in sorted(changed_before_ids):
+                    if candidate_key[0] != track_key:
+                        continue
+                    candidate = before[candidate_key]
+                    if (
+                        candidate["source"]["source_id"] == source
+                        and created["trim_in_seconds"]
+                        >= candidate["trim_in_seconds"] - 1e-6
+                        and created["trim_out_seconds"]
+                        <= candidate["trim_out_seconds"] + 1e-6
+                    ):
+                        candidates.append(candidate_key[1])
+                if candidates:
+                    inherited[(track_key, clip_id)] = candidates[0]
+
         if result.status == "success" and isinstance(result.payload, dict):
             output_path = result.payload.get("output_path")
             if isinstance(output_path, str) and output_path:
@@ -103,6 +145,18 @@ class ConfirmedTraceRecorder:
         )
         before_ref = SnapshotTraceReference.from_snapshot(before_snapshot)
         after_ref = SnapshotTraceReference.from_snapshot(after_snapshot)
+        consequential_ids = set()
+        if result.status == "success" and isinstance(result.payload, dict):
+            raw_consequential = result.payload.get(
+                "consequential_clip_ids",
+                (),
+            )
+            if isinstance(raw_consequential, (list, tuple)):
+                consequential_ids = {
+                    item
+                    for item in raw_consequential
+                    if isinstance(item, str)
+                }
         relations = tuple(
             ConfirmedEntityRelation(
                 relation_id=_stable_id(
@@ -117,6 +171,11 @@ class ConfirmedTraceRecorder:
                 ),
                 relation_sequence=relation_index,
                 relation_type=relation_type,
+                effect_kind=(
+                    "consequential"
+                    if entity_id in consequential_ids
+                    else "direct"
+                ),
                 origin_kind=(
                     "generated_media"
                     if relation_type == "generates"
@@ -136,6 +195,9 @@ class ConfirmedTraceRecorder:
                 request_id=request.request_id,
                 result_id=result.result_id,
                 evidence_ids=evidence_ids,
+                inherited_from_entity_id=inherited.get(
+                    (track_key, entity_id)
+                ),
                 before_snapshot=before_ref,
                 after_snapshot=after_ref,
             )
@@ -188,6 +250,24 @@ class ManualTraceRecorder:
                         "Manual removal trace target remains after application"
                     )
                 continue
+            if isinstance(edit, ManualClipSplit):
+                right_key = (edit.track_key, edit.right_clip_id)
+                if key not in after_clips or right_key not in after_clips:
+                    raise ValueError(
+                        "Manual split trace outputs are absent after application"
+                    )
+                left = after_clips[key]
+                right = after_clips[right_key]
+                if (
+                    left["trim_out_seconds"]
+                    != right["trim_in_seconds"]
+                    or right["timeline_start_seconds"]
+                    != edit.split_at_seconds
+                ):
+                    raise ValueError(
+                        "Manual split trace differs from confirmed split"
+                    )
+                continue
             if key not in after_clips:
                 raise ValueError(
                     "Manual update trace target is absent after application"
@@ -212,6 +292,15 @@ class ManualTraceRecorder:
         ]
         for edit in proposal.edits:
             index = video_order.index(edit.clip_id)
+            if isinstance(edit, ManualClipSplit):
+                effect_rows.extend(
+                    (
+                        (edit, "modifies", edit.clip_id, "direct"),
+                        (edit, "creates", edit.right_clip_id, "direct"),
+                    )
+                )
+                video_order.insert(index + 1, edit.right_clip_id)
+                continue
             effect_rows.append(
                 (
                     edit,
@@ -235,6 +324,12 @@ class ManualTraceRecorder:
                 ]
             else:
                 displaced = []
+            if getattr(edit, "ripple", False):
+                displaced = [
+                    clip_id
+                    for clip_id in video_order
+                    if clip_id != edit.clip_id
+                ]
             for clip_id in displaced:
                 key = ("video", clip_id)
                 if (
@@ -273,6 +368,15 @@ class ManualTraceRecorder:
                     track_key=edit.track_key,
                 ),
                 operation_id=edit.operation_id,
+                inherited_from_entity_id=(
+                    edit.clip_id
+                    if (
+                        isinstance(edit, ManualClipSplit)
+                        and relation_type == "creates"
+                        and clip_id == edit.right_clip_id
+                    )
+                    else None
+                ),
                 before_snapshot=before_ref,
                 after_snapshot=after_ref,
             )

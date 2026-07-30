@@ -355,6 +355,7 @@ class ManualClipUpdate(ContractModel):
     trim_out_seconds: float = Field(gt=0, allow_inf_nan=False)
     timeline_start_seconds: float = Field(ge=0, allow_inf_nan=False)
     order_index: int = Field(ge=0)
+    ripple: bool = False
 
     @model_validator(mode="after")
     def trim_range_is_valid(self) -> ManualClipUpdate:
@@ -370,10 +371,22 @@ class ManualClipRemove(ContractModel):
     kind: Literal["remove"] = "remove"
     track_key: Literal["video"] = "video"
     clip_id: str = Field(min_length=1)
+    mode: Literal["lift", "ripple"] = "lift"
+
+
+class ManualClipSplit(ContractModel):
+    """User-authored split of one exact existing video clip."""
+
+    operation_id: StableId
+    kind: Literal["split"] = "split"
+    track_key: Literal["video"] = "video"
+    clip_id: str = Field(min_length=1)
+    split_at_seconds: float = Field(gt=0, allow_inf_nan=False)
+    right_clip_id: StableId
 
 
 ManualEditOperation = Annotated[
-    ManualClipUpdate | ManualClipRemove,
+    ManualClipUpdate | ManualClipRemove | ManualClipSplit,
     Field(discriminator="kind"),
 ]
 
@@ -477,16 +490,46 @@ class ManualEditChange(ContractModel):
     operation_id: StableId
     track_key: Literal["video"]
     clip_id: str = Field(min_length=1)
-    action: Literal["update", "remove"]
-    before: dict[str, Any]
+    action: Literal["update", "remove", "create"]
+    effect_kind: Literal["direct", "consequential"] = "direct"
+    before: dict[str, Any] | None
     after: dict[str, Any] | None
 
-    _before_is_json = field_validator("before")(_validated_json_object)
+    _before_is_json = field_validator("before")(
+        lambda value: (
+            None if value is None else _validated_json_object(value)
+        )
+    )
     _after_is_json = field_validator("after")(
         lambda value: (
             None if value is None else _validated_json_object(value)
         )
     )
+
+    @model_validator(mode="after")
+    def before_after_match_action(self) -> ManualEditChange:
+        valid = (
+            self.action == "create"
+            and self.before is None
+            and self.after is not None
+        ) or (
+            self.action == "remove"
+            and self.before is not None
+            and self.after is None
+        ) or (
+            self.action == "update"
+            and self.before is not None
+            and self.after is not None
+        )
+        if not valid:
+            raise ValueError(
+                "Manual change before/after values do not match its action"
+            )
+        if self.effect_kind == "consequential" and self.action != "update":
+            raise ValueError(
+                "Consequential manual changes may update clips only"
+            )
+        return self
 
 
 class ManualEditReview(ContractModel):

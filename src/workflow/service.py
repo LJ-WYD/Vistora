@@ -34,6 +34,7 @@ from timeline_query import (
     TimelineSnapshotReference,
     TimelineSnapshotService,
 )
+from timeline_edit import TimelineEditTransaction
 from traceability.recording import ConfirmedTraceRecorder
 
 from .models import (
@@ -552,6 +553,19 @@ class WorkflowApplicationService:
             failure: WorkflowError | None = None
             for sequence, step in enumerate(execution.steps, start=1):
                 before = self.snapshot_provider()
+                transactional_tool = step.tool_name in {
+                    "VideoSplitClipSkill",
+                    "VideoTrimClipSkill",
+                    "VideoMoveClipSkill",
+                    "VideoInsertOverwriteClipSkill",
+                    "VideoRemoveClipSkill",
+                    "VideoSetClipPropertiesSkill",
+                }
+                transactional_bytes = (
+                    TimelineEditTransaction.current_bytes()
+                    if transactional_tool
+                    else None
+                )
                 request = AtomicToolRequestEnvelope.from_execution_plan(
                     request_id=self.id_factory("atomic_request"),
                     execution_plan=execution,
@@ -631,6 +645,44 @@ class WorkflowApplicationService:
                         after,
                     )
                 except Exception as exc:
+                    if transactional_tool:
+                        TimelineEditTransaction.restore_bytes(
+                            transactional_bytes
+                        )
+                        after = self.snapshot_provider()
+                        result = AtomicToolResultEnvelope(
+                            result_id=result.result_id,
+                            request_id=result.request_id,
+                            execution_id=result.execution_id,
+                            step_id=result.step_id,
+                            tool_name=result.tool_name,
+                            status="error",
+                            error=ToolError(
+                                code="trace_persistence_failed",
+                                message=(
+                                    "Timeline edit was restored because its "
+                                    "trace record could not be persisted."
+                                ),
+                            ),
+                            started_at=result.started_at,
+                            finished_at=self.clock(),
+                            registry_digest=result.registry_digest,
+                        )
+                        histories[-1] = ExecutionStepHistory(
+                            sequence=sequence,
+                            request=request,
+                            result=result,
+                            before_snapshot=(
+                                TimelineSnapshotReference.from_snapshot(
+                                    before
+                                )
+                            ),
+                            after_snapshot=(
+                                TimelineSnapshotReference.from_snapshot(
+                                    after
+                                )
+                            ),
+                        )
                     failure = WorkflowError(
                         code="trace_persistence_failed",
                         message=str(exc),
@@ -656,9 +708,13 @@ class WorkflowApplicationService:
                     }
                 )
                 self._append(session, running)
-                if result.status != "success":
+                if result.status != "success" and failure is None:
                     failure = WorkflowError(
-                        code="atomic_dispatch_failed",
+                        code=(
+                            result.error.code
+                            if result.error is not None
+                            else "atomic_dispatch_failed"
+                        ),
                         message=result.error.message,
                         recovery_action=(
                             "Review recorded step history and create a "

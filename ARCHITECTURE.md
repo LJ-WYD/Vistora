@@ -39,7 +39,7 @@ src/
     models.py                Frozen registry/descriptor/caller contracts
     registry.py              Immutable deterministic skill registry
     gateway.py               Validated, policy-bound atomic dispatcher
-    composition.py           Sole production seven-skill composition root
+    composition.py           Sole production thirteen-skill composition root
   agent/
     director_agent.py        Production dialogue/brief/proposal boundary
     editing_agent.py         Production confirmed-plan mechanical executor
@@ -83,6 +83,10 @@ src/
   timeline_query/
     models.py                Immutable, versioned timeline read models
     service.py               Deterministic read-only snapshot construction
+  timeline_edit/
+    models.py                Frozen exact-ID edit inputs/effect outcomes
+    engine.py                Detached deterministic video/audio semantics
+    transaction.py           Shared fsync + atomic replacement boundary
   media_analysis/
     models.py                Versioned thumbnail/waveform read contracts
     service.py               Read-only FFmpeg extraction and bounded cache
@@ -162,6 +166,12 @@ It constructs a fresh immutable `AtomicSkillRegistry` containing:
 - `VideoClearTimelineSkill`
 - `VideoApplyManualEditsSkill`
 - `VideoRestoreTimelineCheckpointSkill`
+- `VideoSplitClipSkill`
+- `VideoTrimClipSkill`
+- `VideoMoveClipSkill`
+- `VideoInsertOverwriteClipSkill`
+- `VideoRemoveClipSkill`
+- `VideoSetClipPropertiesSkill`
 
 The registry has stable ID/version/revision, deterministic input-schema and
 full-descriptor digests, and frozen per-skill metadata for exact input/output
@@ -325,9 +335,9 @@ read context. They use browser-safe `material://source_*` references and
 whole-material evidence; no filesystem path enters the Director ledger or
 browser API. Catalog acceptance does not add a clip. A subsequent Director
 proposal must still pass deterministic review, independent confirmation, and
-the Editing Agent. `VideoAddClipSkill`, at the atomic mutation boundary,
-resolves an accepted catalog URI to its managed file; unknown or unaccepted
-URIs fail.
+the Editing Agent. `VideoAddClipSkill` and
+`VideoInsertOverwriteClipSkill`, at the atomic mutation boundary, resolve an
+accepted catalog URI to its managed file; unknown or unaccepted URIs fail.
 
 The loopback product state machine adds production start/poll/cancel/retry,
 artifact accept/reject, catalog status, and return-to-Director actions. The
@@ -370,12 +380,18 @@ use the existing `recovery_required` semantics.
 
 - non-reverse `VideoAddClipSkill` using caller-supplied opaque duration/dimension facts, a clearly provisional clip ID, and the real first-clip canvas adoption;
 - `VideoModifyClipSkill` speed, rotation, and non-proxy property effects;
+- exact-ID split, trim, move, insert/overwrite, lift/ripple delete, and
+  playback-property semantics through the detached `TimelineEditEngine`,
+  including same-track consequential effects and retained overwrite sides;
 - `VideoClearTimelineSkill` removals plus its default canvas/frame-rate reset;
 - `VideoExportSkill` as an export-only effect plus consequential removals and project reset when `clear_timeline_after` is set.
 
 Reverse proxy generation, timelapse generation, user-authored `VideoApplyManualEditsSkill`, and any registered tool lacking a detached adapter are blocked or marked unsupported. An unregistered tool, invalid argument, invalid trim/range, or stale/schema-drifted request is rejected. The engine never probes sources, renders, writes output, appends trace records, creates confirmations, or dispatches skills. `PlanDiffQuery` provides stable plan-to-changes, clip-to-changes, evidence-to-changes, and warning summaries with an optional exact snapshot freshness guard.
 
-The diff is proposed-state review, not provenance history. Step-7 provenance remains truthful recorded origin; the review only copies its detached summary onto affected current clips. Provisional additions do not claim a runtime clip ID or applied provenance.
+The diff is proposed-state review, not provenance history. Recorded provenance
+remains the source of truth; review only copies its detached summary onto
+affected current clips. Explicit proposed clip IDs remain unapplied identities
+until confirmed execution and never claim applied provenance.
 
 ### Persistent workflow and recovery boundary
 
@@ -523,7 +539,7 @@ Current-workspace mode adds a deliberately narrow manual path:
 
 ```text
 TimelineSnapshot (detached read)
-  -> local browser draft (trim-in/out, timeline start, order, removal)
+  -> local browser draft (trim/move, split, lift/ripple removal)
   -> POST validate -> ManualEditReview (no persistence)
   -> explicit Confirm & apply
   -> ManualEditConfirmationRecord bound to exact proposal digest
@@ -565,10 +581,21 @@ The implemented mutation ownership is:
 | `VideoTimelapseSkill` | None. | Writes a new timelapse file through FFmpeg. |
 | `VideoApplyManualEditsSkill` | Applies one exact confirmed user proposal to copied current video-track state, atomically replaces timeline JSON, and appends truthful manual provenance; timeline state is restored if trace persistence fails. | None. |
 | `VideoRestoreTimelineCheckpointSkill` | Restores one exact reviewed and confirmed checkpoint with atomic replacement and post-write digest validation; prior bytes are restored on failure. | None; generated/exported files are explicitly outside rollback. |
+| `VideoSplitClipSkill` | Splits one exact video/audio `clip_id`, retaining source/playback properties and assigning a stable right-side ID. | None. |
+| `VideoTrimClipSkill` | Narrows an exact source range with optional same-track ripple. | None. |
+| `VideoMoveClipSkill` | Moves an exact clip to an explicit start with non-ripple overlap or deterministic same-track ripple. | None. |
+| `VideoInsertOverwriteClipSkill` | Inserts or overwrites accepted catalog/allowable local media while preserving uncovered overlap sides. | Reads source metadata; does not rewrite source media. |
+| `VideoRemoveClipSkill` | Performs gap-preserving lift or same-track ripple delete by exact ID. | None. |
+| `VideoSetClipPropertiesSkill` | Updates speed, volume/mute, embedded audio, or video rotation without creating a reverse proxy. | None. |
 
 These are the only registered atomic mutation entry points. Tests may reset state directly as test-fixture setup. The CLI `render` command remains a documented nonconforming compatibility exception.
 
-Versioned atomic request/result envelopes now define the target agent boundary and can validate request arguments against the existing registry. Current agent-driven skills still return their existing dictionaries or raise exceptions; the runtime does not wrap them yet. The manual-edit tool instead consumes its dedicated proposal/confirmation schema and durable-writes a fully validated copied timeline before replacement. Other skills do not yet guarantee transactional rollback, idempotency, or crash recovery.
+Versioned atomic request/result envelopes define the agent boundary and the
+gateway validates them against the production registry, normalizes registered
+result schemas, redacts failures, and provides in-process idempotent replay.
+The six core edit skills and manual/restore tools declare atomic project-state
+transactions. Legacy add/modify/export/timelapse/clear behavior remains
+truthfully best-effort; external media writes are not generally reversible.
 
 ### Validation today
 
@@ -630,7 +657,12 @@ empty synthetic project
   -> registered checkpoint restore and verified restored revision
 ```
 
-It uses only `VideoClearTimelineSkill`, `VideoAddClipSkill`, and `VideoExportSkill`. Fixed contract IDs, timestamps, relative generated paths, and a deterministic test clip UUID make two consecutive runs directly comparable. Generated source/output files and isolated timeline state live below `tests/test_data/` and remain ignored.
+It uses `VideoClearTimelineSkill`, exact-ID
+`VideoInsertOverwriteClipSkill`, `VideoTrimClipSkill`, and
+`VideoExportSkill`. Fixed contract IDs, timestamps, relative generated paths,
+and stable clip IDs make two consecutive runs directly comparable. Generated
+source/output files and isolated timeline state live below `tests/test_data/`
+and remain ignored.
 
 Run the focused automated regression:
 
@@ -731,7 +763,7 @@ Mutation-capable utilities and core objects are implementation details behind to
 | G-03 | Operator combines incompatible roles | `OperatorAgent` owns dialogue, planning, and execution. | Separate/retire the hybrid behind Director and Editing contracts. |
 | G-06 | Direct CLI render bypass | `render` instantiates `TimelineRenderer` directly. | Route mutations through an explicit atomic tool or clearly isolated maintenance interface. |
 | G-07 | Canonical timeline persistence remains legacy | Workflow checkpoints and confirmed restore add guarded history/recovery, but the canonical timeline is still one legacy JSON file with content-derived snapshot identity. | Introduce a first-class versioned project store only in a separately approved migration. |
-| G-11 | Visualization/manual editing remains local and narrow | The loopback UI now provides snapshot lanes, safe material preview, deterministic thumbnails/waveforms, a detailed inspector, and a confirmed basic video-clip edit slice, but no production frontend or broader editing controls. | Extend only through separately approved read contracts and atomic tools while preserving confirmation and mutation boundaries. |
+| G-11 | Visualization/manual editing remains local and bounded | The loopback UI now provides snapshot lanes, safe material preview, thumbnails/waveforms, inspector, and confirmed exact-ID split/trim/move plus lift/ripple removal drafts. Insert/overwrite is available through structured Director plans, not a broad browser ingest surface. | Add linked A/V, richer multitrack and later professional controls only through separately approved contracts and atomic tools. |
 
 This gap register is descriptive. Closing any gap requires a separate approved implementation task.
 
@@ -743,3 +775,20 @@ request/result gateway for workflow, Editing Agent, manual apply, rollback,
 product entry, and low-level CLI). Individual legacy skill implementations
 still return dictionaries internally, and `OperatorAgent.chat` remains an
 explicit compatibility prototype; neither is a production execution contract.
+
+STEP 17 partially improves G-11 with a detached
+`timeline_edit.TimelineEditEngine` for the current video/audio tracks. Six
+versioned exact-`clip_id` skills expose split, trim, move, insert/overwrite,
+lift/ripple remove, and playback properties only through the shared
+registry/gateway. A single transaction boundary writes a same-directory
+temporary file, flushes and `fsync`s it, atomically replaces the legacy JSON,
+and restores prior bytes after write, validation, or confirmed-trace failure.
+Plan review invokes only the detached engine and never dispatches a skill.
+
+Ripple remains same-track only. Overwrite retains uncovered sides with stable
+new IDs. Provenance records direct and consequential creates/modifies/deletes
+plus tombstones; derived clips inherit recorded origin/evidence rather than
+claiming new facts. Index-based `VideoModifyClipSkill` and manual order remain
+compatibility surfaces. This does not close G-06 or G-07 and does not add
+linked A/V, arbitrary multitrack, color, subtitles, transitions, keyframes,
+masks, AI providers, or effects.

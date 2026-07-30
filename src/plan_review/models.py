@@ -296,6 +296,7 @@ class PreviewClipState(ReviewModel):
     timeline_start_seconds: FiniteFloat = Field(ge=0)
     timeline_end_seconds: FiniteFloat = Field(ge=0)
     effective_duration_seconds: FiniteFloat = Field(ge=0)
+    volume: FiniteFloat | None = None
     speed_factor: FiniteFloat = Field(gt=0)
     keep_audio: bool
     reverse: bool

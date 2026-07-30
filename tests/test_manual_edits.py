@@ -12,6 +12,7 @@ sys.path.insert(0, str(SRC))
 
 from contracts import (  # noqa: E402
     ManualClipRemove,
+    ManualClipSplit,
     ManualClipUpdate,
     ManualEditConfirmationRecord,
     ManualEditProposal,
@@ -27,6 +28,7 @@ from timeline_preview.manual_edits import (  # noqa: E402
 )
 from timeline_query import TimelineSnapshotService  # noqa: E402
 from traceability.store import TraceabilityStore  # noqa: E402
+from traceability.query import TraceabilityQuery  # noqa: E402
 
 
 FIXED_TIME = datetime(2026, 7, 24, tzinfo=timezone.utc)
@@ -234,6 +236,98 @@ def test_manual_reorder_records_displaced_clip_consequence(
     ) == ("clip_a", "consequential", "manual_update_b")
 
 
+def test_manual_split_is_reviewed_confirmed_and_traced(
+    isolated_timeline: Path,
+) -> None:
+    snapshot = TimelineSnapshotService.snapshot_current()
+    split = ManualClipSplit(
+        operation_id="manual_split_a",
+        clip_id="clip_a",
+        split_at_seconds=1.0,
+        right_clip_id="clip_a_right",
+    )
+    proposal = _proposal(snapshot, split)
+    service = ManualEditApplicationService(
+        TimelineSnapshotService.snapshot_current,
+        {"VideoApplyManualEditsSkill": VideoApplyManualEditsSkill()},
+    )
+    before = isolated_timeline.read_bytes()
+
+    _, review = service.review(proposal)
+    assert isolated_timeline.read_bytes() == before
+    assert [
+        (change.action, change.clip_id)
+        for change in review.changes
+    ] == [
+        ("update", "clip_a"),
+        ("create", "clip_a_right"),
+    ]
+
+    VideoApplyManualEditsSkill().execute(
+        {
+            "proposal": proposal.model_dump(mode="json"),
+            "confirmation": _confirmation(proposal).model_dump(mode="json"),
+        }
+    )
+    persisted = timeline_manager.TimelineManager.get_current_timeline()
+    assert [
+        (clip.id, clip.trim_in, clip.trim_out, clip.timeline_start)
+        for clip in persisted.tracks["video"].clips[:2]
+    ] == [
+        ("clip_a", 0.0, 1.0, 0.0),
+        ("clip_a_right", 1.0, 2.0, 1.0),
+    ]
+    relations = TraceabilityStore.load().manual_traces[0].relations
+    assert {
+        (relation.relation_type, relation.entity.entity_id)
+        for relation in relations
+    } == {
+        ("modifies", "clip_a"),
+        ("creates", "clip_a_right"),
+    }
+    provenance = TraceabilityQuery(
+        TraceabilityStore.load(),
+        TimelineSnapshotService.snapshot_current(),
+    ).clip_to_trace("video", "clip_a_right").provenance
+    assert provenance.origin_kind == "legacy_unknown"
+    assert provenance.latest_change_origin == "user_manual"
+
+
+def test_manual_ripple_remove_closes_gap_and_reports_consequence(
+    isolated_timeline: Path,
+) -> None:
+    snapshot = TimelineSnapshotService.snapshot_current()
+    proposal = _proposal(
+        snapshot,
+        ManualClipRemove(
+            operation_id="manual_ripple_a",
+            clip_id="clip_a",
+            mode="ripple",
+        ),
+    )
+    service = ManualEditApplicationService(
+        TimelineSnapshotService.snapshot_current,
+        {"VideoApplyManualEditsSkill": VideoApplyManualEditsSkill()},
+    )
+    _, review = service.review(proposal)
+    assert [
+        (change.action, change.clip_id, change.effect_kind)
+        for change in review.changes
+    ] == [
+        ("remove", "clip_a", "direct"),
+        ("update", "clip_b", "consequential"),
+    ]
+    VideoApplyManualEditsSkill().execute(
+        {
+            "proposal": proposal.model_dump(mode="json"),
+            "confirmation": _confirmation(proposal).model_dump(mode="json"),
+        }
+    )
+    persisted = timeline_manager.TimelineManager.get_current_timeline()
+    assert persisted.tracks["video"].clips[0].id == "clip_b"
+    assert persisted.tracks["video"].clips[0].timeline_start == 0.0
+
+
 def test_rejected_mismatched_and_stale_proposals_never_write(
     isolated_timeline: Path,
 ) -> None:
@@ -281,7 +375,7 @@ def test_atomic_save_failure_preserves_original_and_cleans_temp(
         raise OSError("simulated replace failure")
 
     monkeypatch.setattr(
-        "skills.video_apply_manual_edits.os.replace",
+        "timeline_edit.transaction.os.replace",
         fail_replace,
     )
     with pytest.raises(OSError, match="simulated"):

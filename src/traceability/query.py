@@ -159,11 +159,36 @@ class TraceabilityQuery:
             if event[2].relation_type == "creates"
         ]
         origin_event = creation_events[0] if creation_events else events[0]
-        origin_kind = (
-            "director_plan"
-            if isinstance(origin_event[1], ConfirmedAtomicTrace)
-            else "user_manual"
+        origin_is_legacy = not creation_events
+        inherited_id = getattr(
+            origin_event[2],
+            "inherited_from_entity_id",
+            None,
         )
+        if inherited_id is not None:
+            parent_events = self._by_clip.get(
+                (track_key, inherited_id),
+                (),
+            )
+            parent_creations = [
+                event for event in parent_events
+                if event[2].relation_type == "creates"
+            ]
+            if parent_events:
+                origin_event = (
+                    parent_creations[0]
+                    if parent_creations
+                    else parent_events[0]
+                )
+            origin_is_legacy = not parent_creations
+        if origin_is_legacy:
+            origin_kind = "legacy_unknown"
+        else:
+            origin_kind = (
+                "director_plan"
+                if isinstance(origin_event[1], ConfirmedAtomicTrace)
+                else "user_manual"
+            )
         latest_origin = (
             "director_plan"
             if isinstance(latest_trace, ConfirmedAtomicTrace)
@@ -180,7 +205,11 @@ class TraceabilityQuery:
             status = "stale"
 
         plan_trace = None
-        if confirmed_events:
+        if inherited_id is not None and isinstance(
+            origin_event[1], ConfirmedAtomicTrace
+        ):
+            plan_trace = origin_event[1]
+        elif confirmed_events:
             creates = [
                 event
                 for event in confirmed_events

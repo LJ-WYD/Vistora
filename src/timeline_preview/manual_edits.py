@@ -17,6 +17,7 @@ from atomic_runtime import (
 from contracts import (
     AtomicToolRequestEnvelope,
     ManualClipRemove,
+    ManualClipSplit,
     ManualClipUpdate,
     ManualEditChange,
     ManualEditConfirmationRecord,
@@ -37,12 +38,18 @@ class ManualEditValidationError(ValueError):
 
 def _clip_state(clip: Any, order_index: int) -> dict[str, Any]:
     return {
+        "clip_id": clip.clip_id,
         "order_index": order_index,
         "trim_in_seconds": clip.trim_in_seconds,
         "trim_out_seconds": clip.trim_out_seconds,
         "timeline_start_seconds": clip.timeline_start_seconds,
         "timeline_end_seconds": clip.timeline_end_seconds,
         "effective_duration_seconds": clip.effective_duration_seconds,
+        "speed_factor": clip.speed_factor,
+        "volume": clip.volume,
+        "keep_audio": clip.keep_audio,
+        "reverse": clip.reverse,
+        "rotate_degrees": clip.rotate_degrees,
         "source_id": clip.source.source_id,
         "source_name": clip.source.display_name,
     }
@@ -55,7 +62,7 @@ def _find_unique_state_index(
     matches = [
         index
         for index, state in enumerate(states)
-        if state["clip"].clip_id == clip_id
+        if state["clip_id"] == clip_id
     ]
     if len(matches) != 1:
         raise ManualEditValidationError(
@@ -91,15 +98,14 @@ def review_manual_edit_proposal(
             "Manual editing requires exactly one current video track"
         )
     states = [
-        {"clip": clip}
-        for clip in video_tracks[0].clips
+        _clip_state(clip, index)
+        for index, clip in enumerate(video_tracks[0].clips)
     ]
     changes: list[ManualEditChange] = []
 
     for edit in proposal.edits:
         index = _find_unique_state_index(states, edit.clip_id)
-        clip = states[index]["clip"]
-        before = _clip_state(clip, index)
+        before = {**states[index], "order_index": index}
         if isinstance(edit, ManualClipRemove):
             states.pop(index)
             changes.append(
@@ -112,8 +118,98 @@ def review_manual_edit_proposal(
                     after=None,
                 )
             )
+            if edit.mode == "ripple":
+                duration = before["effective_duration_seconds"]
+                old_end = before["timeline_end_seconds"]
+                for state in states:
+                    if state["timeline_start_seconds"] >= old_end - 1e-6:
+                        previous = dict(state)
+                        state["timeline_start_seconds"] -= duration
+                        state["timeline_end_seconds"] -= duration
+                        changes.append(
+                            ManualEditChange(
+                                operation_id=edit.operation_id,
+                                track_key=edit.track_key,
+                                clip_id=state["clip_id"],
+                                action="update",
+                                effect_kind="consequential",
+                                before=previous,
+                                after=dict(state),
+                            )
+                        )
             continue
 
+        if isinstance(edit, ManualClipSplit):
+            if any(
+                state["clip_id"] == edit.right_clip_id
+                for state in states
+            ):
+                raise ManualEditValidationError(
+                    "Split output clip ID already exists"
+                )
+            if (
+                edit.split_at_seconds
+                <= before["timeline_start_seconds"] + 1e-6
+                or edit.split_at_seconds
+                >= before["timeline_end_seconds"] - 1e-6
+            ):
+                raise ManualEditValidationError(
+                    "Split point must be inside the selected clip"
+                )
+            source_split = before["trim_in_seconds"] + (
+                edit.split_at_seconds
+                - before["timeline_start_seconds"]
+            ) * before["speed_factor"]
+            left = {
+                **before,
+                "trim_out_seconds": source_split,
+                "timeline_end_seconds": edit.split_at_seconds,
+                "effective_duration_seconds": (
+                    edit.split_at_seconds
+                    - before["timeline_start_seconds"]
+                ),
+            }
+            right = {
+                **before,
+                "clip_id": edit.right_clip_id,
+                "order_index": index + 1,
+                "trim_in_seconds": source_split,
+                "timeline_start_seconds": edit.split_at_seconds,
+                "effective_duration_seconds": (
+                    before["timeline_end_seconds"] - edit.split_at_seconds
+                ),
+            }
+            states[index] = left
+            states.insert(index + 1, right)
+            changes.extend(
+                (
+                    ManualEditChange(
+                        operation_id=edit.operation_id,
+                        track_key=edit.track_key,
+                        clip_id=edit.clip_id,
+                        action="update",
+                        before=before,
+                        after=left,
+                    ),
+                    ManualEditChange(
+                        operation_id=edit.operation_id,
+                        track_key=edit.track_key,
+                        clip_id=edit.right_clip_id,
+                        action="create",
+                        before=None,
+                        after=right,
+                    ),
+                )
+            )
+            continue
+
+        clip = video_tracks[0].clips[
+            next(
+                clip_index
+                for clip_index, candidate in enumerate(video_tracks[0].clips)
+                if candidate.clip_id == edit.clip_id
+            )
+        ]
         if edit.order_index >= len(states):
             raise ManualEditValidationError(
                 f"Clip order {edit.order_index} is outside the current "
@@ -137,6 +233,20 @@ def review_manual_edit_proposal(
             raise ManualEditValidationError(
                 f"Update for clip {edit.clip_id!r} does not change any field"
             )
+        ripple_changes: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        if edit.ripple:
+            old_end = before["timeline_end_seconds"]
+            delta = duration - before["effective_duration_seconds"]
+            for state in states:
+                if (
+                    state["clip_id"] != edit.clip_id
+                    and state["timeline_start_seconds"] >= old_end - 1e-6
+                ):
+                    previous = dict(state)
+                    state["timeline_start_seconds"] += delta
+                    state["timeline_end_seconds"] += delta
+                    ripple_changes.append((previous, dict(state)))
+        states[index] = after
         if edit.order_index != index:
             moved = states.pop(index)
             states.insert(edit.order_index, moved)
@@ -149,6 +259,18 @@ def review_manual_edit_proposal(
                 before=before,
                 after=after,
             )
+        )
+        changes.extend(
+            ManualEditChange(
+                operation_id=edit.operation_id,
+                track_key=edit.track_key,
+                clip_id=current["clip_id"],
+                action="update",
+                effect_kind="consequential",
+                before=previous,
+                after=current,
+            )
+            for previous, current in ripple_changes
         )
 
     return ManualEditReview(

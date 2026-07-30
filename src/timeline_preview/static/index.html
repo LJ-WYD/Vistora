@@ -128,7 +128,28 @@
                     required
                   >
                 </label>
+                <label>
+                  <span>Split at timeline time</span>
+                  <input
+                    id="edit-split-at"
+                    name="split_at_seconds"
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                  >
+                </label>
+                <label>
+                  <span>Removal mode</span>
+                  <select id="edit-remove-mode" name="remove_mode">
+                    <option value="lift">Lift (keep gap)</option>
+                    <option value="ripple">Ripple (close gap)</option>
+                  </select>
+                </label>
               </div>
+              <label class="editor-check">
+                <input id="edit-ripple" type="checkbox">
+                Ripple following clips when trim duration changes
+              </label>
               <p id="edit-form-message" class="form-message" aria-live="polite">
                 Changes remain detached until you review and confirm them.
               </p>
@@ -138,6 +159,9 @@
                 </button>
                 <button id="stage-remove" class="button danger" type="button">
                   Stage removal
+                </button>
+                <button id="stage-split" class="button" type="button">
+                  Stage split
                 </button>
               </div>
             </form>

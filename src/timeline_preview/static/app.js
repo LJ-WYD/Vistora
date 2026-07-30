@@ -28,8 +28,12 @@ const ui = {
   editTrimOut: document.querySelector("#edit-trim-out"),
   editTimelineStart: document.querySelector("#edit-timeline-start"),
   editOrder: document.querySelector("#edit-order"),
+  editSplitAt: document.querySelector("#edit-split-at"),
+  editRemoveMode: document.querySelector("#edit-remove-mode"),
+  editRipple: document.querySelector("#edit-ripple"),
   editFormMessage: document.querySelector("#edit-form-message"),
   stageRemove: document.querySelector("#stage-remove"),
+  stageSplit: document.querySelector("#stage-split"),
   draftPanel: document.querySelector("#draft-panel"),
   draftState: document.querySelector("#draft-state"),
   draftChanges: document.querySelector("#draft-changes"),
@@ -1164,6 +1168,18 @@ function showManualEditor(track, clip) {
   ui.editOrder.max = String(
     Math.max(0, state.snapshot.video_clip_count - 1),
   );
+  ui.editSplitAt.value = String(
+    existing?.kind === "split"
+      ? existing.split_at_seconds
+      : (
+          clip.timeline_start_seconds
+          + clip.timeline_end_seconds
+        ) / 2,
+  );
+  ui.editRemoveMode.value =
+    existing?.kind === "remove" ? existing.mode : "lift";
+  ui.editRipple.checked =
+    existing?.kind === "update" ? existing.ripple === true : false;
   ui.editFormMessage.classList.remove("error");
   ui.editFormMessage.textContent =
     "Changes remain detached until you review and confirm them.";
@@ -1192,6 +1208,14 @@ function setDraftState(label, kind = "") {
 }
 
 function changedFieldLines(change) {
+  if (change.action === "create") {
+    return [
+      `Create at ${formatSeconds(change.after.timeline_start_seconds)}`,
+      `${formatSeconds(change.after.trim_in_seconds)} → ` +
+        formatSeconds(change.after.trim_out_seconds),
+      change.after.source_name,
+    ];
+  }
   if (change.action === "remove") {
     return [
       `Remove from order ${change.before.order_index}`,
@@ -2009,6 +2033,7 @@ ui.clipEditForm.addEventListener("submit", (event) => {
       trim_out_seconds: trimOut,
       timeline_start_seconds: timelineStart,
       order_index: orderIndex,
+      ripple: ui.editRipple.checked,
     });
     ui.editFormMessage.classList.remove("error");
     ui.editFormMessage.textContent =
@@ -2034,8 +2059,48 @@ ui.stageRemove.addEventListener("click", () => {
     kind: "remove",
     track_key: "video",
     clip_id: state.selected.clip.clip_id,
+    mode: ui.editRemoveMode.value,
   });
   ui.manualEditor.hidden = true;
+});
+
+ui.stageSplit.addEventListener("click", () => {
+  if (!state.selected || state.selected.track.kind !== "video") {
+    return;
+  }
+  try {
+    const splitAt = readFiniteInput(ui.editSplitAt, "Split time");
+    const clip = state.selected.clip;
+    if (
+      splitAt <= clip.timeline_start_seconds ||
+      splitAt >= clip.timeline_end_seconds
+    ) {
+      throw new Error("Split time must be inside the selected clip.");
+    }
+    const existing = existingDraftForClip(clip.clip_id);
+    stageEdit({
+      schema_version: "1.0.0",
+      operation_id:
+        existing?.kind === "split"
+          ? existing.operation_id
+          : newStableId("manual_split"),
+      kind: "split",
+      track_key: "video",
+      clip_id: clip.clip_id,
+      split_at_seconds: splitAt,
+      right_clip_id:
+        existing?.kind === "split"
+          ? existing.right_clip_id
+          : newStableId("clip"),
+    });
+    ui.editFormMessage.classList.remove("error");
+    ui.editFormMessage.textContent =
+      "Split staged locally. Review both resulting clip changes below.";
+  } catch (error) {
+    ui.editFormMessage.classList.add("error");
+    ui.editFormMessage.textContent =
+      error instanceof Error ? error.message : String(error);
+  }
 });
 
 ui.undoDraft.addEventListener("click", () => {
