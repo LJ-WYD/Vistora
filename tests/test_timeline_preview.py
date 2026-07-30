@@ -716,6 +716,16 @@ def test_preview_package_has_no_mutation_or_agent_execution_calls() -> None:
                         registry_dispatches.append(
                             f"{path.name}: skill.execute"
                         )
+                    elif (
+                        path.name == "manual_edits.py"
+                        and isinstance(node.func.value, ast.Attribute)
+                        and isinstance(node.func.value.value, ast.Name)
+                        and node.func.value.value.id == "self"
+                        and node.func.value.attr == "_gateway"
+                    ):
+                        registry_dispatches.append(
+                            f"{path.name}: atomic gateway"
+                        )
                     else:
                         violations.append(
                             f"{path.name}: unapproved execute dispatch"
@@ -724,4 +734,7 @@ def test_preview_package_has_no_mutation_or_agent_execution_calls() -> None:
         "Timeline preview must keep mutation behind its application service: "
         f"{violations}"
     )
-    assert registry_dispatches == ["manual_edits.py: skill.execute"]
+    assert sorted(registry_dispatches) == [
+        "manual_edits.py: atomic gateway",
+        "manual_edits.py: skill.execute",
+    ]

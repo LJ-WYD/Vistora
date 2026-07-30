@@ -181,8 +181,8 @@ class ConfirmedAtomicTrace(TraceModel):
             or result.tool_name != request.tool_name
         ):
             raise ValueError("Atomic result crosses request linkage")
-        if result.status == "error" and self.relations:
-            raise ValueError("Failed atomic results cannot affect entities")
+        if result.status != "success" and self.relations:
+            raise ValueError("Non-success atomic results cannot affect entities")
 
         relation_ids = [relation.relation_id for relation in self.relations]
         if len(relation_ids) != len(set(relation_ids)):

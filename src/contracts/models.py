@@ -649,9 +649,11 @@ class AtomicToolResultEnvelope(ContractModel):
     execution_id: StableId
     step_id: StableId
     tool_name: StableId
-    status: Literal["success", "error"]
+    status: Literal["success", "error", "partial", "recovery_required"]
     payload: dict[str, Any] = Field(default_factory=dict)
     error: ToolError | None = None
+    registry_digest: Sha256Digest | None = None
+    replayed: bool = False
     started_at: AwareDatetime
     finished_at: AwareDatetime = Field(default_factory=_utc_now)
 
@@ -663,6 +665,6 @@ class AtomicToolResultEnvelope(ContractModel):
             raise ValueError("Tool result cannot finish before it starts")
         if self.status == "success" and self.error is not None:
             raise ValueError("Successful tool results cannot include an error")
-        if self.status == "error" and self.error is None:
-            raise ValueError("Failed tool results must include an error")
+        if self.status != "success" and self.error is None:
+            raise ValueError("Non-success tool results must include an error")
         return self

@@ -34,7 +34,12 @@ The Director may inspect read-only context and tool schemas. It MUST NOT call mu
 
 ```text
 src/
-  main.py                    CLI entry point and hard-coded skill registry
+  main.py                    CLI and production composition entry point
+  atomic_runtime/
+    models.py                Frozen registry/descriptor/caller contracts
+    registry.py              Immutable deterministic skill registry
+    gateway.py               Validated, policy-bound atomic dispatcher
+    composition.py           Sole production seven-skill composition root
   agent/
     director_agent.py        Production dialogue/brief/proposal boundary
     editing_agent.py         Production confirmed-plan mechanical executor
@@ -140,14 +145,15 @@ The repository now contains production Director, Creation Planning, Material Pro
 
 | Command | Implemented behavior | Architectural status |
 | --- | --- | --- |
-| `list-skills` | Prints JSON schemas for the registered skills. | Compatible with both current and target designs. |
-| `run-skill` | Parses JSON and executes one named registered skill. | Low-level/manual tool interface; bypasses Director confirmation by design. |
+| `list-skills` | Prints the durable production registry reference plus stable input/output schemas and capability/side-effect descriptors. | Uses the same immutable registry as Director, review, workflow, Editing Agent, and product entry. |
+| `run-skill` | Parses JSON, builds an explicitly acknowledged low-level request, and dispatches through `AtomicExecutionGateway`. | Compatibility interface without Director/workflow confirmation; still registry/schema/policy/result validated. |
 | `render` | Loads `TimelineConfig` and invokes `TimelineRenderer` directly. | Current compatibility path; it bypasses the target atomic-tool-only mutation boundary. |
 | `chat` | Creates `OperatorAgent` with the registry and enters a conversational loop. | Prototype flow; not the target Director/Editing split. |
 | `preview` | Starts the loopback-only timeline snapshot UI, optionally for a supplied timeline document and explicit media roots. Current-workspace mode can submit an explicitly confirmed manual proposal to one registered atomic tool. | The browser and HTTP handler never mutate directly; external documents remain read-only. |
 | `studio` | Starts the loopback production entry that composes Director dialogue, review, explicit decision, confirmed Editing execution, history, and reviewed rollback. | Primary existing-material product path; it does not use `OperatorAgent`. |
 
-The registry is currently a module-level dictionary named `SKILLS`. It contains:
+`src/atomic_runtime/` provides the sole production registry composition root.
+It constructs a fresh immutable `AtomicSkillRegistry` containing:
 
 - `VideoAddClipSkill`
 - `VideoModifyClipSkill`
@@ -157,7 +163,20 @@ The registry is currently a module-level dictionary named `SKILLS`. It contains:
 - `VideoApplyManualEditsSkill`
 - `VideoRestoreTimelineCheckpointSkill`
 
-Registration is hard-coded. There is no plugin discovery, registry version, capability negotiation, or authorization layer.
+The registry has stable ID/version/revision, deterministic input-schema and
+full-descriptor digests, and frozen per-skill metadata for exact input/output
+schemas, side effects, mutation, actual transactionality, retry/replay safety,
+preview support, rollback/compensation, and required capabilities.
+`AtomicExecutionGateway` checks exact registry/project/confirmation binding,
+input and result schemas, and caller side-effect policy before dispatch. It
+normalizes typed envelopes, redacts paths/exceptions, serializes concurrent
+idempotent requests, and never resolves a tool outside the registry.
+
+There is deliberately no plugin discovery in this step. `src/main.py` retains
+the name `SKILLS` only as a mutable compatibility view for the legacy
+`OperatorAgent` and historical integrations; production `studio`, `preview`,
+Director context, plan review, workflow/Editing Agent, manual apply, rollback,
+and CLI schema/execution consume `PRODUCTION_REGISTRY`.
 
 ### Current conversational flow
 
@@ -185,7 +204,7 @@ This flow validates individual tool arguments through `BaseSkill.execute`, but i
 | `EditingExecutionPlan` | `vistora.editing-execution-plan` | Rejects missing, rejected, mismatched, incomplete, duplicate, or creatively drifted plan steps. |
 | `TimelineProjectDocument` | `vistora.timeline-project` | Adds project ID, revision, and schema metadata while deterministically wrapping legacy timeline JSON. |
 | `AtomicToolRequestEnvelope` | `vistora.atomic-tool-request` | Traces one confirmed execution step plus its exact evidence references and validates arguments with the existing registered skill input model. |
-| `AtomicToolResultEnvelope` | `vistora.atomic-tool-result` | Correlates a result to its request/execution/step and enforces consistent success/error state. |
+| `AtomicToolResultEnvelope` | `vistora.atomic-tool-result` | Correlates a result to its request/execution/step and registry digest; enforces consistent success/error/partial/recovery state and records idempotent replay. |
 | `ManualEditProposal` | `vistora.manual-edit-proposal` | Identifies a user-authored, snapshot-bound batch of video clip timing/order/removal changes; it is explicitly not a Director plan. |
 | `ManualEditConfirmationRecord` | `vistora.manual-edit-confirmation` | Immutably binds a local user's decision to one exact manual proposal ID and digest. |
 | `ManualEditReview` | `vistora.manual-edit-review` | Provides structured before/after changes after validation and before any write. |
@@ -710,12 +729,17 @@ Mutation-capable utilities and core objects are implementation details behind to
 | ID | Gap | Evidence today | Required future outcome |
 | --- | --- | --- | --- |
 | G-03 | Operator combines incompatible roles | `OperatorAgent` owns dialogue, planning, and execution. | Separate/retire the hybrid behind Director and Editing contracts. |
-| G-05 | Runtime registry is hard-coded | `SKILLS` is defined in `src/main.py`; plan review binds a versioned digest of its schemas, but that read reference does not replace the runtime registry. | Provide a reusable registry contract with durable schema/version metadata. |
 | G-06 | Direct CLI render bypass | `render` instantiates `TimelineRenderer` directly. | Route mutations through an explicit atomic tool or clearly isolated maintenance interface. |
 | G-07 | Canonical timeline persistence remains legacy | Workflow checkpoints and confirmed restore add guarded history/recovery, but the canonical timeline is still one legacy JSON file with content-derived snapshot identity. | Introduce a first-class versioned project store only in a separately approved migration. |
-| G-08 | Production tools still return ad hoc payloads | The workflow service wraps confirmed dispatch in atomic envelopes, but direct CLI/chat calls still receive dictionaries or exceptions. | Route future production execution through the same application boundary. |
 | G-11 | Visualization/manual editing remains local and narrow | The loopback UI now provides snapshot lanes, safe material preview, deterministic thumbnails/waveforms, a detailed inspector, and a confirmed basic video-clip edit slice, but no production frontend or broader editing controls. | Extend only through separately approved read contracts and atomic tools while preserving confirmation and mutation boundaries. |
 
 This gap register is descriptive. Closing any gap requires a separate approved implementation task.
 
 Resolved in the production Editing Agent step: G-04 (constrained executor), G-10's Editing-Agent gate coverage, and G-12 (confirmed Agent execution reuses the existing workflow/provenance recorder). Resolved in the production Director step: G-01 (general-capability, directing-specialized runtime) and G-13 (runtime proposal creation). Resolved in the production-entry step: G-02 and G-09 for the local existing-material path. The legacy `chat` command remains explicitly compatible rather than becoming the primary workflow.
+
+Resolved in the atomic runtime step: G-05 (durable reusable production
+registry) and the production execution portion of G-08 (uniform validated
+request/result gateway for workflow, Editing Agent, manual apply, rollback,
+product entry, and low-level CLI). Individual legacy skill implementations
+still return dictionaries internally, and `OperatorAgent.chat` remains an
+explicit compatibility prototype; neither is a production execution contract.

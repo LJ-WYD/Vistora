@@ -4,11 +4,18 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable, Mapping
+from datetime import datetime, timezone
 from typing import Any
 
 from pydantic import ValidationError
 
+from atomic_runtime import (
+    AtomicExecutionContext,
+    AtomicExecutionGateway,
+    AtomicSkillRegistry,
+)
 from contracts import (
+    AtomicToolRequestEnvelope,
     ManualClipRemove,
     ManualClipUpdate,
     ManualEditChange,
@@ -16,6 +23,7 @@ from contracts import (
     ManualEditProposal,
     ManualEditProposalReference,
     ManualEditReview,
+    PlanReference,
 )
 from timeline_query import TimelineSnapshot
 
@@ -160,6 +168,11 @@ class ManualEditApplicationService:
     ) -> None:
         self._snapshot_provider = snapshot_provider
         self._registry = registry
+        self._gateway = (
+            AtomicExecutionGateway(registry)
+            if isinstance(registry, AtomicSkillRegistry)
+            else None
+        )
 
     def review(self, proposal_value: Any) -> tuple[
         ManualEditProposal,
@@ -201,12 +214,47 @@ class ManualEditApplicationService:
             raise ManualEditValidationError(
                 "The registered manual edit tool identity is invalid"
             )
-        result = skill.execute(
-            {
-                "proposal": proposal.model_dump(mode="json"),
-                "confirmation": confirmation.model_dump(mode="json"),
-            }
-        )
+        arguments = {
+            "proposal": proposal.model_dump(mode="json"),
+            "confirmation": confirmation.model_dump(mode="json"),
+        }
+        if self._gateway is not None:
+            token = uuid.uuid4().hex
+            request = AtomicToolRequestEnvelope(
+                request_id=f"request_manual_{token}",
+                execution_id=f"execution_manual_{token}",
+                project_id=proposal.base_project_id,
+                confirmation_id=confirmation.confirmation_id,
+                plan_ref=PlanReference(
+                    plan_id=proposal.proposal_id,
+                    plan_version=1,
+                    plan_digest=proposal.digest(),
+                ),
+                step_id=f"step_manual_{token}",
+                tool_name=MANUAL_EDIT_TOOL_NAME,
+                arguments=arguments,
+                requested_at=datetime.now(timezone.utc),
+            )
+            gateway_result = self._gateway.execute(
+                request,
+                AtomicExecutionContext(
+                    caller="manual_edit",
+                    registry_ref=self._registry.reference,
+                    project_id=proposal.base_project_id,
+                    confirmation_id=confirmation.confirmation_id,
+                    allowed_side_effects=("files", "timeline"),
+                    idempotency_key=request.request_id,
+                ),
+            )
+            if gateway_result.status != "success":
+                raise ManualEditValidationError(
+                    gateway_result.error.message
+                    if gateway_result.error is not None
+                    else "Manual edit atomic dispatch failed"
+                )
+            result = gateway_result.payload
+        else:
+            result = skill.execute(arguments)
         applied_snapshot = self._snapshot_provider()
         return {
             "schema_name": "vistora.manual-edit-application",

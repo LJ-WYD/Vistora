@@ -156,15 +156,23 @@ class ProposedExecutionReference(ReviewModel):
 
 
 class RegistrySchemaReference(ReviewModel):
-    """Exact registered tool-schema set used to validate a preview."""
+    """Exact durable registry used to validate a preview.
+
+    ``registry_digest=None`` identifies a legacy schema-only reference. Such a
+    record remains loadable but cannot compare equal to a current production
+    registry reference, so confirmation/execution fail closed until review is
+    regenerated.
+    """
 
     schema_name: Literal["vistora.registry-schema-reference"] = (
         "vistora.registry-schema-reference"
     )
     registry_id: StableId = "registry_atomic_skills"
     registry_version: Literal["1.0.0"] = "1.0.0"
+    registry_revision: int = Field(default=1, ge=1)
     tool_names: tuple[StableId, ...]
     schema_digest: Sha256Digest
+    registry_digest: Sha256Digest | None = None
 
     @model_validator(mode="after")
     def registry_identity_is_unambiguous(
@@ -183,6 +191,16 @@ class RegistrySchemaReference(ReviewModel):
         cls,
         registry: Mapping[str, Any],
     ) -> RegistrySchemaReference:
+        durable = getattr(registry, "reference", None)
+        if durable is not None:
+            return cls(
+                registry_id=durable.registry_id,
+                registry_version=durable.registry_version,
+                registry_revision=durable.registry_revision,
+                tool_names=durable.tool_names,
+                schema_digest=durable.input_schema_digest,
+                registry_digest=durable.registry_digest,
+            )
         schemas = []
         for name, skill in sorted(registry.items()):
             input_model = getattr(skill, "input_model", None)
@@ -203,6 +221,7 @@ class RegistrySchemaReference(ReviewModel):
         return cls(
             tool_names=tuple(item["name"] for item in schemas),
             schema_digest=digest_json(schemas),
+            registry_digest=None,
         )
 
 

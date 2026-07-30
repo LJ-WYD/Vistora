@@ -68,7 +68,7 @@ class EditingAgentStepReport(EditingAgentModel):
     tool_name: StableId
     atomic_request_id: StableId
     atomic_result_id: StableId
-    status: Literal["success", "error"]
+    status: Literal["success", "error", "partial", "recovery_required"]
     before_snapshot: TimelineSnapshotReference
     after_snapshot: TimelineSnapshotReference
     error: WorkflowError | None = None
@@ -77,8 +77,8 @@ class EditingAgentStepReport(EditingAgentModel):
     def error_matches_status(self) -> EditingAgentStepReport:
         if self.status == "success" and self.error is not None:
             raise ValueError("Successful Editing Agent step cannot have an error")
-        if self.status == "error" and self.error is None:
-            raise ValueError("Failed Editing Agent step requires an error")
+        if self.status != "success" and self.error is None:
+            raise ValueError("Non-success Editing Agent step requires an error")
         return self
 
 

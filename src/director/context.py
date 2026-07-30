@@ -29,12 +29,17 @@ class DirectorContextService:
         registry_ref = RegistrySchemaReference.from_registry(registry)
         tool_schemas = []
         for name, skill in sorted(registry.items()):
-            input_model = getattr(skill, "input_model", None)
-            if input_model is None:
-                raise ValueError(
-                    f"Registered tool {name!r} has no input schema"
-                )
-            input_schema = input_model.model_json_schema()
+            descriptor_reader = getattr(registry, "descriptor", None)
+            if descriptor_reader is not None:
+                descriptor = descriptor_reader(name)
+                input_schema = descriptor.input_schema
+            else:
+                input_model = getattr(skill, "input_model", None)
+                if input_model is None:
+                    raise ValueError(
+                        f"Registered tool {name!r} has no input schema"
+                    )
+                input_schema = input_model.model_json_schema()
             tool_schemas.append(
                 DirectorToolSchema(
                     tool_name=name,

@@ -7,6 +7,11 @@ from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from typing import Any, Literal
 
+from atomic_runtime import (
+    AtomicExecutionContext,
+    AtomicExecutionGateway,
+    AtomicSkillRegistry,
+)
 from contracts import (
     AtomicToolRequestEnvelope,
     AtomicToolResultEnvelope,
@@ -122,6 +127,17 @@ class WorkflowApplicationService:
     ) -> None:
         self.store = store
         self.registry = registry
+        self.gateway = (
+            AtomicExecutionGateway(
+                registry,
+                clock=clock,
+                result_id_factory=lambda _request_id: id_factory(
+                    "atomic_result"
+                ),
+            )
+            if isinstance(registry, AtomicSkillRegistry)
+            else None
+        )
         self.snapshot_provider = snapshot_provider
         self.timeline_provider = timeline_provider
         self.clock = clock
@@ -542,39 +558,57 @@ class WorkflowApplicationService:
                     step_id=step.step_id,
                 ).model_copy(update={"requested_at": self.clock()})
                 started = self.clock()
-                try:
-                    validated = request.validate_against_registry(
-                        self.registry
-                    )
-                    payload = self.registry[request.tool_name].execute(
-                        validated.model_dump(mode="python")
-                    )
-                    result = AtomicToolResultEnvelope(
-                        result_id=self.id_factory("atomic_result"),
-                        request_id=request.request_id,
-                        execution_id=request.execution_id,
-                        step_id=request.step_id,
-                        tool_name=request.tool_name,
-                        status="success",
-                        payload=payload,
-                        started_at=started,
-                        finished_at=self.clock(),
-                    )
-                except Exception as exc:
-                    result = AtomicToolResultEnvelope(
-                        result_id=self.id_factory("atomic_result"),
-                        request_id=request.request_id,
-                        execution_id=request.execution_id,
-                        step_id=request.step_id,
-                        tool_name=request.tool_name,
-                        status="error",
-                        error=ToolError(
-                            code="atomic_dispatch_failed",
-                            message=str(exc),
+                if self.gateway is not None:
+                    result = self.gateway.execute(
+                        request,
+                        AtomicExecutionContext(
+                            caller="workflow",
+                            registry_ref=self.registry.reference,
+                            project_id=request.project_id,
+                            confirmation_id=request.confirmation_id,
+                            allowed_side_effects=(
+                                "external",
+                                "files",
+                                "media",
+                                "timeline",
+                            ),
+                            idempotency_key=request.request_id,
                         ),
-                        started_at=started,
-                        finished_at=self.clock(),
                     )
+                else:
+                    try:
+                        validated = request.validate_against_registry(
+                            self.registry
+                        )
+                        payload = self.registry[request.tool_name].execute(
+                            validated.model_dump(mode="python")
+                        )
+                        result = AtomicToolResultEnvelope(
+                            result_id=self.id_factory("atomic_result"),
+                            request_id=request.request_id,
+                            execution_id=request.execution_id,
+                            step_id=request.step_id,
+                            tool_name=request.tool_name,
+                            status="success",
+                            payload=payload,
+                            started_at=started,
+                            finished_at=self.clock(),
+                        )
+                    except Exception as exc:
+                        result = AtomicToolResultEnvelope(
+                            result_id=self.id_factory("atomic_result"),
+                            request_id=request.request_id,
+                            execution_id=request.execution_id,
+                            step_id=request.step_id,
+                            tool_name=request.tool_name,
+                            status="error",
+                            error=ToolError(
+                                code="atomic_dispatch_failed",
+                                message=str(exc),
+                            ),
+                            started_at=started,
+                            finished_at=self.clock(),
+                        )
                 after = self.snapshot_provider()
                 history = ExecutionStepHistory(
                     sequence=sequence,
@@ -622,7 +656,7 @@ class WorkflowApplicationService:
                     }
                 )
                 self._append(session, running)
-                if result.status == "error":
+                if result.status != "success":
                     failure = WorkflowError(
                         code="atomic_dispatch_failed",
                         message=result.error.message,
@@ -1031,15 +1065,51 @@ class WorkflowApplicationService:
             self._append(session, running)
             started = self.clock()
             try:
-                validated = skill.input_model.model_validate(
-                    {
-                        "proposal": proposal,
-                        "confirmation": confirmation,
-                    }
-                )
-                payload = skill.execute(
-                    validated.model_dump(mode="python")
-                )
+                arguments = {
+                    "proposal": proposal.model_dump(mode="json"),
+                    "confirmation": confirmation.model_dump(mode="json"),
+                }
+                if self.gateway is not None:
+                    atomic_request = AtomicToolRequestEnvelope(
+                        request_id=f"atomic_{request.request_id}",
+                        execution_id=run_id,
+                        project_id=ledger.project_id,
+                        confirmation_id=confirmation.confirmation_id,
+                        plan_ref=PlanReference(
+                            plan_id=proposal.proposal_id,
+                            plan_version=1,
+                            plan_digest=proposal.digest(),
+                        ),
+                        step_id=f"step_{proposal.proposal_id}",
+                        tool_name=(
+                            "VideoRestoreTimelineCheckpointSkill"
+                        ),
+                        arguments=arguments,
+                        requested_at=self.clock(),
+                    )
+                    atomic_result = self.gateway.execute(
+                        atomic_request,
+                        AtomicExecutionContext(
+                            caller="rollback",
+                            registry_ref=self.registry.reference,
+                            project_id=ledger.project_id,
+                            confirmation_id=confirmation.confirmation_id,
+                            allowed_side_effects=("files", "timeline"),
+                            idempotency_key=request.request_id,
+                        ),
+                    )
+                    if atomic_result.status != "success":
+                        raise WorkflowApplicationError(
+                            atomic_result.error.message
+                            if atomic_result.error is not None
+                            else "Rollback atomic dispatch failed"
+                        )
+                    payload = atomic_result.payload
+                else:
+                    validated = skill.input_model.model_validate(arguments)
+                    payload = skill.execute(
+                        validated.model_dump(mode="python")
+                    )
                 result = RollbackToolResult(
                     result_id=self.id_factory("rollback_result"),
                     request_id=request.request_id,

@@ -35,7 +35,8 @@ Set `LLM_API_KEY`, `LLM_BASE_URL`, and `LLM_MODEL` in `.env` for the interactive
 
 ## Usage
 
-List the registered atomic skills and their schemas:
+List the versioned production registry, durable registry digest, and every
+registered skill's input/output schemas and declared runtime properties:
 
 ```powershell
 python src/main.py list-skills
@@ -76,11 +77,19 @@ Render a declarative timeline:
 python src/main.py render --config path\to\timeline.json --output output\result.mp4
 ```
 
-Run one skill directly:
+Run one skill directly through the same validation and result-normalization
+gateway:
 
 ```powershell
 python src/main.py run-skill --name VideoClearTimelineSkill --params "{}"
 ```
+
+`run-skill` is an explicitly acknowledged low-level compatibility interface,
+not the confirmed product workflow. It still resolves only through the
+production registry, validates the registered input and result schemas, applies
+the declared side-effect policy, and prints a versioned
+`vistora.atomic-tool-result` envelope. Use `studio` for Director review,
+independent confirmation, workflow history, and rollback.
 
 Read the current timeline without changing it:
 
@@ -243,6 +252,35 @@ For a current-workspace preview, the separate workflow panel can deliberately pe
 The ledger keeps one stable logical identity for the workspace while every review/checkpoint retains the exact timeline snapshot ID, revision, and digest it observed. This permits a second reviewed plan after a legacy content-derived `project_legacy_*` snapshot ID changes, without weakening freshness checks or changing legacy timeline JSON.
 
 `WorkflowApplicationService` is the mutation-capable application boundary under the production Editing Agent. It regenerates the exact reviewed diff immediately before confirmation/execution, dispatches registered atomic requests in order, records every result and provenance effect, stops on the first failure, and records `failed`, `partial`, or `recovery_required` truthfully. A restart helper converts abandoned pending/running records to `recovery_required` rather than guessing success.
+
+## Atomic skill registry and execution gateway
+
+`src/atomic_runtime/` is the single production composition root for the seven
+existing atomic skills. A fresh immutable `AtomicSkillRegistry` carries an
+explicit ID, semantic version, revision, deterministic input-schema digest, and
+full descriptor digest. Every frozen `SkillDescriptor` declares the stable
+skill version, exact input and output schemas, timeline/media/file/external
+side effects, mutation status, actual transactionality, replay safety, preview
+support, rollback/compensation state, and required capabilities. No plugin
+discovery or new editing operation is implied.
+
+Director context, detached plan review, confirmation/workflow persistence,
+Editing Agent execution, local product entry, preview manual edits, rollback,
+and the CLI all bind to this same durable production registry. Registry or
+descriptor drift invalidates an older review/confirmation before dispatch.
+Legacy schema-only sidecars remain readable, but cannot silently satisfy a
+new durable production binding; the review must be regenerated. The old
+module-level `SKILLS` name is only a mutable compatibility view for
+`OperatorAgent` and historical integrations.
+
+`AtomicExecutionGateway` is the production dispatch boundary. It revalidates
+the exact registry, project and confirmation references, input schema and
+declared side-effect policy; resolves only registered `BaseSkill`
+implementations; validates and normalizes result payloads; redacts absolute
+paths and exception details; and provides request-scoped idempotent replay.
+The metadata intentionally records that several legacy tools are only
+best-effort and that external exports/generated files are not generally
+transactional or reversible.
 
 ## Constrained Editing Agent
 

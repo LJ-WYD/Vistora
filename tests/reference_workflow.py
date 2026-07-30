@@ -705,7 +705,7 @@ def run_reference_workflow(
                 return (
                     DirectorContextService.build(
                         current,
-                        vistora_main.SKILLS,
+                        vistora_main.PRODUCTION_REGISTRY,
                         materials=(),
                     ),
                     current,
@@ -714,7 +714,7 @@ def run_reference_workflow(
             no_material_director = DirectorAgent(
                 adapter=DeterministicMaterialRequirementsDirectorAdapter(),
                 context_provider=no_material_context,
-                registry=vistora_main.SKILLS,
+                registry=vistora_main.PRODUCTION_REGISTRY,
                 store=DirectorStore(
                     project_file.with_name(
                         "reference.no-material.director.json"
@@ -919,7 +919,7 @@ def run_reference_workflow(
                 return (
                     DirectorContextService.build(
                         current,
-                        vistora_main.SKILLS,
+                        vistora_main.PRODUCTION_REGISTRY,
                         materials=(material,),
                     ),
                     current,
@@ -967,7 +967,7 @@ def run_reference_workflow(
             director = DirectorAgent(
                 adapter=director_adapter,
                 context_provider=director_context,
-                registry=vistora_main.SKILLS,
+                registry=vistora_main.PRODUCTION_REGISTRY,
                 store=director_store,
                 clock=director_clock,
                 id_factory=director_id,
@@ -1015,7 +1015,7 @@ def run_reference_workflow(
 
             workflow = WorkflowApplicationService(
                 store=WorkflowStore.for_project_file(project_file),
-                registry=vistora_main.SKILLS,
+                registry=vistora_main.PRODUCTION_REGISTRY,
                 clock=reference_clock,
                 id_factory=reference_id,
             )

@@ -1,111 +1,132 @@
+"""Vistora command-line and local product composition entry."""
+
+from __future__ import annotations
+
 import argparse
 import json
 import os
 import sys
+import uuid
+from datetime import datetime, timezone
 
-# 将当前 src 目录加入 Python 搜索路径，以确保在任何工作目录下运行皆能正常导入
+
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from core.timeline import TimelineConfig, TimelineRenderer
-from skills.video_add_clip import VideoAddClipSkill
-from skills.video_modify_clip import VideoModifyClipSkill
-from skills.video_export import VideoExportSkill
-from skills.video_timelapse import VideoTimelapseSkill
-from skills.video_clear_timeline import VideoClearTimelineSkill
-from skills.video_apply_manual_edits import VideoApplyManualEditsSkill
-from skills.video_restore_timeline_checkpoint import (
-    VideoRestoreTimelineCheckpointSkill,
+from atomic_runtime import (  # noqa: E402
+    AtomicExecutionContext,
+    AtomicExecutionGateway,
+    build_production_registry,
 )
+from contracts import AtomicToolRequestEnvelope, PlanReference  # noqa: E402
+from core.timeline import TimelineConfig, TimelineRenderer  # noqa: E402
 
-# 注册非破坏性编辑原子技能
-SKILLS = {
-    "VideoAddClipSkill": VideoAddClipSkill(),
-    "VideoModifyClipSkill": VideoModifyClipSkill(),
-    "VideoExportSkill": VideoExportSkill(),
-    "VideoTimelapseSkill": VideoTimelapseSkill(),
-    "VideoClearTimelineSkill": VideoClearTimelineSkill(),
-    "VideoApplyManualEditsSkill": VideoApplyManualEditsSkill(),
-    "VideoRestoreTimelineCheckpointSkill": (
-        VideoRestoreTimelineCheckpointSkill()
-    ),
-}
 
-def list_skills():
-    """
-    列出所有已注册的技能及其 Schema 信息。
-    这允许上层 Agent 动态查询并获取每个 Skill 的调用协议规范。
-    """
-    schemas = []
-    for skill in SKILLS.values():
-        schemas.append(skill.get_schema())
-    print(json.dumps(schemas, indent=2, ensure_ascii=False))
+PRODUCTION_REGISTRY = build_production_registry()
+# Legacy OperatorAgent and historical tests may still mutate this compatibility
+# view. Production entry points consume only PRODUCTION_REGISTRY.
+SKILLS = dict(PRODUCTION_REGISTRY)
+ATOMIC_GATEWAY = AtomicExecutionGateway(PRODUCTION_REGISTRY)
 
-def render_timeline(timeline_json_path: str, output_path: str):
-    """
-    读取时间线配置文件并调用渲染器进行渲染输出。
-    """
-    with open(timeline_json_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    
-    config = TimelineConfig(**data)
-    renderer = TimelineRenderer(config)
-    print(f"正在读取声明式时间线: {timeline_json_path}")
-    print(f"开始渲染视频 -> {output_path}")
-    renderer.render(output_path)
-    print("渲染操作完成！")
 
-def run_skill(skill_name: str, params_json: str):
-    """
-    直接通过命令行运行某个特定 Skill。
-    这是操作层 Agent 通过终端调用 Skill 的主要接口形式。
-    """
-    if skill_name not in SKILLS:
-        print(f"错误: 未找到该技能 '{skill_name}'", file=sys.stderr)
-        sys.exit(1)
-        
-    skill = SKILLS[skill_name]
+def list_skills() -> None:
+    """Print the stable public production registry and skill descriptors."""
+
+    payload = {
+        "schema_name": "vistora.atomic-skill-registry",
+        "schema_version": "1.0.0",
+        "registry": PRODUCTION_REGISTRY.reference.model_dump(mode="json"),
+        "skills": [
+            descriptor.model_dump(mode="json")
+            for descriptor in PRODUCTION_REGISTRY.public_descriptors()
+        ],
+    }
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+
+
+def render_timeline(timeline_json_path: str, output_path: str) -> None:
+    """Legacy direct-render compatibility command (architecture gap G-06)."""
+
+    with open(timeline_json_path, "r", encoding="utf-8") as source:
+        config = TimelineConfig(**json.load(source))
+    TimelineRenderer(config).render(output_path)
+    print(json.dumps({
+        "schema_name": "vistora.cli.render-result",
+        "schema_version": "1.0.0",
+        "status": "success",
+        "output_path": output_path,
+    }, indent=2, ensure_ascii=False))
+
+
+def run_skill(skill_name: str, params_json: str) -> None:
+    """Low-level compatibility entry constrained by the atomic gateway."""
+
     try:
-        params_dict = json.loads(params_json)
-    except json.JSONDecodeError as e:
-        print(f"错误: 参数 JSON 字符串格式非法: {e}", file=sys.stderr)
-        sys.exit(1)
+        params = json.loads(params_json)
+    except json.JSONDecodeError as exc:
+        print(json.dumps({
+            "schema_name": "vistora.cli.atomic-result",
+            "schema_version": "1.0.0",
+            "status": "error",
+            "error": {"code": "invalid_json", "message": str(exc)},
+        }, ensure_ascii=False), file=sys.stderr)
+        raise SystemExit(1) from exc
 
-    print(f"正在执行技能: {skill_name}...")
-    try:
-        result = skill.execute(params_dict)
-        print(f"执行成功！返回数据:\n{json.dumps(result, indent=2, ensure_ascii=False)}")
-    except Exception as e:
-        print(f"执行失败，抛出异常: {e}", file=sys.stderr)
-        sys.exit(1)
+    invocation = uuid.uuid4().hex
+    confirmation_id = f"cli_confirmation_{invocation}"
+    project_id = "project_cli_compatibility"
+    request = AtomicToolRequestEnvelope(
+        request_id=f"request_cli_{invocation}",
+        execution_id=f"execution_cli_{invocation}",
+        project_id=project_id,
+        confirmation_id=confirmation_id,
+        plan_ref=PlanReference(
+            plan_id=f"plan_cli_{invocation}",
+            plan_version=1,
+            plan_digest="sha256:" + ("0" * 64),
+        ),
+        step_id=f"step_cli_{invocation}",
+        tool_name=skill_name,
+        arguments=params,
+        requested_at=datetime.now(timezone.utc),
+    )
+    context = AtomicExecutionContext(
+        caller="cli_compatibility",
+        registry_ref=PRODUCTION_REGISTRY.reference,
+        project_id=project_id,
+        confirmation_id=confirmation_id,
+        allowed_side_effects=("external", "files", "media", "timeline"),
+        idempotency_key=f"idempotency_cli_{invocation}",
+        low_level_manual_acknowledged=True,
+    )
+    result = ATOMIC_GATEWAY.execute(request, context)
+    print(json.dumps(
+        result.model_dump(mode="json"),
+        indent=2,
+        ensure_ascii=False,
+    ))
+    if result.status != "success":
+        raise SystemExit(1)
 
-def chat_loop():
-    """
-    启动交互式对话循环，允许用户用自然语言命令 Agent 剪辑视频
-    """
+
+def chat_loop() -> None:
+    """Run the explicitly legacy OperatorAgent compatibility loop."""
+
     from agent.operator_agent import OperatorAgent
-    agent = OperatorAgent(SKILLS)
-    print("==========================================================")
-    print("🎬 Vistora AI 操作层 Agent 对话交互终端启动成功！")
-    print("您可以直接使用口语指令控制视频进行裁剪、拼接、倒放、变速或延时合成。")
-    print("输入 'exit' 或 'quit' 可随时退出。")
-    print("==========================================================")
 
+    agent = OperatorAgent(SKILLS)
+    print(
+        "Vistora legacy OperatorAgent compatibility chat. "
+        "Use 'studio' for the confirmed production workflow."
+    )
     while True:
         try:
-            prompt = input("\n👤 创作者: ")
-            if not prompt.strip():
-                continue
-            if prompt.strip().lower() in ("exit", "quit", "q"):
-                print("退出成功。感谢使用 Vistora！")
+            prompt = input("\nUser: ")
+            if prompt.strip().lower() in {"exit", "quit", "q"}:
                 break
-            
-            response = agent.run(prompt)
-            print(f"\n🤖 Agent:\n{response}")
-        except KeyboardInterrupt:
-            print("\n退出成功。")
+            if prompt.strip():
+                print(f"\nAgent:\n{agent.run(prompt)}")
+        except (EOFError, KeyboardInterrupt):
             break
-        except Exception as e:
-            print(f"\n❌ 对话执行异常: {e}")
 
 
 def preview_timeline(
@@ -115,8 +136,9 @@ def preview_timeline(
     port: int,
     plan_review_path: str | None,
     director_history_path: str | None,
-):
-    """Start Vistora's local snapshot-first visual timeline preview."""
+) -> None:
+    """Start the local snapshot-first timeline UI."""
+
     from timeline_preview import run_preview_server
 
     run_preview_server(
@@ -124,7 +146,7 @@ def preview_timeline(
         media_roots=media_roots,
         host=host,
         port=port,
-        skill_registry=SKILLS,
+        skill_registry=PRODUCTION_REGISTRY,
         plan_review_path=plan_review_path,
         director_history_path=director_history_path,
     )
@@ -135,123 +157,90 @@ def production_studio(
     host: str,
     port: int,
     session_id: str,
-):
-    """Start the confirmed planning, material, and editing product entry."""
+) -> None:
+    """Start the confirmed Director/material/editing product entry."""
 
     from product_entry import build_current_product_entry
     from timeline_preview import run_preview_server
 
     product = build_current_product_entry(
-        SKILLS,
+        PRODUCTION_REGISTRY,
         session_id=session_id,
     )
     run_preview_server(
         media_roots=media_roots,
         host=host,
         port=port,
-        skill_registry=SKILLS,
+        skill_registry=PRODUCTION_REGISTRY,
         product_entry_service=product,
         plan_review_request_provider=product.latest_review_request,
         director_history_provider=product.director_history,
     )
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Vistora 命令行交互入口")
-    subparsers = parser.add_subparsers(dest="command", help="可选子命令")
-    
-    # 1. list-skills 子命令
-    subparsers.add_parser("list-skills", help="获取所有原子剪辑技能描述及其 JSON Schema")
-    
-    # 2. render 子命令
-    render_parser = subparsers.add_parser("render", help="根据声明式时间线配置 JSON 渲染并导出视频")
-    render_parser.add_argument("--config", required=True, help="时间线 JSON 配置文件的路径")
-    render_parser.add_argument("--output", required=True, help="输出的目标视频路径 (.mp4)")
-    
-    # 3. run-skill 子命令
-    run_parser = subparsers.add_parser("run-skill", help="直接调用执行某个原子剪辑技能")
-    run_parser.add_argument("--name", required=True, help="要调用的技能名称")
-    run_parser.add_argument("--params", required=True, help="符合该技能 Schema 的参数 JSON 字符串")
-    
-    # 4. chat 子命令
-    subparsers.add_parser("chat", help="启动人机交互式 Agent 视频剪辑对话")
-
-    preview_parser = subparsers.add_parser(
-        "preview",
-        help="Start the local snapshot-first visual timeline preview",
-    )
-    preview_parser.add_argument(
-        "--timeline",
-        help=(
-            "Optional legacy or versioned timeline JSON path. "
-            "Defaults to the current TimelineManager state."
-        ),
-    )
-
-    studio_parser = subparsers.add_parser(
-        "studio",
-        help=(
-            "Start Director review, confirmed material production/catalog, "
-            "and constrained Editing workflow"
-        ),
-    )
-    studio_parser.add_argument(
+def _add_server_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
         "--media-root",
         action="append",
         default=[],
-        help="Explicit local media root; repeat to allow multiple roots.",
+        help="Explicit allowlisted local media root; may be repeated.",
     )
-    studio_parser.add_argument(
+    parser.add_argument(
         "--host",
         default="127.0.0.1",
         choices=["127.0.0.1", "::1", "localhost"],
         help="Loopback interface to bind.",
     )
-    studio_parser.add_argument("--port", type=int, default=8765)
-    studio_parser.add_argument(
+    parser.add_argument("--port", type=int, default=8765)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Vistora local CLI")
+    commands = parser.add_subparsers(dest="command")
+    commands.add_parser(
+        "list-skills",
+        help="Print the versioned atomic registry and public schemas.",
+    )
+
+    render = commands.add_parser(
+        "render",
+        help="Legacy direct render of a declarative timeline.",
+    )
+    render.add_argument("--config", required=True)
+    render.add_argument("--output", required=True)
+
+    run = commands.add_parser(
+        "run-skill",
+        help="Low-level manual compatibility dispatch through the gateway.",
+    )
+    run.add_argument("--name", required=True)
+    run.add_argument("--params", required=True)
+    commands.add_parser(
+        "chat",
+        help="Legacy OperatorAgent compatibility chat.",
+    )
+
+    preview = commands.add_parser(
+        "preview",
+        help="Start the local snapshot-first visual timeline.",
+    )
+    preview.add_argument("--timeline")
+    preview.add_argument("--plan-review")
+    preview.add_argument("--director-history")
+    _add_server_arguments(preview)
+
+    studio = commands.add_parser(
+        "studio",
+        help="Start the confirmed production product entry.",
+    )
+    studio.add_argument(
         "--session-id",
         default="session_local_product",
         help="Stable opaque local product session ID.",
     )
-    preview_parser.add_argument(
-        "--media-root",
-        action="append",
-        default=[],
-        help=(
-            "Explicit directory allowed to serve media from. "
-            "Repeat for multiple roots; omit to disable media serving."
-        ),
-    )
-    preview_parser.add_argument(
-        "--host",
-        default="127.0.0.1",
-        choices=["127.0.0.1", "::1", "localhost"],
-        help="Loopback interface to bind (default: 127.0.0.1).",
-    )
-    preview_parser.add_argument(
-        "--port",
-        type=int,
-        default=8765,
-        help="Local TCP port (default: 8765).",
-    )
-    preview_parser.add_argument(
-        "--plan-review",
-        help=(
-            "Optional versioned plan-diff request JSON. It is previewed "
-            "read-only; this command never confirms or executes the plan."
-        ),
-    )
-    preview_parser.add_argument(
-        "--director-history",
-        help=(
-            "Optional versioned Director session ledger JSON. It is exposed "
-            "as a read-only, path-redacted history projection."
-        ),
-    )
+    _add_server_arguments(studio)
 
     args = parser.parse_args()
-    
-    # 根据指令调用对应逻辑
     if args.command == "list-skills":
         list_skills()
     elif args.command == "render":
@@ -278,6 +267,7 @@ def main():
         )
     else:
         parser.print_help()
+
 
 if __name__ == "__main__":
     main()

@@ -86,6 +86,9 @@ def test_reference_main_workflow_is_traceable_and_repeatable() -> None:
         assert result.tool_name == request.tool_name
         assert result.status == "success"
         assert result.error is None
+        assert result.registry_digest == (
+            first.pre_confirmation_diff.registry_ref.registry_digest
+        )
 
     assert first.results[1].payload["clip_id"] == "clip_12345678"
     assert first.results[2].payload["output_path"] == (
