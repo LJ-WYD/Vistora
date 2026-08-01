@@ -20,10 +20,18 @@ class VideoExportSkill(BaseSkill):
 
     def run(self, params: VideoExportInput) -> Dict[str, Any]:
         timeline = TimelineManager.get_current_timeline()
-        if not timeline.tracks["video"].clips:
+        video_clip_count = sum(
+            len(track.clips)
+            for track in timeline.tracks.values()
+            if track.kind == "video" and track.enabled
+        )
+        if not video_clip_count:
             raise ValueError("当前时间线为空，请先添加剪辑片段！")
             
-        print(f"[Export] 准备物理渲染时间线，总片段数: {len(timeline.tracks['video'].clips)}，输出路径: {params.output_path}")
+        print(
+            "[Export] 准备物理渲染时间线，"
+            f"启用的视频片段数: {video_clip_count}"
+        )
         
         # 使用 TimelineRenderer 引擎进行渲染
         renderer = TimelineRenderer(timeline)

@@ -11,9 +11,11 @@ from contracts import (
     AtomicToolResultEnvelope,
     EditingExecutionPlan,
     ManualClipRemove,
+    ManualClipLink,
     ManualClipSplit,
     ManualEditConfirmationRecord,
     ManualEditProposal,
+    ManualTrackManage,
     PlanReference,
 )
 
@@ -63,14 +65,15 @@ class SnapshotTraceReference(TraceModel):
 class TraceEntityReference(TraceModel):
     """Opaque timeline or generated-media entity identity."""
 
-    entity_kind: Literal["clip", "media_output"]
+    entity_kind: Literal["clip", "track", "media_output"]
     entity_id: str = Field(min_length=1, max_length=160)
     track_key: str | None = Field(default=None, min_length=1)
+    track_id: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def track_matches_entity_kind(self) -> TraceEntityReference:
-        if self.entity_kind == "clip" and self.track_key is None:
-            raise ValueError("Clip trace entities require a track key")
+        if self.entity_kind in {"clip", "track"} and self.track_key is None:
+            raise ValueError("Timeline trace entities require a track key")
         if self.entity_kind == "media_output" and self.track_key is not None:
             raise ValueError("Generated media trace entities have no track")
         return self
@@ -250,8 +253,10 @@ class ManualEntityRelation(TraceModel):
 
     @model_validator(mode="after")
     def entity_is_a_clip(self) -> ManualEntityRelation:
-        if self.entity.entity_kind != "clip":
-            raise ValueError("Manual edit traces may reference clips only")
+        if self.entity.entity_kind not in {"clip", "track"}:
+            raise ValueError(
+                "Manual edit traces may reference clips or tracks only"
+            )
         if (
             self.inherited_from_entity_id is not None
             and self.relation_type != "creates"
@@ -315,6 +320,40 @@ class ManualEditTrace(TraceModel):
                 for relation in operation_relations
                 if relation.effect_kind == "direct"
             )
+            if isinstance(edit, ManualTrackManage):
+                if (
+                    len(direct) != 1
+                    or direct[0].entity.entity_kind != "track"
+                    or direct[0].entity.entity_id != edit.track_id
+                    or direct[0].relation_type != "modifies"
+                ):
+                    raise ValueError(
+                        "Manual track trace differs from its proposal"
+                    )
+                continue
+            if isinstance(edit, ManualClipLink):
+                expected = {
+                    (member.track_key, member.clip_id)
+                    for member in edit.members
+                }
+                actual = {
+                    (
+                        relation.entity.track_key,
+                        relation.entity.entity_id,
+                    )
+                    for relation in direct
+                }
+                if (
+                    actual != expected
+                    or any(
+                        relation.relation_type != "modifies"
+                        for relation in direct
+                    )
+                ):
+                    raise ValueError(
+                        "Manual link trace differs from its members"
+                    )
+                continue
             expected_direct_count = (
                 2 if isinstance(edit, ManualClipSplit) else 1
             )

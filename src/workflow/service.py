@@ -82,10 +82,15 @@ def _stable_id(prefix: str, value: Any) -> str:
     return f"{prefix}_{digest[:24]}"
 
 
-def _clip_state(track_key: str, clip: Any) -> PreviewClipState:
+def _clip_state(
+    track_key: str,
+    clip: Any,
+    track_id: str | None = None,
+) -> PreviewClipState:
     return PreviewClipState(
         clip_id=clip.clip_id,
         track_key=track_key,
+        track_id=track_id or track_key,
         order_index=clip.order_index,
         source_id=clip.source.source_id,
         source_name=clip.source.display_name,
@@ -98,6 +103,7 @@ def _clip_state(track_key: str, clip: Any) -> PreviewClipState:
         keep_audio=clip.keep_audio,
         reverse=clip.reverse,
         rotate_degrees=clip.rotate_degrees,
+        link_group_id=clip.link_group_id,
     )
 
 

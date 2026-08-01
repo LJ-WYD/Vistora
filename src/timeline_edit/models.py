@@ -7,7 +7,11 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-TrackKey = Literal["video", "audio"]
+EditScope = Literal["current_clip", "linked_group"]
+StableTrackId = Annotated[
+    str,
+    Field(min_length=3, max_length=160, pattern=r"^[A-Za-z][A-Za-z0-9._:-]*$"),
+]
 StableClipId = Annotated[
     str,
     Field(min_length=3, max_length=160, pattern=r"^[A-Za-z][A-Za-z0-9._:-]*$"),
@@ -16,22 +20,39 @@ StableClipId = Annotated[
 
 class TimelineEditModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-    schema_version: Literal["1.0.0"] = "1.0.0"
+    schema_version: Literal["1.0.0", "2.0.0"] = "2.0.0"
 
 
-class SplitClipInput(TimelineEditModel):
-    track_key: TrackKey
+class TrackTargetModel(TimelineEditModel):
+    """New callers use track_id; track_key remains a legacy compatibility key."""
+
+    track_id: StableTrackId | None = None
+    track_key: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def one_track_reference(self) -> "TrackTargetModel":
+        if self.track_id is None and self.track_key is None:
+            raise ValueError("track_id is required (track_key is legacy)")
+        return self
+
+    @property
+    def track_reference(self) -> str:
+        return self.track_id or self.track_key or ""
+
+
+class SplitClipInput(TrackTargetModel):
     clip_id: StableClipId
     split_at_seconds: float = Field(gt=0, allow_inf_nan=False)
     right_clip_id: StableClipId | None = None
+    edit_scope: EditScope = "current_clip"
 
 
-class TrimClipInput(TimelineEditModel):
-    track_key: TrackKey
+class TrimClipInput(TrackTargetModel):
     clip_id: StableClipId
     trim_in: float = Field(ge=0, allow_inf_nan=False)
     trim_out: float = Field(gt=0, allow_inf_nan=False)
     ripple: bool = False
+    edit_scope: EditScope = "current_clip"
 
     @model_validator(mode="after")
     def forward_range(self) -> TrimClipInput:
@@ -40,21 +61,20 @@ class TrimClipInput(TimelineEditModel):
         return self
 
 
-class MoveClipInput(TimelineEditModel):
-    track_key: TrackKey
+class MoveClipInput(TrackTargetModel):
     clip_id: StableClipId
     timeline_start: float = Field(ge=0, allow_inf_nan=False)
     ripple: bool = False
+    edit_scope: EditScope = "current_clip"
 
 
-class RemoveClipInput(TimelineEditModel):
-    track_key: TrackKey
+class RemoveClipInput(TrackTargetModel):
     clip_id: StableClipId
     mode: Literal["lift", "ripple"] = "lift"
+    edit_scope: EditScope = "current_clip"
 
 
-class InsertOverwriteClipInput(TimelineEditModel):
-    track_key: TrackKey
+class InsertOverwriteClipInput(TrackTargetModel):
     source_path: str = Field(min_length=1)
     timeline_start: float = Field(ge=0, allow_inf_nan=False)
     mode: Literal["insert", "overwrite"]
@@ -65,16 +85,26 @@ class InsertOverwriteClipInput(TimelineEditModel):
     volume: float | None = Field(default=1, ge=0, allow_inf_nan=False)
     keep_audio: bool = True
     rotate: Literal[0, 90, 180, 270] = 0
+    link_group_id: StableClipId | None = None
+    edit_scope: EditScope = "current_clip"
+
+    @model_validator(mode="after")
+    def inserted_link_scope(self) -> "InsertOverwriteClipInput":
+        if self.edit_scope == "linked_group" and self.link_group_id is None:
+            raise ValueError(
+                "linked_group insertion requires an explicit link_group_id"
+            )
+        return self
 
 
-class SetClipPropertiesInput(TimelineEditModel):
-    track_key: TrackKey
+class SetClipPropertiesInput(TrackTargetModel):
     clip_id: StableClipId
     speed_factor: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     volume: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     keep_audio: bool | None = None
     mute: bool | None = None
     rotate: Literal[0, 90, 180, 270] | None = None
+    edit_scope: EditScope = "current_clip"
 
     @model_validator(mode="after")
     def has_change(self) -> SetClipPropertiesInput:
@@ -92,6 +122,64 @@ class SetClipPropertiesInput(TimelineEditModel):
         return self
 
 
+class ClipReference(TimelineEditModel):
+    track_id: StableTrackId
+    clip_id: StableClipId
+
+
+class ManageTrackInput(TimelineEditModel):
+    action: Literal["add", "update", "remove", "reorder"]
+    track_id: StableTrackId
+    kind: Literal["video", "audio"] | None = None
+    role: str | None = Field(default=None, min_length=1, max_length=80)
+    order: int | None = Field(default=None, ge=0)
+    enabled: bool | None = None
+    muted: bool | None = None
+    locked: bool | None = None
+
+    @model_validator(mode="after")
+    def action_fields(self) -> "ManageTrackInput":
+        if self.action == "add" and (
+            self.kind is None or self.order is None
+        ):
+            raise ValueError("add requires kind and order")
+        if self.action == "reorder" and self.order is None:
+            raise ValueError("reorder requires order")
+        if self.action == "update" and all(
+            value is None
+            for value in (
+                self.role,
+                self.enabled,
+                self.muted,
+                self.locked,
+            )
+        ):
+            raise ValueError("update requires a track property")
+        return self
+
+
+class SetClipLinkInput(TimelineEditModel):
+    action: Literal["link", "unlink"]
+    members: tuple[ClipReference, ...] = Field(min_length=1)
+    link_group_id: StableClipId | None = None
+
+    @model_validator(mode="after")
+    def link_requirements(self) -> "SetClipLinkInput":
+        identities = {
+            (member.track_id, member.clip_id) for member in self.members
+        }
+        if len(identities) != len(self.members):
+            raise ValueError("linked members must be unique")
+        if self.action == "link":
+            if len(self.members) < 2 or self.link_group_id is None:
+                raise ValueError(
+                    "link requires two or more members and link_group_id"
+                )
+        elif self.link_group_id is not None:
+            raise ValueError("unlink does not accept link_group_id")
+        return self
+
+
 class TimelineEditOutcome(TimelineEditModel):
     operation: Literal[
         "split",
@@ -101,8 +189,11 @@ class TimelineEditOutcome(TimelineEditModel):
         "insert",
         "overwrite",
         "set_properties",
+        "manage_track",
+        "set_clip_link",
     ]
-    track_key: TrackKey
+    track_id: StableTrackId
+    track_key: str
     direct_clip_ids: tuple[str, ...]
     consequential_clip_ids: tuple[str, ...] = ()
     created_clip_ids: tuple[str, ...] = ()

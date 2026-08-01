@@ -145,11 +145,40 @@
                     <option value="ripple">Ripple (close gap)</option>
                   </select>
                 </label>
+                <label>
+                  <span>Edit scope</span>
+                  <select id="edit-scope" name="edit_scope">
+                    <option value="current_clip">Selected clip only</option>
+                    <option value="linked_group">Explicit linked group</option>
+                  </select>
+                </label>
               </div>
               <label class="editor-check">
                 <input id="edit-ripple" type="checkbox">
                 Ripple following clips when trim duration changes
               </label>
+              <label>
+                <span>Link with exact clip</span>
+                <select id="edit-link-target"></select>
+              </label>
+              <div class="field-grid">
+                <label>
+                  <span>Track order</span>
+                  <input id="edit-track-order" type="number" min="0" step="1">
+                </label>
+                <label class="editor-check">
+                  <input id="edit-track-enabled" type="checkbox">
+                  Track enabled
+                </label>
+                <label class="editor-check">
+                  <input id="edit-track-muted" type="checkbox">
+                  Track muted
+                </label>
+                <label class="editor-check">
+                  <input id="edit-track-locked" type="checkbox">
+                  Track locked
+                </label>
+              </div>
               <p id="edit-form-message" class="form-message" aria-live="polite">
                 Changes remain detached until you review and confirm them.
               </p>
@@ -162,6 +191,15 @@
                 </button>
                 <button id="stage-split" class="button" type="button">
                   Stage split
+                </button>
+                <button id="stage-link" class="button" type="button">
+                  Stage link
+                </button>
+                <button id="stage-unlink" class="button" type="button">
+                  Stage unlink
+                </button>
+                <button id="stage-track" class="button" type="button">
+                  Stage track settings
                 </button>
               </div>
             </form>

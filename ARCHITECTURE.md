@@ -172,6 +172,8 @@ It constructs a fresh immutable `AtomicSkillRegistry` containing:
 - `VideoInsertOverwriteClipSkill`
 - `VideoRemoveClipSkill`
 - `VideoSetClipPropertiesSkill`
+- `TimelineManageTrackSkill`
+- `TimelineSetClipLinkSkill`
 
 The registry has stable ID/version/revision, deterministic input-schema and
 full-descriptor digests, and frozen per-skill metadata for exact input/output
@@ -442,11 +444,11 @@ Rollback is a second workflow, never an automatic failure handler. The service r
 
 `src/core/timeline.py` defines three Pydantic models:
 
-- `ClipConfig`: source, trim, timeline placement, audio, speed, reverse, and rotation properties.
-- `TrackConfig`: a named ordered list of clips.
-- `TimelineConfig`: output dimensions, frame rate, and a mapping of tracks.
+- `ClipConfig`: stable clip ID, source, trim, timeline placement, optional explicit link-group ID, audio, speed, reverse, and rotation properties.
+- `TrackConfig`: stable track ID, video/audio kind, role, unique order, enabled/muted/locked state, and an ordered list of clips.
+- `TimelineConfig`: schema version `2.0.0`, output dimensions, frame rate, and an arbitrary mapping of video/audio tracks.
 
-`TimelineManager` persists one active timeline at `.workspace/current_timeline.json`. It creates default video and audio tracks, loads and validates existing JSON, saves the full model, and deletes the file when reset. It has no project identifier, transaction boundary, concurrency control, revision check, history, or rollback.
+`TimelineManager` persists one active timeline at `.workspace/current_timeline.json`. It creates default primary video and audio tracks, deterministically migrates legacy fixed-track JSON, loads and validates schema-v2 JSON, saves the full model, and deletes the file when reset. Native v2 documents reject duplicate track IDs/order and clip IDs. It has no first-class project identifier or canonical project-store revision; guarded workflow transactions/checkpoints remain separate.
 
 `TimelineProjectDocument` is an opt-in versioned envelope around the existing `TimelineConfig`. An unwrapped legacy dictionary containing `width`, `height`, `fps`, and `tracks` remains valid for `TimelineConfig` and can also be parsed by `TimelineProjectDocument`; the wrapper assigns revision `1`, records `legacy.timeline.v0`, and derives a deterministic `project_legacy_*` ID from canonical timeline content. Current timeline persistence is intentionally unchanged.
 
@@ -454,16 +456,20 @@ Rollback is a second workflow, never an automatic failure handler. The service r
 
 `src/timeline_query/` is the stable library boundary for future timeline/player visualization. `TimelineSnapshotService.snapshot` accepts a `TimelineConfig`, legacy timeline dictionary, or `TimelineProjectDocument`; `snapshot_current` delegates only to `TimelineManager.get_current_timeline`. Neither method saves, resets, renders, executes a skill, probes media, or writes files.
 
-The returned `vistora.timeline-snapshot` schema is version `1.0.0`. Its frozen, recursively detached read models expose:
+The returned `vistora.timeline-snapshot` schema is version `2.0.0`. Its frozen, recursively detached read models expose:
 
 - snapshot, project, revision, source-schema, migration, and timeline-digest identity;
 - output width, height, and frame rate;
-- every configured track with its mapping key, model ID, current kind, order, clips, count, and derived duration;
-- every clip with its configured ID, source reference, trim, placement, speed-adjusted duration, audio flags, volume, reversal, and rotation;
+- every configured track with its mapping key, stable ID, video/audio kind, role, unique order, enabled/muted/locked state, clips, count, and derived duration;
+- every clip with its configured ID, optional explicit link-group ID, source reference, trim, placement, speed-adjusted duration, audio flags, volume, reversal, and rotation;
 - a detached `vistora.clip-provenance-summary` for each clip, reporting recorded origin, latest change origin, mapping health, confirmed plan/operation/step/request/result identity, execution status, and browser-safe evidence locators;
 - aggregate track/clip/video/audio counts, timeline duration, and empty state.
 
-Track mapping order is deterministic: the exact `video` key, the exact `audio` key, then other keys lexicographically. Clip-list order is preserved because it is part of the current timeline's editing semantics. Vistora currently supports a mapping of arbitrary tracks in its data model, while rendering has special behavior only for the exact `video` and `audio` keys. Other tracks are therefore reported accurately as `other`; the read layer does not invent lanes, compositing rules, transitions, thumbnails, waveforms, or availability state.
+Track order is deterministic by unique numeric `order`, then stable track ID
+and mapping key. Clip order is deterministic by timeline start and stable
+clip ID after exact-ID edits. All configured video/audio tracks are exposed
+without collapsing them into fixed lanes. The read layer does not invent
+subtitle or effect track kinds, transitions, or link membership.
 
 Legacy timelines receive the existing content-derived `project_legacy_*` identity and revision `1`. A native `TimelineProjectDocument` retains its explicit project ID and revision. Consumers that need optimistic consistency can supply a `TimelineSnapshotReference`; a mismatched project or revision fails before data is returned. Configured source paths are stable references only and are not checked for existence, keeping repeated snapshots independent of machine and filesystem state.
 
@@ -529,7 +535,12 @@ Unknown `POST` routes and all `PUT`, `PATCH`, and `DELETE` requests return `405`
 
 Media and analysis are disabled for a source unless the operator supplies an applicable `--media-root` directory. A configured source can be served or analyzed only when its opaque `source_*` ID occurs in the current snapshot, its canonical path remains inside an allowlisted root after symlink resolution, and its extension is in the small browser audio/video allowlist. The preview copy of a snapshot replaces configured source paths with `media:source_*` references while the underlying `TimelineSnapshot` remains unchanged. Requests never accept raw paths, directory traversal cannot address media or thumbnails, and responses do not disclose resolved filesystem paths.
 
-The UI renders the snapshot's deterministic track order, preserves clip order and timing, places video thumbnail strips and audio peak paths inside their exact clip blocks, and represents only the implemented `video` and `audio` kinds as such. The selected-clip inspector reports the opaque source reference, media type, track, source/timeline timing, duration, playback properties, availability, visualization status, recorded origin, plan/step identity, source evidence range, and execution status. Legacy unknown, stale, orphaned, and deleted states are represented by the trace query contracts rather than inferred in the browser. Other track kinds remain visible as unsupported data-only lanes; the UI does not infer subtitle, transition, or compositing semantics. Missing or failed analysis produces an explicit placeholder. Preview selection, browser playback, playhead movement, zoom, scrolling, and analysis display are transient local view state.
+The UI renders every video/audio track in deterministic order, including its
+role and enabled/muted/locked state, and places video thumbnail strips and
+audio peak paths inside exact clip ranges. The inspector reports stable
+track/link IDs in addition to opaque source, timing, playback, analysis, and
+provenance details. Missing analysis remains an explicit placeholder.
+Selection, playback, zoom, scrolling, and analysis state are transient.
 
 With `--plan-review path\to\request.json`, the same UI adds a **方案审阅 / 变更预览** panel. It groups added, removed, changed, and warning rows; overlays affected and provisional clips; synchronizes a selected change with before/after, tool, reason, evidence, and provenance details; and represents stale, invalid, blocked, and unsupported states. Native buttons and responsive lists preserve keyboard access. Back/Reject/Ready-to-confirm actions update browser state only and cannot confirm.
 
@@ -539,7 +550,7 @@ Current-workspace mode adds a deliberately narrow manual path:
 
 ```text
 TimelineSnapshot (detached read)
-  -> local browser draft (trim/move, split, lift/ripple removal)
+  -> local browser draft (trim/move/split/removal, track state/order, link/unlink)
   -> POST validate -> ManualEditReview (no persistence)
   -> explicit Confirm & apply
   -> ManualEditConfirmationRecord bound to exact proposal digest
@@ -564,7 +575,14 @@ python src/main.py preview --timeline path\to\timeline.json `
   --plan-review path\to\plan-diff-request.json
 ```
 
-`TimelineRenderer` consumes a `TimelineConfig` and writes media. It selects single-clip and multi-clip FFmpeg fast paths where possible and falls back to a MoviePy composite path. Hardware/color/proxy helpers live under `src/utils/`.
+`TimelineRenderer` consumes a `TimelineConfig` and writes media. Enabled video
+tracks are composited bottom-to-top by deterministic track order; disabled
+tracks are omitted. Enabled, unmuted audio tracks and permitted embedded
+video audio are mixed without normalizing away declared volume. The bounded
+FFmpeg multitrack path fixes output canvas/frame rate/duration and is covered
+by a four-track render/ffprobe regression. Single-track compatibility fast
+paths remain. Unsupported non-video/audio track kinds fail validation rather
+than being rendered as fictitious semantics.
 
 ### Atomic skill contract today
 
@@ -579,14 +597,16 @@ The implemented mutation ownership is:
 | `VideoClearTimelineSkill` | Deletes the active timeline state. | None. |
 | `VideoExportSkill` | May reset timeline state after export. | Renders the timeline to an output file. |
 | `VideoTimelapseSkill` | None. | Writes a new timelapse file through FFmpeg. |
-| `VideoApplyManualEditsSkill` | Applies one exact confirmed user proposal to copied current video-track state, atomically replaces timeline JSON, and appends truthful manual provenance; timeline state is restored if trace persistence fails. | None. |
+| `VideoApplyManualEditsSkill` | Applies one exact confirmed user proposal to copied arbitrary video/audio track state, including explicit current/linked scope and track/link management; atomically replaces timeline JSON and appends truthful manual provenance. | None. |
 | `VideoRestoreTimelineCheckpointSkill` | Restores one exact reviewed and confirmed checkpoint with atomic replacement and post-write digest validation; prior bytes are restored on failure. | None; generated/exported files are explicitly outside rollback. |
-| `VideoSplitClipSkill` | Splits one exact video/audio `clip_id`, retaining source/playback properties and assigning a stable right-side ID. | None. |
-| `VideoTrimClipSkill` | Narrows an exact source range with optional same-track ripple. | None. |
-| `VideoMoveClipSkill` | Moves an exact clip to an explicit start with non-ripple overlap or deterministic same-track ripple. | None. |
+| `VideoSplitClipSkill` | Splits one exact video/audio `clip_id`, or every exact linked member, retaining source/playback/provenance properties and stable right-side IDs. | None. |
+| `VideoTrimClipSkill` | Narrows an exact source range with optional per-track ripple and explicit current/linked scope. | None. |
+| `VideoMoveClipSkill` | Moves an exact clip or explicit linked group to an explicit start with non-ripple overlap or deterministic per-track ripple. | None. |
 | `VideoInsertOverwriteClipSkill` | Inserts or overwrites accepted catalog/allowable local media while preserving uncovered overlap sides. | Reads source metadata; does not rewrite source media. |
-| `VideoRemoveClipSkill` | Performs gap-preserving lift or same-track ripple delete by exact ID. | None. |
-| `VideoSetClipPropertiesSkill` | Updates speed, volume/mute, embedded audio, or video rotation without creating a reverse proxy. | None. |
+| `VideoRemoveClipSkill` | Performs gap-preserving lift or per-track ripple delete by exact ID and explicit current/linked scope. | None. |
+| `VideoSetClipPropertiesSkill` | Updates speed, volume/mute, embedded audio, or video rotation for the current clip or exact link group without creating a reverse proxy. | None. |
+| `TimelineManageTrackSkill` | Adds/updates/removes an empty video/audio track or changes deterministic track order; locked tracks reject clip mutation. | None. |
+| `TimelineSetClipLinkSkill` | Links/unlinks explicit exact clip references with a stable group ID; never infers membership. | None. |
 
 These are the only registered atomic mutation entry points. Tests may reset state directly as test-fixture setup. The CLI `render` command remains a documented nonconforming compatibility exception.
 
@@ -763,7 +783,7 @@ Mutation-capable utilities and core objects are implementation details behind to
 | G-03 | Operator combines incompatible roles | `OperatorAgent` owns dialogue, planning, and execution. | Separate/retire the hybrid behind Director and Editing contracts. |
 | G-06 | Direct CLI render bypass | `render` instantiates `TimelineRenderer` directly. | Route mutations through an explicit atomic tool or clearly isolated maintenance interface. |
 | G-07 | Canonical timeline persistence remains legacy | Workflow checkpoints and confirmed restore add guarded history/recovery, but the canonical timeline is still one legacy JSON file with content-derived snapshot identity. | Introduce a first-class versioned project store only in a separately approved migration. |
-| G-11 | Visualization/manual editing remains local and bounded | The loopback UI now provides snapshot lanes, safe material preview, thumbnails/waveforms, inspector, and confirmed exact-ID split/trim/move plus lift/ripple removal drafts. Insert/overwrite is available through structured Director plans, not a broad browser ingest surface. | Add linked A/V, richer multitrack and later professional controls only through separately approved contracts and atomic tools. |
+| G-11 | Professional controls remain intentionally bounded | The loopback UI now provides arbitrary video/audio lanes, track state/order, explicit link/unlink, safe material preview, thumbnails/waveforms, inspector, and confirmed exact-ID edits with current/linked scope. Insert/overwrite remains available through structured Director plans, not a broad browser ingest surface. | Add subtitles, color, transitions, keyframes, masks, richer track kinds, and later professional controls only through separately approved contracts and atomic tools. |
 
 This gap register is descriptive. Closing any gap requires a separate approved implementation task.
 
@@ -776,19 +796,20 @@ product entry, and low-level CLI). Individual legacy skill implementations
 still return dictionaries internally, and `OperatorAgent.chat` remains an
 explicit compatibility prototype; neither is a production execution contract.
 
-STEP 17 partially improves G-11 with a detached
-`timeline_edit.TimelineEditEngine` for the current video/audio tracks. Six
-versioned exact-`clip_id` skills expose split, trim, move, insert/overwrite,
-lift/ripple remove, and playback properties only through the shared
-registry/gateway. A single transaction boundary writes a same-directory
-temporary file, flushes and `fsync`s it, atomically replaces the legacy JSON,
-and restores prior bytes after write, validation, or confirmed-trace failure.
-Plan review invokes only the detached engine and never dispatches a skill.
+STEP 17 introduced the detached exact-ID engine and six core edit skills.
+STEP 18 extends that foundation with timeline schema `2.0.0`, arbitrary
+ordered video/audio tracks, stable track IDs and roles, enabled/muted/locked
+state, explicit stable clip link groups, and deterministic linked/current
+editing. `TimelineManageTrackSkill` and `TimelineSetClipLinkSkill` bring the
+production registry to fifteen skills. The same detached engine powers review
+and the confirmed transaction path; it reports direct and consequential
+effects, rejects locked members, and preserves source provenance/tombstones.
 
-Ripple remains same-track only. Overwrite retains uncovered sides with stable
-new IDs. Provenance records direct and consequential creates/modifies/deletes
-plus tombstones; derived clips inherit recorded origin/evidence rather than
-claiming new facts. Index-based `VideoModifyClipSkill` and manual order remain
+Legacy fixed `video`/`audio` JSON migrates deterministically. The renderer
+composites enabled video tracks bottom-to-top and mixes enabled/unmuted audio
+tracks; the reference workflow covers four tracks, linked split/move/ripple,
+current-only editing, trace, export/ffprobe, and rollback. Index-based
+`VideoModifyClipSkill`, legacy `track_key`, and manual list order remain
 compatibility surfaces. This does not close G-06 or G-07 and does not add
-linked A/V, arbitrary multitrack, color, subtitles, transitions, keyframes,
-masks, AI providers, or effects.
+automatic A/V linking, linked multi-source ingest, subtitles, color,
+transitions, keyframes, masks, AI providers, or effects.

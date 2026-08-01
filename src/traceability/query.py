@@ -112,6 +112,7 @@ class TraceabilityQuery:
             events.extend(
                 (trace.trace_sequence, trace, relation)
                 for relation in trace.relations
+                if relation.entity.entity_kind == "clip"
             )
         self._events = tuple(
             sorted(

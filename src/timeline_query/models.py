@@ -7,8 +7,8 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-TIMELINE_SNAPSHOT_VERSION = "1.0.0"
-SnapshotVersion = Literal["1.0.0"]
+TIMELINE_SNAPSHOT_VERSION = "2.0.0"
+SnapshotVersion = Literal["2.0.0"]
 SnapshotId = Annotated[
     str,
     Field(
@@ -125,6 +125,7 @@ class ClipSnapshot(ReadModel):
     keep_audio: bool
     reverse: bool
     rotate_degrees: int
+    link_group_id: SnapshotId | None = None
     provenance: ClipProvenanceSummary | None = None
 
 
@@ -133,8 +134,12 @@ class TrackSnapshot(ReadModel):
 
     track_key: str = Field(min_length=1)
     track_id: str = Field(min_length=1)
-    kind: Literal["video", "audio", "other"]
+    kind: Literal["video", "audio"]
+    role: str = Field(min_length=1)
     order_index: int = Field(ge=0)
+    enabled: bool
+    muted: bool
+    locked: bool
     clips: tuple[ClipSnapshot, ...] = ()
     clip_count: int = Field(ge=0)
     duration_seconds: FiniteFloat = Field(ge=0)

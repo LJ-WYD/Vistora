@@ -1,38 +1,130 @@
 import os
-from typing import List, Dict, Optional
-from pydantic import BaseModel, Field
+from typing import Any, List, Dict, Literal, Optional
+from pydantic import BaseModel, Field, model_validator
 from moviepy import VideoFileClip, AudioFileClip, CompositeVideoClip, CompositeAudioClip
 
+TIMELINE_MODEL_VERSION = "2.0.0"
+
+
 class ClipConfig(BaseModel):
-    """
-    剪辑片段配置
-    """
-    id: str = Field(..., description="片段唯一标识")
-    source: str = Field(..., description="素材文件路径")
-    trim_in: float = Field(0.0, description="在原素材中的裁剪开始时间（秒）")
-    trim_out: float = Field(..., description="在原素材中的裁剪结束时间（秒）")
-    timeline_start: float = Field(0.0, description="在最终时间线上的开始播放时间（秒）")
-    volume: Optional[float] = Field(1.0, description="音量大小 (0.0 到 1.0)")
-    keep_audio: bool = Field(True, description="是否保留视频自带的音频（仅对视频片段有效）")
-    speed_factor: float = Field(1.0, description="变速播放速度倍数（如 2.0 表示两倍速，0.5 表示半速）")
-    reverse: bool = Field(False, description="是否倒放")
-    rotate: int = Field(0, description="画面旋转角度（支持 90, 180, 270）")
+    """Declarative clip state shared by legacy and v2 timelines."""
+
+    id: str = Field(..., description="Stable clip ID.")
+    source: str = Field(..., description="Configured source.")
+    trim_in: float = 0.0
+    trim_out: float
+    timeline_start: float = 0.0
+    volume: Optional[float] = 1.0
+    keep_audio: bool = True
+    speed_factor: float = 1.0
+    reverse: bool = False
+    rotate: int = 0
+    link_group_id: Optional[str] = Field(
+        None,
+        min_length=3,
+        max_length=160,
+        pattern=r"^[A-Za-z][A-Za-z0-9._:-]*$",
+        description="Explicit linked-clip group; never inferred.",
+    )
+
 
 class TrackConfig(BaseModel):
-    """
-    轨道配置
-    """
-    id: str = Field(..., description="轨道唯一标识")
-    clips: List[ClipConfig] = Field(default_factory=list, description="轨道中包含的片段列表")
+    """Stable, ordered multi-track declaration."""
+
+    id: str = Field(min_length=1)
+    kind: Literal["video", "audio"] | None = None
+    role: str = Field("primary", min_length=1, max_length=80)
+    order: int = Field(0, ge=0)
+    enabled: bool = True
+    muted: bool = False
+    locked: bool = False
+    clips: List[ClipConfig] = Field(default_factory=list)
+
 
 class TimelineConfig(BaseModel):
-    """
-    声明式时间线配置
-    """
-    width: int = Field(1920, description="视频宽度")
-    height: int = Field(1080, description="视频高度")
-    fps: int = Field(30, description="视频帧率")
-    tracks: Dict[str, TrackConfig] = Field(default_factory=dict, description="轨道映射字典，例如 {'video': video_track, 'audio': audio_track}")
+    """V2 multi-track timeline with deterministic legacy migration."""
+
+    schema_version: Literal["2.0.0"] = TIMELINE_MODEL_VERSION
+    width: int = Field(1920, gt=0)
+    height: int = Field(1080, gt=0)
+    fps: int = Field(30, gt=0)
+    tracks: Dict[str, TrackConfig] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_tracks(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        migrated = dict(value)
+        native_v2 = migrated.get("schema_version") == TIMELINE_MODEL_VERSION
+        migrated["schema_version"] = TIMELINE_MODEL_VERSION
+        raw_tracks = migrated.get("tracks")
+        if not isinstance(raw_tracks, dict):
+            return migrated
+        normalized: dict[str, Any] = {}
+        used_orders: set[int] = set()
+        for fallback_order, (track_key, raw_track) in enumerate(
+            raw_tracks.items()
+        ):
+            if isinstance(raw_track, BaseModel):
+                explicit_order = "order" in raw_track.model_fields_set
+                track_data = raw_track.model_dump(mode="python")
+            elif isinstance(raw_track, dict):
+                explicit_order = "order" in raw_track
+                track_data = dict(raw_track)
+            else:
+                normalized[track_key] = raw_track
+                continue
+            inferred_kind = (
+                "audio"
+                if track_key == "audio"
+                or str(track_data.get("id", "")).startswith("audio")
+                else "video"
+            )
+            if not track_data.get("kind"):
+                track_data["kind"] = inferred_kind
+            track_data.setdefault(
+                "role",
+                "primary" if track_key in {"video", "audio"} else "auxiliary",
+            )
+            legacy_priority = {"video": 0, "audio": 1}.get(
+                track_key,
+                fallback_order + 2,
+            )
+            proposed_order = (
+                track_data.get("order")
+                if explicit_order
+                else legacy_priority
+            )
+            if not isinstance(proposed_order, int) or proposed_order < 0:
+                proposed_order = fallback_order
+            if not native_v2:
+                while proposed_order in used_orders:
+                    proposed_order += 1
+            used_orders.add(proposed_order)
+            track_data["order"] = proposed_order
+            track_data.setdefault("enabled", True)
+            track_data.setdefault("muted", False)
+            track_data.setdefault("locked", False)
+            normalized[track_key] = track_data
+        migrated["tracks"] = normalized
+        return migrated
+
+    @model_validator(mode="after")
+    def stable_id_invariants(self) -> "TimelineConfig":
+        track_ids = [track.id for track in self.tracks.values()]
+        if len(track_ids) != len(set(track_ids)):
+            raise ValueError("track IDs must be unique")
+        orders = [track.order for track in self.tracks.values()]
+        if len(orders) != len(set(orders)):
+            raise ValueError("track order values must be unique")
+        clip_ids = [
+            clip.id for track in self.tracks.values() for clip in track.clips
+        ]
+        if len(clip_ids) != len(set(clip_ids)):
+            raise ValueError("clip IDs must be unique across all tracks")
+        return self
+
 
 class TimelineRenderer:
     """
@@ -47,13 +139,56 @@ class TimelineRenderer:
         开始渲染时间线，并输出到指定路径
         """
         # --- Fast-Path 极速渲染通道判断 ---
-        video_track = self.config.tracks.get("video")
-        audio_track = self.config.tracks.get("audio")
+        ordered_tracks = sorted(
+            self.config.tracks.values(),
+            key=lambda track: (track.order, track.id),
+        )
+        video_tracks = [
+            track
+            for track in ordered_tracks
+            if track.enabled and track.kind == "video"
+        ]
+        audio_tracks = [
+            track
+            for track in ordered_tracks
+            if track.enabled and not track.muted and track.kind == "audio"
+        ]
+        video_track = TrackConfig(
+            id="render_video",
+            kind="video",
+            clips=[
+                clip.model_copy(update={"keep_audio": False})
+                if track.muted
+                else clip
+                for track in video_tracks
+                for clip in sorted(
+                    track.clips,
+                    key=lambda item: (item.timeline_start, item.id),
+                )
+            ],
+        )
+        audio_track = TrackConfig(
+            id="render_audio",
+            kind="audio",
+            clips=[
+                clip
+                for track in audio_tracks
+                for clip in sorted(
+                    track.clips,
+                    key=lambda item: (item.timeline_start, item.id),
+                )
+            ],
+        )
         
         is_fast_path = False
         is_multi_fast_path = False
         
-        if video_track and len(video_track.clips) > 0:
+        canonical_video = self.config.tracks.get("video")
+        if (
+            len(video_tracks) == 1
+            and canonical_video is video_tracks[0]
+            and video_track.clips
+        ):
             if not audio_track or len(audio_track.clips) == 0:
                 if len(video_track.clips) == 1:
                     is_fast_path = True
@@ -74,12 +209,24 @@ class TimelineRenderer:
                 traceback.print_exc()
                 print(f"[Multi-Fast-Path] 多片段极速并发拼接失败，降级到标准 MoviePy 渲染通道: {e}")
 
+        requires_multitrack = (
+            len(video_tracks) > 1
+            or len(audio_tracks) > 1
+            or any(
+                key not in {"video", "audio"}
+                and track.enabled
+                and track.clips
+                for key, track in self.config.tracks.items()
+            )
+        )
+        if requires_multitrack:
+            return self._render_multitrack_ffmpeg(output_path)
+
         video_clips = []
         audio_clips = []
 
         # 1. 解析视频轨
-        if "video" in self.config.tracks:
-            video_track = self.config.tracks["video"]
+        if video_track.clips:
             for clip_cfg in video_track.clips:
                 if not os.path.exists(clip_cfg.source):
                     raise FileNotFoundError(f"视频素材文件不存在: {clip_cfg.source}")
@@ -135,8 +282,7 @@ class TimelineRenderer:
                 video_clips.append(positioned)
 
         # 2. 解析音频轨（如背景音乐等）
-        if "audio" in self.config.tracks:
-            audio_track = self.config.tracks["audio"]
+        if audio_track.clips:
             for clip_cfg in audio_track.clips:
                 if not os.path.exists(clip_cfg.source):
                     raise FileNotFoundError(f"音频素材文件不存在: {clip_cfg.source}")
@@ -204,6 +350,226 @@ class TimelineRenderer:
                     pass
             self._opened_clips.clear()
 
+        return output_path
+
+    def _render_multitrack_ffmpeg(self, output_path: str) -> str:
+        """Deterministic multi-layer video composition and audio mixing."""
+
+        import json
+        import subprocess
+
+        tracks = sorted(
+            (
+                track
+                for track in self.config.tracks.values()
+                if track.enabled
+            ),
+            key=lambda track: (track.order, track.id),
+        )
+        video_items = [
+            (track, clip)
+            for track in tracks
+            if track.kind == "video"
+            for clip in sorted(
+                track.clips,
+                key=lambda item: (item.timeline_start, item.id),
+            )
+        ]
+        if not video_items:
+            raise ValueError(
+                "A multi-track export requires an enabled video clip"
+            )
+        audio_items = [
+            (track, clip)
+            for track in tracks
+            if track.kind == "audio" and not track.muted
+            for clip in sorted(
+                track.clips,
+                key=lambda item: (item.timeline_start, item.id),
+            )
+        ]
+        all_items = [
+            ("video", track, clip) for track, clip in video_items
+        ] + [
+            ("audio", track, clip) for track, clip in audio_items
+        ]
+        command = ["ffmpeg", "-nostdin", "-y", "-loglevel", "error"]
+        for _, _, clip in all_items:
+            if not os.path.isfile(clip.source):
+                raise FileNotFoundError(
+                    f"Configured media is unavailable: {clip.source}"
+                )
+            command.extend(["-i", clip.source])
+
+        def has_audio(path: str) -> bool:
+            probe = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "a:0",
+                    "-show_entries",
+                    "stream=codec_type",
+                    "-of",
+                    "json",
+                    path,
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            return bool(json.loads(probe.stdout).get("streams"))
+
+        def atempo(speed: float) -> list[str]:
+            filters: list[str] = []
+            remaining = speed
+            while remaining > 2.0:
+                filters.append("atempo=2.0")
+                remaining /= 2.0
+            while remaining < 0.5:
+                filters.append("atempo=0.5")
+                remaining /= 0.5
+            if abs(remaining - 1.0) > 1e-9:
+                filters.append(f"atempo={remaining:.12g}")
+            return filters
+
+        duration = max(
+            (
+                clip.timeline_start
+                + (clip.trim_out - clip.trim_in) / clip.speed_factor
+                for _, _, clip in all_items
+            ),
+            default=0.0,
+        )
+        filters = [
+            f"color=c=black:s={self.config.width}x{self.config.height}:"
+            f"r={self.config.fps}:d={duration:.12g}[base]"
+        ]
+        audio_labels: list[str] = []
+        video_labels: list[str] = []
+        for index, (kind, track, clip) in enumerate(all_items):
+            delay_ms = max(0, round(clip.timeline_start * 1000))
+            if kind == "video":
+                chain = [
+                    f"[{index}:v]trim=start={clip.trim_in:.12g}:"
+                    f"end={clip.trim_out:.12g}",
+                    f"setpts=(PTS-STARTPTS)/{clip.speed_factor:.12g}",
+                ]
+                if clip.reverse:
+                    chain.append("reverse")
+                if clip.rotate == 90:
+                    chain.append("transpose=1")
+                elif clip.rotate == 180:
+                    chain.extend(("transpose=1", "transpose=1"))
+                elif clip.rotate == 270:
+                    chain.append("transpose=2")
+                chain.extend((
+                    f"scale={self.config.width}:{self.config.height}:"
+                    "force_original_aspect_ratio=decrease",
+                    f"pad={self.config.width}:{self.config.height}:"
+                    "(ow-iw)/2:(oh-ih)/2:color=black@0",
+                    f"fps={self.config.fps}",
+                    "format=rgba",
+                    f"setpts=PTS+{clip.timeline_start:.12g}/TB"
+                    f"[video_{index}]",
+                ))
+                filters.append(",".join(chain))
+                video_labels.append(f"[video_{index}]")
+                if (
+                    clip.keep_audio
+                    and not track.muted
+                    and has_audio(clip.source)
+                ):
+                    audio_chain = [
+                        f"[{index}:a]atrim=start={clip.trim_in:.12g}:"
+                        f"end={clip.trim_out:.12g}",
+                        "asetpts=PTS-STARTPTS",
+                        *atempo(clip.speed_factor),
+                    ]
+                    if clip.reverse:
+                        audio_chain.append("areverse")
+                    if clip.volume is not None:
+                        audio_chain.append(f"volume={clip.volume:.12g}")
+                    audio_chain.extend((
+                        f"adelay={delay_ms}|{delay_ms}",
+                        f"atrim=end={duration:.12g}[audio_{index}]",
+                    ))
+                    filters.append(",".join(audio_chain))
+                    audio_labels.append(f"[audio_{index}]")
+            elif has_audio(clip.source):
+                audio_chain = [
+                    f"[{index}:a]atrim=start={clip.trim_in:.12g}:"
+                    f"end={clip.trim_out:.12g}",
+                    "asetpts=PTS-STARTPTS",
+                    *atempo(clip.speed_factor),
+                ]
+                if clip.reverse:
+                    audio_chain.append("areverse")
+                if clip.volume is not None:
+                    audio_chain.append(f"volume={clip.volume:.12g}")
+                audio_chain.extend((
+                    f"adelay={delay_ms}|{delay_ms}",
+                    f"atrim=end={duration:.12g}[audio_{index}]",
+                ))
+                filters.append(",".join(audio_chain))
+                audio_labels.append(f"[audio_{index}]")
+
+        current = "[base]"
+        for layer_index, label in enumerate(video_labels):
+            output = f"[layer_{layer_index}]"
+            filters.append(
+                f"{current}{label}overlay=eof_action=pass:shortest=0"
+                f"{output}"
+            )
+            current = output
+        filters.append(f"{current}format=yuv420p[video_out]")
+        if audio_labels:
+            filters.append(
+                "".join(audio_labels)
+                + f"amix=inputs={len(audio_labels)}:"
+                f"duration=longest:normalize=0[audio_out]"
+            )
+        command.extend([
+            "-filter_complex",
+            ";".join(filters),
+            "-map",
+            "[video_out]",
+        ])
+        if audio_labels:
+            command.extend(["-map", "[audio_out]", "-c:a", "aac"])
+        command.extend([
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-r",
+            str(self.config.fps),
+            "-t",
+            f"{duration:.12g}",
+            output_path,
+        ])
+        output_dir = os.path.dirname(output_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        try:
+            subprocess.run(
+                command,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                "Deterministic multi-track FFmpeg export timed out"
+            ) from exc
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                "Deterministic multi-track FFmpeg export failed: "
+                + " ".join((exc.stderr or "").strip().splitlines()[-2:])
+            ) from exc
         return output_path
 
     def _render_fast_path(self, output_path: str) -> str:

@@ -72,10 +72,15 @@ def _display_name(configured_path: str) -> str:
     return normalized.rsplit("/", 1)[-1] or PurePath(configured_path).name
 
 
-def _clip_state(clip: Any, track_key: str) -> PreviewClipState:
+def _clip_state(
+    clip: Any,
+    track_key: str,
+    track_id: str | None = None,
+) -> PreviewClipState:
     return PreviewClipState(
         clip_id=clip.clip_id,
         track_key=track_key,
+        track_id=track_id or track_key,
         order_index=clip.order_index,
         source_id=clip.source.source_id,
         source_name=clip.source.display_name,
@@ -89,6 +94,7 @@ def _clip_state(clip: Any, track_key: str) -> PreviewClipState:
         keep_audio=clip.keep_audio,
         reverse=clip.reverse,
         rotate_degrees=clip.rotate_degrees,
+        link_group_id=clip.link_group_id,
     )
 
 
@@ -129,10 +135,14 @@ def _timeline_from_snapshot(snapshot: TimelineSnapshot) -> TimelineConfig:
         fps=snapshot.fps,
     )
     for track in snapshot.tracks:
-        if track.track_key not in {"video", "audio"}:
-            continue
         timeline.tracks[track.track_key] = TrackConfig(
             id=track.track_id,
+            kind=track.kind,
+            role=track.role,
+            order=track.order_index,
+            enabled=track.enabled,
+            muted=track.muted,
+            locked=track.locked,
             clips=[
                 ClipConfig(
                     id=clip.clip_id,
@@ -145,20 +155,24 @@ def _timeline_from_snapshot(snapshot: TimelineSnapshot) -> TimelineConfig:
                     speed_factor=clip.speed_factor,
                     reverse=clip.reverse,
                     rotate=clip.rotate_degrees,
+                    link_group_id=clip.link_group_id,
                 )
                 for clip in track.clips
             ],
         )
-    timeline.tracks.setdefault("video", TrackConfig(id="video"))
-    timeline.tracks.setdefault("audio", TrackConfig(id="audio"))
-    return timeline
+    return TimelineConfig.model_validate(timeline.model_dump(mode="python"))
 
 
-def _preview_state(clip: ClipConfig, track_key: str) -> PreviewClipState:
+def _preview_state(
+    clip: ClipConfig,
+    track_key: str,
+    track_id: str,
+) -> PreviewClipState:
     duration = (clip.trim_out - clip.trim_in) / clip.speed_factor
     return PreviewClipState(
         clip_id=clip.id,
         track_key=track_key,
+        track_id=track_id,
         order_index=0,
         source_id=_source_id(clip.source),
         source_name=_display_name(clip.source),
@@ -172,6 +186,7 @@ def _preview_state(clip: ClipConfig, track_key: str) -> PreviewClipState:
         keep_audio=clip.keep_audio,
         reverse=clip.reverse,
         rotate_degrees=clip.rotate,
+        link_group_id=clip.link_group_id,
     )
 
 
@@ -179,14 +194,14 @@ def _preview_map(timeline: TimelineConfig) -> dict[
     tuple[str, str], PreviewClipState
 ]:
     result = {}
-    for track_key in ("video", "audio"):
-        track = timeline.tracks.get(track_key)
-        if track is None:
-            continue
+    for track_key, track in sorted(
+        timeline.tracks.items(),
+        key=lambda item: (item[1].order, item[1].id, item[0]),
+    ):
         for index, clip in enumerate(
             sorted(track.clips, key=lambda item: (item.timeline_start, item.id))
         ):
-            state = _preview_state(clip, track_key).model_copy(
+            state = _preview_state(clip, track_key, track.id).model_copy(
                 update={"order_index": index}
             )
             result[(track_key, clip.id)] = state
@@ -237,12 +252,22 @@ class PlanDiffEngine:
         }
         facts = {fact.material_id: fact for fact in request.material_facts}
         video_track = next(
-            (track for track in snapshot.tracks if track.track_key == "video"),
+            (
+                track
+                for track in snapshot.tracks
+                if track.kind == "video"
+                and track.enabled
+                and track.role == "primary"
+            ),
             None,
         )
         clips = (
             [
-                _clip_state(clip, "video")
+                _clip_state(
+                    clip,
+                    video_track.track_key,
+                    video_track.track_id,
+                )
                 for clip in video_track.clips
             ]
             if video_track is not None
@@ -378,12 +403,14 @@ class PlanDiffEngine:
                 "VideoInsertOverwriteClipSkill",
                 "VideoRemoveClipSkill",
                 "VideoSetClipPropertiesSkill",
+                "TimelineManageTrackSkill",
+                "TimelineSetClipLinkSkill",
             }:
-                # Keep legacy video-only simulators and the new dual-track
-                # engine coherent when a proposal mixes both generations.
-                core_timeline.tracks["video"] = TrackConfig(
-                    id="video",
-                    clips=[
+                # Synchronize only the legacy primary-video view; every other
+                # stable multi-track declaration remains detached and intact.
+                if video_track is not None:
+                    primary = core_timeline.tracks[video_track.track_key]
+                    primary.clips = [
                         ClipConfig(
                             id=clip.clip_id,
                             source=clip.source_name,
@@ -395,10 +422,10 @@ class PlanDiffEngine:
                             speed_factor=clip.speed_factor,
                             reverse=clip.reverse,
                             rotate=clip.rotate_degrees,
+                            link_group_id=clip.link_group_id,
                         )
                         for clip in clips
-                    ],
-                )
+                    ]
                 status, message, core_timeline = (
                     PlanDiffEngine._preview_core_edit(
                         step=step,
@@ -414,12 +441,17 @@ class PlanDiffEngine:
                     height=core_timeline.height,
                     fps=core_timeline.fps,
                 )
+                primary_video_keys = {
+                    key
+                    for key, track in core_timeline.tracks.items()
+                    if track.kind == "video" and track.role == "primary"
+                }
                 clips = [
                     state
                     for (track_key, _), state in sorted(
                         _preview_map(core_timeline).items()
                     )
-                    if track_key == "video"
+                    if track_key in primary_video_keys
                 ]
             elif step.tool_name == "VideoClearTimelineSkill":
                 removed = list(clips)
@@ -717,41 +749,66 @@ class PlanDiffEngine:
             name = step.tool_name
             if name == "VideoSplitClipSkill":
                 updated, outcome = engine.split(
-                    params.track_key,
+                    params.track_reference,
                     params.clip_id,
                     params.split_at_seconds,
                     right_clip_id=params.right_clip_id,
+                    edit_scope=params.edit_scope,
                 )
             elif name == "VideoTrimClipSkill":
                 updated, outcome = engine.trim(
-                    params.track_key,
+                    params.track_reference,
                     params.clip_id,
                     params.trim_in,
                     params.trim_out,
                     ripple=params.ripple,
+                    edit_scope=params.edit_scope,
                 )
             elif name == "VideoMoveClipSkill":
                 updated, outcome = engine.move(
-                    params.track_key,
+                    params.track_reference,
                     params.clip_id,
                     params.timeline_start,
                     ripple=params.ripple,
+                    edit_scope=params.edit_scope,
                 )
             elif name == "VideoRemoveClipSkill":
                 updated, outcome = engine.remove(
-                    params.track_key,
+                    params.track_reference,
                     params.clip_id,
                     ripple=params.mode == "ripple",
+                    edit_scope=params.edit_scope,
                 )
             elif name == "VideoSetClipPropertiesSkill":
                 updated, outcome = engine.set_properties(
-                    params.track_key,
+                    params.track_reference,
                     params.clip_id,
                     speed_factor=params.speed_factor,
                     volume=params.volume,
                     keep_audio=params.keep_audio,
                     mute=params.mute,
                     rotate=params.rotate,
+                    edit_scope=params.edit_scope,
+                )
+            elif name == "TimelineManageTrackSkill":
+                updated, outcome = engine.manage_track(
+                    action=params.action,
+                    track_id=params.track_id,
+                    kind=params.kind,
+                    role=params.role,
+                    order=params.order,
+                    enabled=params.enabled,
+                    muted=params.muted,
+                    locked=params.locked,
+                )
+            elif name == "TimelineSetClipLinkSkill":
+                updated, outcome = engine.set_clip_link(
+                    action=params.action,
+                    members=(
+                        (member.track_id, member.clip_id)
+                        for member in params.members
+                    ),
+                    link_group_id=params.link_group_id,
                 )
             else:
                 material_id = _source_id(params.source_path)
@@ -776,14 +833,18 @@ class PlanDiffEngine:
                         "Required preview media facts are missing.",
                         timeline,
                     )
-                if fact.media_kind != params.track_key:
+                track_kind = engine.track_kind(params.track_reference)
+                if fact.media_kind != track_kind:
                     raise PlanDiffValidationError(
                         "Insert material kind differs from the selected track"
                     )
-                video_track = engine.timeline.tracks.get("video")
                 if (
-                    params.track_key == "video"
-                    and (video_track is None or not video_track.clips)
+                    track_kind == "video"
+                    and not any(
+                        track.clips
+                        for track in engine.timeline.tracks.values()
+                        if track.kind == "video"
+                    )
                     and fact.width is not None
                     and fact.height is not None
                 ):
@@ -807,7 +868,7 @@ class PlanDiffEngine:
                     })[7:23]
                 )
                 updated, outcome = engine.insert_overwrite(
-                    params.track_key,
+                    params.track_reference,
                     ClipConfig(
                         id=clip_id,
                         source=params.source_path,
@@ -818,8 +879,10 @@ class PlanDiffEngine:
                         volume=params.volume,
                         keep_audio=params.keep_audio,
                         rotate=params.rotate,
+                        link_group_id=params.link_group_id,
                     ),
                     mode=params.mode,
+                    edit_scope=params.edit_scope,
                 )
         except TimelineEditError as exc:
             raise PlanDiffValidationError(str(exc)) from exc
@@ -837,6 +900,9 @@ class PlanDiffEngine:
                 reason = "The confirmed edit removes this clip."
             elif old == new:
                 continue
+            elif old.link_group_id != new.link_group_id:
+                category = "clip_linkage"
+                reason = "The edit changes explicit clip linkage."
             elif (
                 old.trim_in_seconds != new.trim_in_seconds
                 or old.trim_out_seconds != new.trim_out_seconds
@@ -861,10 +927,25 @@ class PlanDiffEngine:
                     entity_kind="clip",
                     entity_id=key[1],
                     track_key=key[0],
+                    track_id=(new or old).track_id,
                 ),
                 before=old,
                 after=new,
                 reason=reason,
+            )
+        if outcome.operation == "manage_track":
+            append_change(
+                step=step,
+                category="track_management",
+                effect_kind="direct",
+                severity="info",
+                entity=ProposedEntityReference(
+                    entity_kind="track",
+                    entity_id=outcome.track_id,
+                    track_key=outcome.track_key,
+                    track_id=outcome.track_id,
+                ),
+                reason="The proposal changes a stable timeline track.",
             )
         for warning_index, warning in enumerate(outcome.warnings, start=1):
             append_change(
@@ -987,6 +1068,7 @@ class PlanDiffEngine:
         after = PreviewClipState(
             clip_id=provisional_id,
             track_key="video",
+            track_id="video",
             order_index=len(clips),
             source_id=material_id,
             source_name=_display_name(params.source_path),
@@ -999,6 +1081,7 @@ class PlanDiffEngine:
             keep_audio=params.keep_audio,
             reverse=False,
             rotate_degrees=params.rotate,
+            link_group_id=None,
             provisional=True,
         )
         clips.append(after)

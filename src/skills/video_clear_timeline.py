@@ -16,6 +16,17 @@ class VideoClearTimelineSkill(BaseSkill):
     input_model = VideoClearTimelineInput
 
     def run(self, params: VideoClearTimelineInput) -> Dict[str, Any]:
+        timeline = TimelineManager.get_current_timeline()
+        locked = [
+            track.id
+            for track in timeline.tracks.values()
+            if track.locked and track.clips
+        ]
+        if locked:
+            raise ValueError(
+                "Cannot clear timeline while populated tracks are locked: "
+                + ", ".join(sorted(locked))
+            )
         TimelineManager.reset_timeline()
         return {
             "status": "success",

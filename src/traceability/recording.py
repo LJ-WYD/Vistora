@@ -10,9 +10,11 @@ from contracts import (
     AtomicToolRequestEnvelope,
     AtomicToolResultEnvelope,
     EditingExecutionPlan,
+    ManualClipLink,
     ManualClipSplit,
     ManualEditConfirmationRecord,
     ManualEditProposal,
+    ManualTrackManage,
 )
 from timeline_query import TimelineSnapshot
 
@@ -67,6 +69,10 @@ class ConfirmedTraceRecorder:
     ) -> ConfirmedAtomicTrace:
         before = _clips(before_snapshot)
         after = _clips(after_snapshot)
+        track_ids = {
+            track.track_key: track.track_id
+            for track in (*before_snapshot.tracks, *after_snapshot.tracks)
+        }
         effects: list[tuple[str, str, str]] = []
         for track_key, clip_id in sorted(before.keys() | after.keys()):
             key = (track_key, clip_id)
@@ -166,6 +172,7 @@ class ConfirmedTraceRecorder:
                         "result_id": result.result_id,
                         "relation_type": relation_type,
                         "track_key": track_key,
+                        "track_id": track_ids.get(track_key),
                         "entity_id": entity_id,
                     },
                 ),
@@ -189,6 +196,7 @@ class ConfirmedTraceRecorder:
                     ),
                     entity_id=entity_id,
                     track_key=track_key or None,
+                    track_id=track_ids.get(track_key),
                 ),
                 source_operation_id=step.source_operation_id,
                 step_id=step.step_id,
@@ -238,7 +246,44 @@ class ManualTraceRecorder:
     ) -> ManualEditTrace:
         before_clips = _clips(before_snapshot)
         after_clips = _clips(after_snapshot)
+        before_tracks = {
+            track.track_key: track.model_dump(
+                mode="json",
+                exclude={"clips"},
+            )
+            for track in before_snapshot.tracks
+        }
+        after_tracks = {
+            track.track_key: track.model_dump(
+                mode="json",
+                exclude={"clips"},
+            )
+            for track in after_snapshot.tracks
+        }
         for edit in proposal.edits:
+            if isinstance(edit, ManualTrackManage):
+                if (
+                    edit.track_key not in before_tracks
+                    or edit.track_key not in after_tracks
+                    or before_tracks[edit.track_key]
+                    == after_tracks[edit.track_key]
+                ):
+                    raise ValueError(
+                        "Manual track trace has no exact state change"
+                    )
+                continue
+            if isinstance(edit, ManualClipLink):
+                for member in edit.members:
+                    key = (member.track_key, member.clip_id)
+                    if (
+                        key not in before_clips
+                        or key not in after_clips
+                        or before_clips[key] == after_clips[key]
+                    ):
+                        raise ValueError(
+                            "Manual link member was not modified"
+                        )
+                continue
             key = (edit.track_key, edit.clip_id)
             if key not in before_clips:
                 raise ValueError(
@@ -283,68 +328,124 @@ class ManualTraceRecorder:
                 raise ValueError(
                     "Manual trace after snapshot differs from confirmed edit"
                 )
-        effect_rows: list[tuple[Any, str, str, str]] = []
-        video_order = [
-            clip.clip_id
-            for track in before_snapshot.tracks
-            if track.track_key == "video"
-            for clip in track.clips
-        ]
+        effect_rows: list[tuple[Any, str, str, str, str]] = []
+        seen_effects: set[tuple[str, str, str]] = set()
         for edit in proposal.edits:
-            index = video_order.index(edit.clip_id)
-            if isinstance(edit, ManualClipSplit):
-                effect_rows.extend(
+            if isinstance(edit, ManualTrackManage):
+                effect_rows.append(
                     (
-                        (edit, "modifies", edit.clip_id, "direct"),
-                        (edit, "creates", edit.right_clip_id, "direct"),
+                        edit,
+                        "modifies",
+                        edit.track_key,
+                        edit.track_id,
+                        "direct",
                     )
                 )
-                video_order.insert(index + 1, edit.right_clip_id)
                 continue
-            effect_rows.append(
-                (
-                    edit,
-                    "deletes" if edit.kind == "remove" else "modifies",
-                    edit.clip_id,
-                    "direct",
-                )
-            )
-            if edit.kind == "remove":
-                video_order.pop(index)
-                displaced = video_order[index:]
-            elif edit.order_index != index:
-                moved = video_order.pop(index)
-                video_order.insert(edit.order_index, moved)
-                lower = min(index, edit.order_index)
-                upper = max(index, edit.order_index)
-                displaced = [
-                    clip_id
-                    for clip_id in video_order[lower : upper + 1]
-                    if clip_id != edit.clip_id
-                ]
-            else:
-                displaced = []
-            if getattr(edit, "ripple", False):
-                displaced = [
-                    clip_id
-                    for clip_id in video_order
-                    if clip_id != edit.clip_id
-                ]
-            for clip_id in displaced:
-                key = ("video", clip_id)
-                if (
-                    key in before_clips
-                    and key in after_clips
-                    and before_clips[key] != after_clips[key]
-                ):
+            if isinstance(edit, ManualClipLink):
+                for member in edit.members:
                     effect_rows.append(
                         (
                             edit,
                             "modifies",
-                            clip_id,
-                            "consequential",
+                            member.track_key,
+                            member.clip_id,
+                            "direct",
                         )
                     )
+                continue
+            target_key = (edit.track_key, edit.clip_id)
+            if target_key not in before_clips:
+                raise ValueError(
+                    "Manual trace target is absent from its exact track"
+                )
+            direct_rows: list[tuple[str, str, str]] = []
+            if isinstance(edit, ManualClipSplit):
+                direct_rows.extend((
+                    ("modifies", edit.track_key, edit.clip_id),
+                    ("creates", edit.track_key, edit.right_clip_id),
+                ))
+            else:
+                direct_rows.append((
+                    "deletes" if edit.kind == "remove" else "modifies",
+                    edit.track_key,
+                    edit.clip_id,
+                ))
+            for relation_type, track_key, clip_id in direct_rows:
+                effect_rows.append(
+                    (edit, relation_type, track_key, clip_id, "direct")
+                )
+                seen_effects.add(
+                    (edit.operation_id, track_key, clip_id)
+                )
+
+            target_before = before_clips[target_key]
+            original_group = target_before.get("link_group_id")
+            direct_right_group = (
+                after_clips.get(
+                    (edit.track_key, edit.right_clip_id),
+                    {},
+                ).get("link_group_id")
+                if isinstance(edit, ManualClipSplit)
+                else None
+            )
+            linked_scope = getattr(edit, "edit_scope", "") == "linked_group"
+            ripple = (
+                getattr(edit, "ripple", False)
+                or getattr(edit, "mode", "") == "ripple"
+            )
+            reorder = (
+                hasattr(edit, "order_index")
+                and before_clips[target_key].get("order_index")
+                != getattr(edit, "order_index", None)
+            )
+            for key in sorted(before_clips.keys() | after_clips.keys()):
+                if key == target_key:
+                    continue
+                old, new = before_clips.get(key), after_clips.get(key)
+                if old == new:
+                    continue
+                state = new or old or {}
+                linked_effect = linked_scope and (
+                    state.get("link_group_id") == original_group
+                    or (
+                        direct_right_group is not None
+                        and state.get("link_group_id") == direct_right_group
+                    )
+                )
+                ripple_effect = ripple and key[0] == edit.track_key
+                reorder_effect = reorder and key[0] == edit.track_key
+                if (
+                    not linked_effect
+                    and not ripple_effect
+                    and not reorder_effect
+                ):
+                    continue
+                identity = (edit.operation_id, key[0], key[1])
+                if identity in seen_effects:
+                    continue
+                relation_type = (
+                    "creates"
+                    if old is None
+                    else "deletes"
+                    if new is None
+                    else "modifies"
+                )
+                if (
+                    relation_type != "modifies"
+                    and not linked_effect
+                ):
+                    continue
+                effect_rows.append(
+                    (
+                        edit,
+                        relation_type,
+                        key[0],
+                        key[1],
+                        "consequential",
+                    )
+                )
+                seen_effects.add(identity)
 
         before_ref = SnapshotTraceReference.from_snapshot(before_snapshot)
         after_ref = SnapshotTraceReference.from_snapshot(after_snapshot)
@@ -355,6 +456,7 @@ class ManualTraceRecorder:
                     {
                         "proposal_id": proposal.proposal_id,
                         "operation_id": edit.operation_id,
+                        "track_key": track_key,
                         "clip_id": clip_id,
                         "effect_kind": effect_kind,
                     },
@@ -363,9 +465,21 @@ class ManualTraceRecorder:
                 relation_type=relation_type,
                 effect_kind=effect_kind,
                 entity=TraceEntityReference(
-                    entity_kind="clip",
+                    entity_kind=(
+                        "track"
+                        if isinstance(edit, ManualTrackManage)
+                        else "clip"
+                    ),
                     entity_id=clip_id,
-                    track_key=edit.track_key,
+                    track_key=track_key,
+                    track_id=next(
+                        (
+                            track.track_id
+                            for track in after_snapshot.tracks
+                            if track.track_key == track_key
+                        ),
+                        track_key,
+                    ),
                 ),
                 operation_id=edit.operation_id,
                 inherited_from_entity_id=(
@@ -375,7 +489,20 @@ class ManualTraceRecorder:
                         and relation_type == "creates"
                         and clip_id == edit.right_clip_id
                     )
-                    else None
+                    else next(
+                        (
+                            candidate_id
+                            for (candidate_track, candidate_id), candidate
+                            in before_clips.items()
+                            if relation_type == "creates"
+                            and candidate_track == track_key
+                            and (after_clips.get((track_key, clip_id)) or {})
+                            .get("source", {})
+                            .get("source_id")
+                            == candidate.get("source", {}).get("source_id")
+                        ),
+                        None,
+                    )
                 ),
                 before_snapshot=before_ref,
                 after_snapshot=after_ref,
@@ -383,6 +510,7 @@ class ManualTraceRecorder:
             for relation_index, (
                 edit,
                 relation_type,
+                track_key,
                 clip_id,
                 effect_kind,
             ) in enumerate(effect_rows, start=1)

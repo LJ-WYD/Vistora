@@ -349,13 +349,15 @@ class ManualClipUpdate(ContractModel):
 
     operation_id: StableId
     kind: Literal["update"] = "update"
-    track_key: Literal["video"] = "video"
+    track_key: str = Field("video", min_length=1)
+    track_id: StableId | None = None
     clip_id: str = Field(min_length=1)
     trim_in_seconds: float = Field(ge=0, allow_inf_nan=False)
     trim_out_seconds: float = Field(gt=0, allow_inf_nan=False)
     timeline_start_seconds: float = Field(ge=0, allow_inf_nan=False)
     order_index: int = Field(ge=0)
     ripple: bool = False
+    edit_scope: Literal["current_clip", "linked_group"] = "current_clip"
 
     @model_validator(mode="after")
     def trim_range_is_valid(self) -> ManualClipUpdate:
@@ -369,9 +371,11 @@ class ManualClipRemove(ContractModel):
 
     operation_id: StableId
     kind: Literal["remove"] = "remove"
-    track_key: Literal["video"] = "video"
+    track_key: str = Field("video", min_length=1)
+    track_id: StableId | None = None
     clip_id: str = Field(min_length=1)
     mode: Literal["lift", "ripple"] = "lift"
+    edit_scope: Literal["current_clip", "linked_group"] = "current_clip"
 
 
 class ManualClipSplit(ContractModel):
@@ -379,14 +383,78 @@ class ManualClipSplit(ContractModel):
 
     operation_id: StableId
     kind: Literal["split"] = "split"
-    track_key: Literal["video"] = "video"
+    track_key: str = Field("video", min_length=1)
+    track_id: StableId | None = None
     clip_id: str = Field(min_length=1)
     split_at_seconds: float = Field(gt=0, allow_inf_nan=False)
     right_clip_id: StableId
+    edit_scope: Literal["current_clip", "linked_group"] = "current_clip"
+
+
+class ManualClipReference(ContractModel):
+    track_key: str = Field(min_length=1)
+    track_id: StableId
+    clip_id: str = Field(min_length=1)
+
+
+class ManualClipLink(ContractModel):
+    """User-authored explicit link/unlink operation; never inferred."""
+
+    operation_id: StableId
+    kind: Literal["link"] = "link"
+    action: Literal["link", "unlink"]
+    members: tuple[ManualClipReference, ...] = Field(min_length=1)
+    link_group_id: StableId | None = None
+
+    @model_validator(mode="after")
+    def link_is_explicit(self) -> "ManualClipLink":
+        if self.action == "link" and (
+            len(self.members) < 2 or self.link_group_id is None
+        ):
+            raise ValueError("Link requires two members and link_group_id")
+        if self.action == "unlink" and self.link_group_id is not None:
+            raise ValueError("Unlink does not accept link_group_id")
+        return self
+
+
+class ManualTrackManage(ContractModel):
+    """Small manual track-state/reorder proposal."""
+
+    operation_id: StableId
+    kind: Literal["manage_track"] = "manage_track"
+    track_key: str = Field(min_length=1)
+    track_id: StableId
+    action: Literal["update", "reorder"]
+    role: str | None = Field(default=None, min_length=1, max_length=80)
+    order: int | None = Field(default=None, ge=0)
+    enabled: bool | None = None
+    muted: bool | None = None
+    locked: bool | None = None
+
+    @model_validator(mode="after")
+    def management_fields(self) -> "ManualTrackManage":
+        if self.action == "reorder" and self.order is None:
+            raise ValueError("Track reorder requires order")
+        if self.action == "update" and all(
+            value is None
+            for value in (
+                self.role,
+                self.order,
+                self.enabled,
+                self.muted,
+                self.locked,
+            )
+        ):
+            raise ValueError("Track update requires a property")
+        return self
 
 
 ManualEditOperation = Annotated[
-    ManualClipUpdate | ManualClipRemove | ManualClipSplit,
+    ManualClipUpdate
+    | ManualClipRemove
+    | ManualClipSplit
+    | ManualClipLink
+    | ManualTrackManage,
     Field(discriminator="kind"),
 ]
 
@@ -410,7 +478,14 @@ class ManualEditProposal(ContractModel):
         operation_ids = [edit.operation_id for edit in self.edits]
         if len(operation_ids) != len(set(operation_ids)):
             raise ValueError("Manual edit operation IDs must be unique")
-        clip_targets = [(edit.track_key, edit.clip_id) for edit in self.edits]
+        clip_targets = [
+            (edit.track_key, edit.clip_id)
+            for edit in self.edits
+            if isinstance(
+                edit,
+                (ManualClipUpdate, ManualClipRemove, ManualClipSplit),
+            )
+        ]
         if len(clip_targets) != len(set(clip_targets)):
             raise ValueError(
                 "A manual proposal may edit each clip at most once"
@@ -488,7 +563,9 @@ class ManualEditChange(ContractModel):
     """Reviewable before/after diff for one manual edit operation."""
 
     operation_id: StableId
-    track_key: Literal["video"]
+    target_kind: Literal["clip", "track"] = "clip"
+    track_key: str = Field(min_length=1)
+    track_id: StableId | None = None
     clip_id: str = Field(min_length=1)
     action: Literal["update", "remove", "create"]
     effect_kind: Literal["direct", "consequential"] = "direct"
@@ -524,10 +601,6 @@ class ManualEditChange(ContractModel):
         if not valid:
             raise ValueError(
                 "Manual change before/after values do not match its action"
-            )
-        if self.effect_kind == "consequential" and self.action != "update":
-            raise ValueError(
-                "Consequential manual changes may update clips only"
             )
         return self
 
@@ -567,9 +640,13 @@ class TimelineProjectDocument(ContractModel):
                 "migration_source",
             }
             legacy_keys = {"width", "height", "fps", "tracks"}
-            if wrapper_keys.intersection(value):
+            if {
+                "project_id",
+                "timeline",
+                "migration_source",
+            }.intersection(value):
                 return value
-            if not set(value).issubset(legacy_keys):
+            if not set(value).issubset(legacy_keys | {"schema_version"}):
                 return value
             legacy_data = value
         else:

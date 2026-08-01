@@ -14,10 +14,13 @@ from core.timeline import ClipConfig
 from material_production import MaterialCatalogStore
 from timeline_edit import (
     InsertOverwriteClipInput,
+    ManageTrackInput,
     MoveClipInput,
     RemoveClipInput,
     SetClipPropertiesInput,
+    SetClipLinkInput,
     SplitClipInput,
+    TimelineEditEngine,
     TimelineEditTransaction,
     TrimClipInput,
 )
@@ -85,10 +88,11 @@ class VideoSplitClipSkill(_TransactionalEditSkill):
     def run(self, params: SplitClipInput) -> dict[str, Any]:
         return TimelineEditTransaction.apply(
             lambda engine: engine.split(
-                params.track_key,
+                params.track_reference,
                 params.clip_id,
                 params.split_at_seconds,
                 right_clip_id=params.right_clip_id,
+                edit_scope=params.edit_scope,
             ),
             id_factory=self.id_factory,
         )
@@ -105,11 +109,12 @@ class VideoTrimClipSkill(_TransactionalEditSkill):
     def run(self, params: TrimClipInput) -> dict[str, Any]:
         return TimelineEditTransaction.apply(
             lambda engine: engine.trim(
-                params.track_key,
+                params.track_reference,
                 params.clip_id,
                 params.trim_in,
                 params.trim_out,
                 ripple=params.ripple,
+                edit_scope=params.edit_scope,
             ),
             id_factory=self.id_factory,
         )
@@ -126,10 +131,11 @@ class VideoMoveClipSkill(_TransactionalEditSkill):
     def run(self, params: MoveClipInput) -> dict[str, Any]:
         return TimelineEditTransaction.apply(
             lambda engine: engine.move(
-                params.track_key,
+                params.track_reference,
                 params.clip_id,
                 params.timeline_start,
                 ripple=params.ripple,
+                edit_scope=params.edit_scope,
             ),
             id_factory=self.id_factory,
         )
@@ -146,9 +152,10 @@ class VideoRemoveClipSkill(_TransactionalEditSkill):
     def run(self, params: RemoveClipInput) -> dict[str, Any]:
         return TimelineEditTransaction.apply(
             lambda engine: engine.remove(
-                params.track_key,
+                params.track_reference,
                 params.clip_id,
                 ripple=params.mode == "ripple",
+                edit_scope=params.edit_scope,
             ),
             id_factory=self.id_factory,
         )
@@ -164,9 +171,13 @@ class VideoInsertOverwriteClipSkill(_TransactionalEditSkill):
 
     def run(self, params: InsertOverwriteClipInput) -> dict[str, Any]:
         resolved = _resolve_source(params.source_path)
+        current = timeline_manager.TimelineManager.get_current_timeline()
+        track_kind = TimelineEditEngine(current).track_kind(
+            params.track_reference
+        )
         source_duration, width, height = _media_facts(
             resolved,
-            params.track_key,
+            track_kind,
         )
         trim_out = min(
             source_duration,
@@ -187,19 +198,26 @@ class VideoInsertOverwriteClipSkill(_TransactionalEditSkill):
             keep_audio=params.keep_audio,
             rotate=params.rotate,
             reverse=False,
+            link_group_id=params.link_group_id,
         )
         def apply(engine):
-            video_track = engine.timeline.tracks.get("video")
             if (
-                params.track_key == "video"
-                and (video_track is None or not video_track.clips)
+                track_kind == "video"
+                and not any(
+                    track.clips
+                    for track in engine.timeline.tracks.values()
+                    if track.kind == "video"
+                )
                 and width is not None
                 and height is not None
             ):
                 engine.timeline.width = width
                 engine.timeline.height = height
             return engine.insert_overwrite(
-                params.track_key, clip, mode=params.mode
+                params.track_reference,
+                clip,
+                mode=params.mode,
+                edit_scope=params.edit_scope,
             )
 
         return TimelineEditTransaction.apply(
@@ -219,13 +237,60 @@ class VideoSetClipPropertiesSkill(_TransactionalEditSkill):
     def run(self, params: SetClipPropertiesInput) -> dict[str, Any]:
         return TimelineEditTransaction.apply(
             lambda engine: engine.set_properties(
-                params.track_key,
+                params.track_reference,
                 params.clip_id,
                 speed_factor=params.speed_factor,
                 volume=params.volume,
                 keep_audio=params.keep_audio,
                 mute=params.mute,
                 rotate=params.rotate,
+                edit_scope=params.edit_scope,
+            ),
+            id_factory=self.id_factory,
+        )
+
+
+class TimelineManageTrackSkill(_TransactionalEditSkill):
+    name = "TimelineManageTrackSkill"
+    description = (
+        "Add, update, reorder, or safely remove an empty stable-ID video or "
+        "audio track. Locked tracks must be explicitly unlocked before removal."
+    )
+    input_model = ManageTrackInput
+
+    def run(self, params: ManageTrackInput) -> dict[str, Any]:
+        return TimelineEditTransaction.apply(
+            lambda engine: engine.manage_track(
+                action=params.action,
+                track_id=params.track_id,
+                kind=params.kind,
+                role=params.role,
+                order=params.order,
+                enabled=params.enabled,
+                muted=params.muted,
+                locked=params.locked,
+            ),
+            id_factory=self.id_factory,
+        )
+
+
+class TimelineSetClipLinkSkill(_TransactionalEditSkill):
+    name = "TimelineSetClipLinkSkill"
+    description = (
+        "Explicitly link or unlink exact clip IDs across stable tracks; "
+        "filesystem paths and timing proximity are never used for inference."
+    )
+    input_model = SetClipLinkInput
+
+    def run(self, params: SetClipLinkInput) -> dict[str, Any]:
+        return TimelineEditTransaction.apply(
+            lambda engine: engine.set_clip_link(
+                action=params.action,
+                members=(
+                    (member.track_id, member.clip_id)
+                    for member in params.members
+                ),
+                link_group_id=params.link_group_id,
             ),
             id_factory=self.id_factory,
         )

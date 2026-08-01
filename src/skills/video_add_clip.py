@@ -28,6 +28,14 @@ class VideoAddClipSkill(BaseSkill):
     input_model = VideoAddClipInput
 
     def run(self, params: VideoAddClipInput) -> Dict[str, Any]:
+        timeline = TimelineManager.get_current_timeline()
+        video_track = timeline.tracks.get("video")
+        if video_track is None:
+            raise ValueError(
+                "Legacy add requires the compatibility video track"
+            )
+        if video_track.locked:
+            raise ValueError("The compatibility video track is locked")
         source_path = params.source_path
         if source_path.startswith("material://"):
             resolved = MaterialCatalogStore.for_project_file(
@@ -77,6 +85,12 @@ class VideoAddClipSkill(BaseSkill):
 
         timeline = TimelineManager.get_current_timeline()
         video_track = timeline.tracks.get("video")
+        if video_track is None:
+            raise ValueError(
+                "Legacy add requires the compatibility video track"
+            )
+        if video_track.locked:
+            raise ValueError("The compatibility video track is locked")
         
         # 动态计算追加在时间轴的哪个时间点
         timeline_start = 0.0

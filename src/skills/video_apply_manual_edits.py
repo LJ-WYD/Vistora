@@ -8,15 +8,17 @@ from pydantic import BaseModel, ConfigDict
 
 from contracts import (
     ManualClipRemove,
+    ManualClipLink,
     ManualClipSplit,
     ManualClipUpdate,
     ManualEditConfirmationRecord,
     ManualEditProposal,
+    ManualTrackManage,
 )
 from core import timeline_manager
 from core.timeline import TimelineConfig
 from timeline_query import TimelineSnapshotService
-from timeline_edit import TimelineEditTransaction
+from timeline_edit import TimelineEditEngine, TimelineEditTransaction
 from traceability.recording import ManualTraceRecorder
 
 from .base import BaseSkill
@@ -168,9 +170,129 @@ class VideoApplyManualEditsSkill(BaseSkill):
                 "Manual edit proposal is stale: timeline content changed"
             )
 
-        updated = current.model_copy(deep=True)
+        engine = TimelineEditEngine(current)
         for edit in proposal.edits:
-            _apply_edit(updated, edit)
+            if isinstance(edit, ManualTrackManage):
+                _, track = engine._resolve_track(
+                    edit.track_id,
+                    allow_locked=True,
+                )
+                if any(
+                    value is not None
+                    and value != getattr(track, field)
+                    for field, value in (
+                        ("role", edit.role),
+                        ("enabled", edit.enabled),
+                        ("muted", edit.muted),
+                        ("locked", edit.locked),
+                    )
+                ):
+                    engine.manage_track(
+                        action="update",
+                        track_id=edit.track_id,
+                        kind=None,
+                        role=edit.role,
+                        order=None,
+                        enabled=edit.enabled,
+                        muted=edit.muted,
+                        locked=edit.locked,
+                    )
+                if edit.order is not None and edit.order != track.order:
+                    engine.manage_track(
+                        action="reorder",
+                        track_id=edit.track_id,
+                        kind=None,
+                        role=None,
+                        order=edit.order,
+                        enabled=None,
+                        muted=None,
+                        locked=None,
+                    )
+                continue
+            if isinstance(edit, ManualClipLink):
+                engine.set_clip_link(
+                    action=edit.action,
+                    members=(
+                        (member.track_id, member.clip_id)
+                        for member in edit.members
+                    ),
+                    link_group_id=edit.link_group_id,
+                )
+                continue
+            track_reference = edit.track_id or edit.track_key
+            if isinstance(edit, ManualClipRemove):
+                engine.remove(
+                    track_reference,
+                    edit.clip_id,
+                    ripple=edit.mode == "ripple",
+                    edit_scope=edit.edit_scope,
+                )
+            elif isinstance(edit, ManualClipSplit):
+                engine.split(
+                    track_reference,
+                    edit.clip_id,
+                    edit.split_at_seconds,
+                    right_clip_id=edit.right_clip_id,
+                    edit_scope=edit.edit_scope,
+                )
+            else:
+                _, _, target = engine._clip(
+                    track_reference,
+                    edit.clip_id,
+                )
+                changed = False
+                if (
+                    abs(target.trim_in - edit.trim_in_seconds) > 1e-6
+                    or abs(target.trim_out - edit.trim_out_seconds) > 1e-6
+                ):
+                    engine.trim(
+                        track_reference,
+                        edit.clip_id,
+                        edit.trim_in_seconds,
+                        edit.trim_out_seconds,
+                        ripple=edit.ripple,
+                        edit_scope=edit.edit_scope,
+                    )
+                    changed = True
+                _, _, target = engine._clip(
+                    track_reference,
+                    edit.clip_id,
+                )
+                if (
+                    abs(
+                        target.timeline_start
+                        - edit.timeline_start_seconds
+                    )
+                    > 1e-6
+                ):
+                    engine.move(
+                        track_reference,
+                        edit.clip_id,
+                        edit.timeline_start_seconds,
+                        ripple=False,
+                        edit_scope=edit.edit_scope,
+                    )
+                    changed = True
+                if not changed:
+                    raise ValueError("Manual update changes no fields")
+                _, track = engine._resolve_track(
+                    track_reference,
+                    allow_locked=True,
+                )
+                actual_index = next(
+                    index
+                    for index, clip in enumerate(track.clips)
+                    if clip.id == edit.clip_id
+                )
+                if edit.order_index >= len(track.clips):
+                    raise ValueError(
+                        f"Manual clip order {edit.order_index} is outside "
+                        f"0..{len(track.clips) - 1}"
+                    )
+                if actual_index != edit.order_index:
+                    moved = track.clips.pop(actual_index)
+                    track.clips.insert(edit.order_index, moved)
+        updated = engine.timeline
 
         previous_content = TimelineEditTransaction.current_bytes()
         TimelineEditTransaction.replace_config(updated)

@@ -97,6 +97,9 @@ def seed_fixture(workspace: Path) -> tuple[
         tracks={
             "video": TrackConfig(
                 id="video",
+                kind="video",
+                role="primary",
+                order=0,
                 clips=[
                     ClipConfig(
                         id="clip_workflow_visual",
@@ -105,10 +108,49 @@ def seed_fixture(workspace: Path) -> tuple[
                         trim_out=1.5,
                         timeline_start=0.0,
                         keep_audio=False,
+                        link_group_id="link_visual_primary",
                     )
                 ],
             ),
-            "audio": TrackConfig(id="audio"),
+            "overlay": TrackConfig(
+                id="track_overlay_visual",
+                kind="video",
+                role="overlay",
+                order=1,
+                clips=[
+                    ClipConfig(
+                        id="clip_overlay_visual",
+                        source=str(source),
+                        trim_in=0.0,
+                        trim_out=1.0,
+                        timeline_start=0.25,
+                        keep_audio=False,
+                    )
+                ],
+            ),
+            "audio": TrackConfig(
+                id="audio",
+                kind="audio",
+                role="dialogue",
+                order=2,
+                clips=[
+                    ClipConfig(
+                        id="clip_dialogue_visual",
+                        source=str(source),
+                        trim_in=0.0,
+                        trim_out=1.5,
+                        timeline_start=0.0,
+                        link_group_id="link_visual_primary",
+                    )
+                ],
+            ),
+            "music": TrackConfig(
+                id="track_music_visual",
+                kind="audio",
+                role="music",
+                order=3,
+                muted=True,
+            ),
         },
     )
     project_file.write_text(timeline.model_dump_json(indent=2))

@@ -3,6 +3,9 @@ from tests.reference_workflow import (
     REFERENCE_TOOL_ORDER,
     run_reference_workflow,
 )
+from tests.multitrack_reference_workflow import (
+    run_multitrack_reference_workflow,
+)
 from contracts import PlanReference
 
 
@@ -150,3 +153,20 @@ def test_reference_main_workflow_is_traceable_and_repeatable() -> None:
     assert generated[0].origin_kind == "generated_media"
     assert first.traced_clips[0]["present"] is False
     assert first.traced_clips[0]["provenance"]["mapping_status"] == "deleted"
+
+
+def test_multitrack_reference_is_confirmed_rendered_and_repeatable() -> None:
+    first = run_multitrack_reference_workflow()
+    second = run_multitrack_reference_workflow()
+    assert first == second
+    assert first["execution_status"] == "succeeded"
+    assert first["step_count"] == 5
+    assert first["trace_count"] == 5
+    assert first["current_track_count"] == 4
+    assert first["current_video_clip_count"] >= 2
+    assert first["current_audio_clip_count"] >= 2
+    assert first["rollback_status"] == "succeeded"
+    streams = first["output"]["streams"]
+    assert any(stream["codec_type"] == "video" for stream in streams)
+    assert any(stream["codec_type"] == "audio" for stream in streams)
+    assert first["output"]["format"]["duration"]

@@ -54,16 +54,9 @@ def _display_name(source: str) -> str:
     return normalized.rsplit("/", 1)[-1] or source
 
 
-def _track_sort_key(item: tuple[str, Any]) -> tuple[int, str]:
-    key = item[0]
-    priority = {"video": 0, "audio": 1}.get(key, 2)
-    return priority, key
-
-
-def _track_kind(track_key: str) -> str:
-    if track_key in {"video", "audio"}:
-        return track_key
-    return "other"
+def _track_sort_key(item: tuple[str, Any]) -> tuple[int, str, str]:
+    key, track = item
+    return track.order, track.id, key
 
 
 def _finite(value: float, field: str, clip_id: str) -> float:
@@ -134,6 +127,7 @@ def _clip_snapshot(clip: ClipConfig, order_index: int) -> ClipSnapshot:
         keep_audio=clip.keep_audio,
         reverse=clip.reverse,
         rotate_degrees=clip.rotate,
+        link_group_id=clip.link_group_id,
     )
 
 
@@ -195,8 +189,12 @@ class TimelineSnapshotService:
                     TrackSnapshot(
                         track_key=normalized_key,
                         track_id=track_id,
-                        kind=_track_kind(normalized_key),
+                        kind=track.kind,
+                        role=track.role,
                         order_index=track_index,
+                        enabled=track.enabled,
+                        muted=track.muted,
+                        locked=track.locked,
                         clips=clips,
                         clip_count=len(clips),
                         duration_seconds=max(0.0, duration),

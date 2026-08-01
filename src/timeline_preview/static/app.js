@@ -30,10 +30,19 @@ const ui = {
   editOrder: document.querySelector("#edit-order"),
   editSplitAt: document.querySelector("#edit-split-at"),
   editRemoveMode: document.querySelector("#edit-remove-mode"),
+  editScope: document.querySelector("#edit-scope"),
+  editLinkTarget: document.querySelector("#edit-link-target"),
+  editTrackOrder: document.querySelector("#edit-track-order"),
+  editTrackEnabled: document.querySelector("#edit-track-enabled"),
+  editTrackMuted: document.querySelector("#edit-track-muted"),
+  editTrackLocked: document.querySelector("#edit-track-locked"),
   editRipple: document.querySelector("#edit-ripple"),
   editFormMessage: document.querySelector("#edit-form-message"),
   stageRemove: document.querySelector("#stage-remove"),
   stageSplit: document.querySelector("#stage-split"),
+  stageLink: document.querySelector("#stage-link"),
+  stageUnlink: document.querySelector("#stage-unlink"),
+  stageTrack: document.querySelector("#stage-track"),
   draftPanel: document.querySelector("#draft-panel"),
   draftState: document.querySelector("#draft-state"),
   draftChanges: document.querySelector("#draft-changes"),
@@ -1146,8 +1155,8 @@ function existingDraftForClip(clipId) {
 function showManualEditor(track, clip) {
   const applyEnabled = state.capabilities.manual_edit_apply === true;
   ui.manualEditDisabled.hidden = applyEnabled;
-  ui.manualEditor.hidden = !applyEnabled || track.kind !== "video";
-  if (!applyEnabled || track.kind !== "video") {
+  ui.manualEditor.hidden = !applyEnabled;
+  if (!applyEnabled) {
     return;
   }
   const existing = existingDraftForClip(clip.clip_id);
@@ -1166,7 +1175,7 @@ function showManualEditor(track, clip) {
   );
   ui.editOrder.value = String(existing?.order_index ?? clip.order_index);
   ui.editOrder.max = String(
-    Math.max(0, state.snapshot.video_clip_count - 1),
+    Math.max(0, track.clip_count - 1),
   );
   ui.editSplitAt.value = String(
     existing?.kind === "split"
@@ -1180,9 +1189,42 @@ function showManualEditor(track, clip) {
     existing?.kind === "remove" ? existing.mode : "lift";
   ui.editRipple.checked =
     existing?.kind === "update" ? existing.ripple === true : false;
+  ui.editScope.value = existing?.edit_scope || "current_clip";
+  ui.editLinkTarget.replaceChildren();
+  for (const candidateTrack of state.snapshot.tracks) {
+    for (const candidateClip of candidateTrack.clips) {
+      if (candidateClip.clip_id === clip.clip_id) {
+        continue;
+      }
+      const option = document.createElement("option");
+      option.value = JSON.stringify({
+        track_key: candidateTrack.track_key,
+        track_id: candidateTrack.track_id,
+        clip_id: candidateClip.clip_id,
+      });
+      option.textContent =
+        `${candidateTrack.track_id} · ${candidateClip.clip_id}`;
+      ui.editLinkTarget.append(option);
+    }
+  }
+  ui.stageLink.disabled = ui.editLinkTarget.options.length === 0;
+  ui.stageUnlink.disabled = !clip.link_group_id;
+  ui.editTrackOrder.value = String(track.order_index);
+  ui.editTrackEnabled.checked = track.enabled;
+  ui.editTrackMuted.checked = track.muted;
+  ui.editTrackLocked.checked = track.locked;
+  ui.clipEditForm.querySelector('button[type="submit"]').disabled =
+    track.locked;
+  ui.stageRemove.disabled = track.locked;
+  ui.stageSplit.disabled = track.locked;
+  ui.stageLink.disabled =
+    track.locked || ui.editLinkTarget.options.length === 0;
+  ui.stageUnlink.disabled = track.locked || !clip.link_group_id;
   ui.editFormMessage.classList.remove("error");
   ui.editFormMessage.textContent =
-    "Changes remain detached until you review and confirm them.";
+    track.locked
+      ? "This track is locked. Only a confirmed unlock proposal may edit it."
+      : "Changes remain detached until you review and confirm them.";
 }
 
 function proposalPayload() {
@@ -1326,9 +1368,21 @@ async function validateDraft() {
 }
 
 function stageEdit(edit) {
+  const identity = (value) => {
+    if (value.kind === "link") {
+      return `link:${value.members
+        .map((member) => `${member.track_id}/${member.clip_id}`)
+        .sort()
+        .join("|")}`;
+    }
+    if (value.kind === "manage_track") {
+      return `track:${value.track_id}`;
+    }
+    return `clip:${value.track_id || value.track_key}/${value.clip_id}`;
+  };
   state.draftHistory.push(cloneEdits(state.draftEdits));
   state.draftEdits = state.draftEdits.filter(
-    (current) => current.clip_id !== edit.clip_id,
+    (current) => identity(current) !== identity(edit),
   );
   state.draftEdits.push(edit);
   validateDraft();
@@ -1421,7 +1475,11 @@ function showDetails(track, clip) {
   const analysis = analysisFor(track, clip);
   ui.clipDetails.replaceChildren(
     detailRow("Clip ID", clip.clip_id),
-    detailRow("Track", `${track.track_key} · ${track.kind}`),
+    detailRow(
+      "Track",
+      `${track.track_id} · ${track.kind} · ${track.role}`,
+    ),
+    detailRow("Link group", clip.link_group_id || "Not linked"),
     detailRow(
       "Media type",
       availability?.content_type || `${track.kind} · unavailable`,
@@ -1688,7 +1746,7 @@ function renderTimeline() {
     const copy = document.createElement("div");
     copy.className = "track-label-copy";
     copy.append(
-      textElement("strong", "", track.track_key),
+      textElement("strong", "", track.track_id),
       textElement(
         "span",
         "",
@@ -1696,7 +1754,14 @@ function renderTimeline() {
           formatSeconds(track.duration_seconds),
       ),
     );
-    label.append(copy, textElement("span", "track-kind", track.kind));
+    const flags = [
+      track.kind,
+      track.role,
+      !track.enabled ? "disabled" : "",
+      track.muted ? "muted" : "",
+      track.locked ? "locked" : "",
+    ].filter(Boolean);
+    label.append(copy, textElement("span", "track-kind", flags.join(" · ")));
     ui.trackLabels.append(label);
 
     const lane = document.createElement("div");
@@ -1704,6 +1769,10 @@ function renderTimeline() {
     lane.style.width = `${width}px`;
     lane.style.setProperty("--grid-size", `${state.pixelsPerSecond}px`);
     lane.dataset.trackKey = track.track_key;
+    lane.dataset.trackId = track.track_id;
+    if (!track.enabled) {
+      lane.classList.add("disabled");
+    }
     if (track.kind === "other") {
       lane.classList.add("unsupported");
       lane.append(
@@ -1725,6 +1794,11 @@ function renderTimeline() {
         `${Math.max(28, clip.effective_duration_seconds * state.pixelsPerSecond)}px`;
       block.dataset.clipId = clip.clip_id;
       block.dataset.trackKey = track.track_key;
+      block.dataset.trackId = track.track_id;
+      if (clip.link_group_id) {
+        block.dataset.linkGroupId = clip.link_group_id;
+        block.classList.add("linked");
+      }
       block.title =
         `${clip.clip_id}\n${clipLabel(clip)}\n${clip.source.value}`;
       block.setAttribute(
@@ -1992,7 +2066,7 @@ function readFiniteInput(input, label) {
 
 ui.clipEditForm.addEventListener("submit", (event) => {
   event.preventDefault();
-  if (!state.selected || state.selected.track.kind !== "video") {
+  if (!state.selected || state.selected.track.locked) {
     return;
   }
   try {
@@ -2012,11 +2086,11 @@ ui.clipEditForm.addEventListener("submit", (event) => {
     if (
       !Number.isInteger(orderIndex) ||
       orderIndex < 0 ||
-      orderIndex >= state.snapshot.video_clip_count
+      orderIndex >= state.selected.track.clip_count
     ) {
       throw new Error(
         `Clip order must be an integer from 0 to ` +
-          `${Math.max(0, state.snapshot.video_clip_count - 1)}.`,
+          `${Math.max(0, state.selected.track.clip_count - 1)}.`,
       );
     }
     const existing = existingDraftForClip(state.selected.clip.clip_id);
@@ -2027,13 +2101,15 @@ ui.clipEditForm.addEventListener("submit", (event) => {
           ? existing.operation_id
           : newStableId("manual_update"),
       kind: "update",
-      track_key: "video",
+      track_key: state.selected.track.track_key,
+      track_id: state.selected.track.track_id,
       clip_id: state.selected.clip.clip_id,
       trim_in_seconds: trimIn,
       trim_out_seconds: trimOut,
       timeline_start_seconds: timelineStart,
       order_index: orderIndex,
       ripple: ui.editRipple.checked,
+      edit_scope: ui.editScope.value,
     });
     ui.editFormMessage.classList.remove("error");
     ui.editFormMessage.textContent =
@@ -2046,7 +2122,7 @@ ui.clipEditForm.addEventListener("submit", (event) => {
 });
 
 ui.stageRemove.addEventListener("click", () => {
-  if (!state.selected || state.selected.track.kind !== "video") {
+  if (!state.selected || state.selected.track.locked) {
     return;
   }
   const existing = existingDraftForClip(state.selected.clip.clip_id);
@@ -2057,15 +2133,17 @@ ui.stageRemove.addEventListener("click", () => {
         ? existing.operation_id
         : newStableId("manual_remove"),
     kind: "remove",
-    track_key: "video",
+    track_key: state.selected.track.track_key,
+    track_id: state.selected.track.track_id,
     clip_id: state.selected.clip.clip_id,
     mode: ui.editRemoveMode.value,
+    edit_scope: ui.editScope.value,
   });
   ui.manualEditor.hidden = true;
 });
 
 ui.stageSplit.addEventListener("click", () => {
-  if (!state.selected || state.selected.track.kind !== "video") {
+  if (!state.selected || state.selected.track.locked) {
     return;
   }
   try {
@@ -2085,17 +2163,112 @@ ui.stageSplit.addEventListener("click", () => {
           ? existing.operation_id
           : newStableId("manual_split"),
       kind: "split",
-      track_key: "video",
+      track_key: state.selected.track.track_key,
+      track_id: state.selected.track.track_id,
       clip_id: clip.clip_id,
       split_at_seconds: splitAt,
       right_clip_id:
         existing?.kind === "split"
           ? existing.right_clip_id
           : newStableId("clip"),
+      edit_scope: ui.editScope.value,
     });
     ui.editFormMessage.classList.remove("error");
     ui.editFormMessage.textContent =
       "Split staged locally. Review both resulting clip changes below.";
+  } catch (error) {
+    ui.editFormMessage.classList.add("error");
+    ui.editFormMessage.textContent =
+      error instanceof Error ? error.message : String(error);
+  }
+});
+
+ui.stageLink.addEventListener("click", () => {
+  if (!state.selected || !ui.editLinkTarget.value) {
+    return;
+  }
+  const target = JSON.parse(ui.editLinkTarget.value);
+  const selected = state.selected;
+  stageEdit({
+    schema_version: "1.0.0",
+    operation_id: newStableId("manual_link"),
+    kind: "link",
+    action: "link",
+    members: [
+      {
+        track_key: selected.track.track_key,
+        track_id: selected.track.track_id,
+        clip_id: selected.clip.clip_id,
+      },
+      target,
+    ],
+    link_group_id: newStableId("link"),
+  });
+  ui.editFormMessage.classList.remove("error");
+  ui.editFormMessage.textContent =
+    "Explicit clip link staged locally for review.";
+});
+
+ui.stageUnlink.addEventListener("click", () => {
+  if (!state.selected || !state.selected.clip.link_group_id) {
+    return;
+  }
+  const members = [];
+  for (const track of state.snapshot.tracks) {
+    for (const clip of track.clips) {
+      if (clip.link_group_id === state.selected.clip.link_group_id) {
+        members.push({
+          track_key: track.track_key,
+          track_id: track.track_id,
+          clip_id: clip.clip_id,
+        });
+      }
+    }
+  }
+  stageEdit({
+    schema_version: "1.0.0",
+    operation_id: newStableId("manual_unlink"),
+    kind: "link",
+    action: "unlink",
+    members,
+  });
+  ui.editFormMessage.classList.remove("error");
+  ui.editFormMessage.textContent =
+    "Explicit linked group unlink staged locally for review.";
+});
+
+ui.stageTrack.addEventListener("click", () => {
+  if (!state.selected) {
+    return;
+  }
+  try {
+    const order = readFiniteInput(ui.editTrackOrder, "Track order");
+    if (
+      !Number.isInteger(order) ||
+      order < 0 ||
+      order >= state.snapshot.track_count
+    ) {
+      throw new Error(
+        `Track order must be an integer from 0 to ` +
+          `${Math.max(0, state.snapshot.track_count - 1)}.`,
+      );
+    }
+    const track = state.selected.track;
+    stageEdit({
+      schema_version: "1.0.0",
+      operation_id: newStableId("manual_track"),
+      kind: "manage_track",
+      track_key: track.track_key,
+      track_id: track.track_id,
+      action: "update",
+      order,
+      enabled: ui.editTrackEnabled.checked,
+      muted: ui.editTrackMuted.checked,
+      locked: ui.editTrackLocked.checked,
+    });
+    ui.editFormMessage.classList.remove("error");
+    ui.editFormMessage.textContent =
+      "Track settings staged locally. No write occurs before confirmation.";
   } catch (error) {
     ui.editFormMessage.classList.add("error");
     ui.editFormMessage.textContent =

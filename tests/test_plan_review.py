@@ -199,6 +199,61 @@ def _server(application: PreviewApplication):
         thread.join(timeout=2)
 
 
+def _multitrack_snapshot(*, locked_audio: bool = False):
+    return TimelineSnapshotService.snapshot(
+        TimelineProjectDocument(
+            project_id="project_multitrack_review",
+            revision=7,
+            timeline=TimelineConfig(
+                width=320,
+                height=180,
+                fps=24,
+                tracks={
+                    "v-main": TrackConfig(
+                        id="track_video_main",
+                        kind="video",
+                        role="primary",
+                        order=0,
+                        clips=[
+                            ClipConfig(
+                                id="clip_video_linked",
+                                source="material://source_1111111111111111",
+                                trim_in=0,
+                                trim_out=4,
+                                timeline_start=0,
+                                link_group_id="link_scene_one",
+                            )
+                        ],
+                    ),
+                    "v-overlay": TrackConfig(
+                        id="track_video_overlay",
+                        kind="video",
+                        role="overlay",
+                        order=1,
+                    ),
+                    "a-dialogue": TrackConfig(
+                        id="track_audio_dialogue",
+                        kind="audio",
+                        role="dialogue",
+                        order=2,
+                        locked=locked_audio,
+                        clips=[
+                            ClipConfig(
+                                id="clip_audio_linked",
+                                source="material://source_2222222222222222",
+                                trim_in=0,
+                                trim_out=4,
+                                timeline_start=0,
+                                link_group_id="link_scene_one",
+                            )
+                        ],
+                    ),
+                },
+            ),
+        )
+    )
+
+
 def test_plan_review_contracts_round_trip_and_digests_are_stable() -> None:
     snapshot = _snapshot()
     request = _request(snapshot)
@@ -208,6 +263,73 @@ def test_plan_review_contracts_round_trip_and_digests_are_stable() -> None:
 
     assert round_tripped == request
     assert round_tripped.digest() == request.digest()
+
+
+def test_multitrack_linked_split_preview_is_detached_and_consequential() -> None:
+    snapshot = _multitrack_snapshot()
+    before = snapshot.model_dump_json()
+    request = _request(
+        snapshot,
+        operations=(
+            DirectorOperation(
+                operation_id="operation_linked_split",
+                tool_name="VideoSplitClipSkill",
+                arguments={
+                    "track_id": "track_video_main",
+                    "clip_id": "clip_video_linked",
+                    "split_at_seconds": 2,
+                    "right_clip_id": "clip_video_right",
+                    "edit_scope": "linked_group",
+                },
+                rationale="Split the explicitly linked scene together.",
+                expected_effect="Create aligned linked video/audio halves.",
+            ),
+        ),
+    )
+    document = PlanDiffEngine.generate(
+        request,
+        snapshot,
+        vistora_main.SKILLS,
+    )
+    assert snapshot.model_dump_json() == before
+    changed = {
+        (change.entity.entity_id, change.effect_kind)
+        for change in document.changes
+        if change.entity.entity_kind == "clip"
+    }
+    assert ("clip_video_linked", "direct") in changed
+    assert ("clip_video_right", "direct") in changed
+    assert ("clip_audio_linked", "consequential") in changed
+    assert any(
+        change.after
+        and change.after.link_group_id
+        and change.after.link_group_id != "link_scene_one"
+        for change in document.changes
+        if change.category == "clip_addition"
+    )
+
+
+def test_multitrack_preview_rejects_locked_link_member() -> None:
+    snapshot = _multitrack_snapshot(locked_audio=True)
+    request = _request(
+        snapshot,
+        operations=(
+            DirectorOperation(
+                operation_id="operation_locked_split",
+                tool_name="VideoSplitClipSkill",
+                arguments={
+                    "track_id": "track_video_main",
+                    "clip_id": "clip_video_linked",
+                    "split_at_seconds": 2,
+                    "edit_scope": "linked_group",
+                },
+                rationale="Attempt a linked split.",
+                expected_effect="Must fail because one member is locked.",
+            ),
+        ),
+    )
+    with pytest.raises(PlanDiffValidationError, match="locked"):
+        PlanDiffEngine.generate(request, snapshot, vistora_main.SKILLS)
     assert request.proposed_execution.director_plan == request.director_plan
     assert request.registry_ref.schema_version == "1.0.0"
     assert request.snapshot_ref.snapshot_id == snapshot.snapshot_id

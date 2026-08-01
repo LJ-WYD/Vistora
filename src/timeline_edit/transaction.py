@@ -78,6 +78,7 @@ class TimelineEditTransaction:
             return {
                 "status": "success",
                 "operation": outcome.operation,
+                "track_id": outcome.track_id,
                 "track_key": outcome.track_key,
                 "direct_clip_ids": list(outcome.direct_clip_ids),
                 "consequential_clip_ids": list(

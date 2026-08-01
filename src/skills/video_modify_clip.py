@@ -21,6 +21,10 @@ class VideoModifyClipSkill(BaseSkill):
     def run(self, params: VideoModifyClipInput) -> Dict[str, Any]:
         timeline = TimelineManager.get_current_timeline()
         video_track = timeline.tracks.get("video")
+        if video_track is None:
+            raise ValueError("The compatibility video track is unavailable")
+        if video_track.locked:
+            raise ValueError("The compatibility video track is locked")
         
         if not video_track.clips:
             raise ValueError("当前时间线为空，没有任何视频可供修改。请先添加视频片段。")

@@ -288,6 +288,7 @@ class PlanDiffRequest(ReviewModel):
 class PreviewClipState(ReviewModel):
     clip_id: str = Field(min_length=1)
     track_key: str = Field(min_length=1)
+    track_id: str = Field(min_length=1)
     order_index: int = Field(ge=0)
     source_id: StableId
     source_name: str = Field(min_length=1)
@@ -301,6 +302,7 @@ class PreviewClipState(ReviewModel):
     keep_audio: bool
     reverse: bool
     rotate_degrees: int
+    link_group_id: StableId | None = None
     provisional: bool = False
 
 
@@ -311,9 +313,10 @@ class PreviewProjectSettings(ReviewModel):
 
 
 class ProposedEntityReference(ReviewModel):
-    entity_kind: Literal["clip", "project", "media_output", "none"]
+    entity_kind: Literal["clip", "track", "project", "media_output", "none"]
     entity_id: str = Field(min_length=1)
     track_key: str | None = None
+    track_id: str | None = None
 
 
 class PlanChange(ReviewModel):
@@ -328,6 +331,8 @@ class PlanChange(ReviewModel):
         "clip_reorder",
         "clip_speed",
         "clip_properties",
+        "clip_linkage",
+        "track_management",
         "project_settings",
         "export_only",
         "media_output",

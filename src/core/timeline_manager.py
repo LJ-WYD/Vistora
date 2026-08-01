@@ -26,8 +26,18 @@ class TimelineManager:
         
         # 返回一个包含基础主轨道的空项目
         timeline = TimelineConfig()
-        timeline.tracks["video"] = TrackConfig(id="video")
-        timeline.tracks["audio"] = TrackConfig(id="audio")
+        timeline.tracks["video"] = TrackConfig(
+            id="video",
+            kind="video",
+            role="primary",
+            order=0,
+        )
+        timeline.tracks["audio"] = TrackConfig(
+            id="audio",
+            kind="audio",
+            role="primary",
+            order=1,
+        )
         return timeline
 
     @staticmethod

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -16,6 +17,8 @@ from skills.video_restore_timeline_checkpoint import (
 )
 from skills.video_timelapse import VideoTimelapseSkill
 from skills.video_timeline_edits import (
+    TimelineManageTrackSkill,
+    TimelineSetClipLinkSkill,
     VideoInsertOverwriteClipSkill,
     VideoMoveClipSkill,
     VideoRemoveClipSkill,
@@ -95,8 +98,11 @@ class CoreTimelineEditResult(_Result):
         "overwrite",
         "remove",
         "set_properties",
+        "manage_track",
+        "set_clip_link",
     ]
-    track_key: Literal["video", "audio"]
+    track_id: str
+    track_key: str
     direct_clip_ids: list[str]
     consequential_clip_ids: list[str]
     created_clip_ids: list[str]
@@ -123,11 +129,16 @@ def _entry(
 ) -> tuple[Any, SkillDescriptor, type[BaseModel]]:
     input_schema = skill.input_model.model_json_schema()
     output_schema = output_model.model_json_schema()
+    input_schema_version = (
+        input_schema.get("properties", {})
+        .get("schema_version", {})
+        .get("default", "1.0.0")
+    )
     descriptor = SkillDescriptor(
         name=skill.name,
         skill_version="1.0.0",
         description=skill.description,
-        input_schema_version="1.0.0",
+        input_schema_version=input_schema_version,
         input_schema=input_schema,
         input_schema_digest=digest_json(input_schema),
         output_schema_version="1.0.0",
@@ -144,7 +155,10 @@ def _entry(
     return skill, descriptor, output_model
 
 
-def build_production_registry() -> AtomicSkillRegistry:
+def build_production_registry(
+    *,
+    timeline_id_factory: Callable[[str], str] | None = None,
+) -> AtomicSkillRegistry:
     """Build a fresh immutable registry; no process-global mutable singleton."""
 
     legacy_modify = VideoModifyClipSkill()
@@ -155,7 +169,7 @@ def build_production_registry() -> AtomicSkillRegistry:
     )
     return AtomicSkillRegistry(
         registry_id="registry_atomic_skills",
-        registry_revision=1,
+        registry_revision=2,
         entries=(
             _entry(
                 VideoAddClipSkill(),
@@ -246,12 +260,62 @@ def build_production_registry() -> AtomicSkillRegistry:
                     ),
                 )
                 for skill in (
-                    VideoSplitClipSkill(),
-                    VideoTrimClipSkill(),
-                    VideoMoveClipSkill(),
-                    VideoInsertOverwriteClipSkill(),
-                    VideoRemoveClipSkill(),
-                    VideoSetClipPropertiesSkill(),
+                    VideoSplitClipSkill(
+                        **(
+                            {"id_factory": timeline_id_factory}
+                            if timeline_id_factory is not None
+                            else {}
+                        )
+                    ),
+                    VideoTrimClipSkill(
+                        **(
+                            {"id_factory": timeline_id_factory}
+                            if timeline_id_factory is not None
+                            else {}
+                        )
+                    ),
+                    VideoMoveClipSkill(
+                        **(
+                            {"id_factory": timeline_id_factory}
+                            if timeline_id_factory is not None
+                            else {}
+                        )
+                    ),
+                    VideoInsertOverwriteClipSkill(
+                        **(
+                            {"id_factory": timeline_id_factory}
+                            if timeline_id_factory is not None
+                            else {}
+                        )
+                    ),
+                    VideoRemoveClipSkill(
+                        **(
+                            {"id_factory": timeline_id_factory}
+                            if timeline_id_factory is not None
+                            else {}
+                        )
+                    ),
+                    VideoSetClipPropertiesSkill(
+                        **(
+                            {"id_factory": timeline_id_factory}
+                            if timeline_id_factory is not None
+                            else {}
+                        )
+                    ),
+                    TimelineManageTrackSkill(
+                        **(
+                            {"id_factory": timeline_id_factory}
+                            if timeline_id_factory is not None
+                            else {}
+                        )
+                    ),
+                    TimelineSetClipLinkSkill(
+                        **(
+                            {"id_factory": timeline_id_factory}
+                            if timeline_id_factory is not None
+                            else {}
+                        )
+                    ),
                 )
             ),
         ),

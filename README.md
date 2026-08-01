@@ -110,11 +110,31 @@ python src/main.py preview --media-root C:\path\to\your\media
 
 Then visit `http://127.0.0.1:8765`. Use `--timeline path\to\timeline.json` to inspect a specific legacy or versioned document instead of the current workspace, repeat `--media-root` for additional roots, or omit all media roots to disable browser media serving.
 
-The preview provides an allowlisted material monitor, time ruler/timecode, synchronized local playhead, deterministic video thumbnails, timeline-aligned audio waveforms, video/audio lanes, data-only unsupported-track messaging, a selected-clip inspector, zoom/horizontal scrolling, and snapshot summary. The inspector reports opaque source reference and ID, media type, track, source range, timeline range/duration, playback properties, availability/analysis status, and recorded origin/plan/step/evidence status. Legacy clips clearly report unknown provenance rather than receiving fabricated history.
+The preview provides an allowlisted material monitor, time ruler/timecode,
+synchronized local playhead, deterministic video thumbnails,
+timeline-aligned audio waveforms, any number of ordered video/audio lanes,
+track role/state labels, a selected-clip inspector, zoom/horizontal
+scrolling, and snapshot summary. The inspector reports opaque source
+reference and ID, stable track and link-group IDs, source range, timeline
+range/duration, playback properties, availability/analysis status, and
+recorded origin/plan/step/evidence status. Legacy clips clearly report
+unknown provenance rather than receiving fabricated history.
 
 Media URLs and browser snapshot references contain only opaque IDs; configured absolute paths are redacted before the snapshot crosses the HTTP boundary. Paths are resolved only on the server against explicit roots after symlink resolution, and byte ranges are supported for browser playback. Thumbnail PNGs and normalized waveform peaks come from the separate versioned `media_analysis` read boundary. Results and artifacts use a bounded in-memory cache, so refresh and zoom reuse analysis without generating repository files. Missing, unreadable, unsupported, and decode-failed sources remain visible as explicit placeholders. The server binds only to a loopback interface.
 
-For the current workspace only, a selected video clip can also be changed through a detached manual draft: source in/out, timeline start, legacy list order, split at an interior time, or lift/ripple removal. A trim can ripple its duration change through later clips. Staging and server-side validation do not write. The UI shows direct and consequential before/after changes, supports undo/reset, and requires the explicit **Confirm & apply** action. That action binds a user confirmation to the exact proposal digest and dispatches one transactional atomic skill through the registry. The browser never writes `TimelineManager` or media directly. Manual apply is disabled for `--timeline` external documents, which remain strictly read-only.
+For the current workspace only, a selected video or audio clip can be changed
+through a detached manual draft: source in/out, timeline start, legacy list
+order, split at an interior time, or lift/ripple removal. Every edit
+explicitly chooses **current clip only** or **linked group**. The same draft
+can link/unlink exact selected clip IDs and change track order,
+enabled/muted/locked state. Locked tracks reject clip edits. Staging and
+server-side validation do not write. The UI shows direct and consequential
+before/after changes, supports undo/reset, and requires the explicit
+**Confirm & apply** action. That action binds a user confirmation to the exact
+proposal digest and dispatches one transactional atomic skill through the
+registry. The browser never writes `TimelineManager` or media directly.
+Manual apply is disabled for `--timeline` external documents, which remain
+strictly read-only.
 
 ## Provenance and trace queries
 
@@ -231,7 +251,18 @@ and richer editing skills are not implemented.
 
 `src/plan_review/` provides strict version `1.0.0` contracts and a deterministic read-only diff engine for the period before confirmation. A `PlanDiffRequest` binds an exact timeline snapshot ID/revision/digest, Director plan ID/version/digest, non-executable proposed execution-plan digest, and the exact registered tool-schema set. The engine validates proposed arguments with the current registry schemas, simulates supported semantics on detached clip data, and returns stable before/after changes, source-evidence links, provenance summaries, warnings, and net counts. Repeating the same request produces the same document and digest; snapshot or registry drift requires regeneration.
 
-The current semantic adapters cover non-reverse video add (with supplied opaque media facts, including first-clip canvas adoption), safe legacy clip property/speed modification, exact-ID split/trim/move/insert/overwrite/lift/ripple-delete/playback-property operations on the existing video/audio tracks, timeline clear/default-project reset, and export timeline effects. Ripple effects and overwrite-retained sides are shown as consequential clip changes. Proxy-generating reverse operations, timelapse output, and registered tools without an adapter are blockers rather than fabricated previews. Export paths and configured source paths never cross the browser boundary.
+The current semantic adapters cover non-reverse video add (with supplied
+opaque media facts, including first-clip canvas adoption), safe legacy clip
+property/speed modification, exact-ID
+split/trim/move/insert/overwrite/lift/ripple-delete/playback-property
+operations across arbitrary video/audio tracks, explicit current-only versus
+linked-group effects, track management, link/unlink, timeline clear/default
+project reset, and export timeline effects. Ripple, linked members, and
+overwrite-retained sides are shown as consequential changes. Locked-track
+proposals fail closed. Proxy-generating reverse operations, timelapse output,
+and registered tools without an adapter are blockers rather than fabricated
+previews. Export paths and configured source paths never cross the browser
+boundary.
 
 Supply an exact versioned request fixture to the local UI:
 
@@ -257,7 +288,7 @@ The ledger keeps one stable logical identity for the workspace while every revie
 ## Atomic skill registry and execution gateway
 
 `src/atomic_runtime/` is the single production composition root for the
-thirteen existing atomic skills. A fresh immutable `AtomicSkillRegistry` carries an
+fifteen existing atomic skills. A fresh immutable `AtomicSkillRegistry` carries an
 explicit ID, semantic version, revision, deterministic input-schema digest, and
 full descriptor digest. Every frozen `SkillDescriptor` declares the stable
 skill version, exact input and output schemas, timeline/media/file/external
@@ -286,14 +317,32 @@ transactional or reversible.
 ## Core timeline edit skills
 
 `src/timeline_edit/` defines the detached deterministic edit engine and shared
-same-directory durable transaction used by the first professional core edit
-slice. Six versioned exact-`clip_id` tools cover split, source trim with
-optional ripple, explicit move with optional same-track ripple,
+same-directory durable transaction used by the professional core edit
+foundation. Six versioned exact-`clip_id` tools cover split, source trim with
+optional ripple, explicit move with optional per-track ripple,
 insert/overwrite, lift/ripple remove, and playback properties (speed,
-volume/mute, embedded audio, rotation). They operate on the current real
-`video` and `audio` tracks only, return structured direct/consequential effect
-lists, and are exposed exclusively through the production registry and
-`AtomicExecutionGateway`.
+volume/mute, embedded audio, rotation). `TimelineManageTrackSkill` adds,
+updates, removes empty tracks, or changes deterministic order; the separate
+`TimelineSetClipLinkSkill` explicitly links/unlinks exact clip references.
+All operate on any configured video/audio track, return structured
+direct/consequential effect lists, and are exposed exclusively through the
+production registry and `AtomicExecutionGateway`.
+
+Timeline schema `2.0.0` gives every track a stable ID, video/audio kind, role,
+unique order, enabled, muted, and locked state. Any number of video/audio
+tracks is supported. Legacy fixed `video`/`audio` JSON is migrated
+deterministically at load time and remains renderable. Locked tracks fail
+closed for manual and confirmed Agent mutations. A clip may carry only an
+explicit stable `link_group_id`; link membership is never inferred from file
+paths or approximate timing.
+
+Every core clip edit declares `edit_scope=current_clip` (safe default) or
+`edit_scope=linked_group`. Linked split/move/trim/remove/property operations
+apply only to the exact group members, validate every affected track first,
+and report the selected clip as direct and linked members/ripple neighbors as
+consequential. Insert can assign an explicit group ID, but creating multiple
+linked source clips still requires separate reviewed requests. Unlink is a
+separate structured and confirmed operation.
 
 Overwrite preserves every uncovered left/right interval; split copies
 source/playback properties while issuing a stable new clip ID. Workflow trace
@@ -306,8 +355,10 @@ restores the prior timeline bytes.
 legacy compatibility surfaces. Property-only edits can use
 `VideoSetClipPropertiesSkill` without generating a reverse proxy. Existing
 reverse behavior is not expanded or promised transactionally reversible.
-Linked A/V editing, arbitrary multitrack, color, subtitles, transitions,
-keyframes, masks, and effects remain unimplemented.
+Linked A/V and arbitrary video/audio track foundations are implemented.
+Automatic link inference, linked-source ingest as one operation, unlimited
+track kinds, color, subtitles, transitions, keyframes, masks, and effects
+remain unimplemented.
 
 ## Constrained Editing Agent
 

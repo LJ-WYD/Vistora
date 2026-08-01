@@ -17,6 +17,7 @@ from atomic_runtime import (
 from contracts import (
     AtomicToolRequestEnvelope,
     ManualClipRemove,
+    ManualClipLink,
     ManualClipSplit,
     ManualClipUpdate,
     ManualEditChange,
@@ -24,9 +25,12 @@ from contracts import (
     ManualEditProposal,
     ManualEditProposalReference,
     ManualEditReview,
+    ManualTrackManage,
     PlanReference,
 )
-from timeline_query import TimelineSnapshot
+from core.timeline import ClipConfig, TimelineConfig, TrackConfig
+from timeline_edit import TimelineEditEngine, TimelineEditError
+from timeline_query import TimelineSnapshot, TimelineSnapshotService
 
 
 MANUAL_EDIT_TOOL_NAME = "VideoApplyManualEditsSkill"
@@ -50,6 +54,7 @@ def _clip_state(clip: Any, order_index: int) -> dict[str, Any]:
         "keep_audio": clip.keep_audio,
         "reverse": clip.reverse,
         "rotate_degrees": clip.rotate_degrees,
+        "link_group_id": clip.link_group_id,
         "source_id": clip.source.source_id,
         "source_name": clip.source.display_name,
     }
@@ -71,7 +76,7 @@ def _find_unique_state_index(
     return matches[0]
 
 
-def review_manual_edit_proposal(
+def _review_manual_edit_proposal_legacy(
     snapshot: TimelineSnapshot,
     proposal: ManualEditProposal,
 ) -> ManualEditReview:
@@ -273,6 +278,297 @@ def review_manual_edit_proposal(
             for previous, current in ripple_changes
         )
 
+    return ManualEditReview(
+        proposal_ref=ManualEditProposalReference.from_proposal(proposal),
+        snapshot_id=snapshot.snapshot_id,
+        changes=tuple(changes),
+    )
+
+
+def _timeline_from_snapshot(snapshot: TimelineSnapshot) -> TimelineConfig:
+    return TimelineConfig(
+        width=snapshot.width,
+        height=snapshot.height,
+        fps=snapshot.fps,
+        tracks={
+            track.track_key: TrackConfig(
+                id=track.track_id,
+                kind=track.kind,
+                role=track.role,
+                order=track.order_index,
+                enabled=track.enabled,
+                muted=track.muted,
+                locked=track.locked,
+                clips=[
+                    ClipConfig(
+                        id=clip.clip_id,
+                        source=clip.source.value,
+                        trim_in=clip.trim_in_seconds,
+                        trim_out=clip.trim_out_seconds,
+                        timeline_start=clip.timeline_start_seconds,
+                        volume=clip.volume,
+                        keep_audio=clip.keep_audio,
+                        speed_factor=clip.speed_factor,
+                        reverse=clip.reverse,
+                        rotate=clip.rotate_degrees,
+                        link_group_id=clip.link_group_id,
+                    )
+                    for clip in track.clips
+                ],
+            )
+            for track in snapshot.tracks
+        },
+    )
+
+
+def _state_map(
+    timeline: TimelineConfig,
+) -> dict[tuple[str, str], tuple[str, dict[str, Any]]]:
+    snapshot = TimelineSnapshotService.snapshot(timeline)
+    return {
+        (track.track_key, clip.clip_id): (
+            track.track_id,
+            _clip_state(clip, clip.order_index),
+        )
+        for track in snapshot.tracks
+        for clip in track.clips
+    }
+
+
+def review_manual_edit_proposal(
+    snapshot: TimelineSnapshot,
+    proposal: ManualEditProposal,
+) -> ManualEditReview:
+    """Review a detached multi-track proposal through production semantics."""
+
+    if (
+        snapshot.project_id != proposal.base_project_id
+        or snapshot.revision != proposal.base_revision
+        or snapshot.timeline_digest != proposal.base_timeline_digest
+    ):
+        raise ManualEditValidationError(
+            "Manual proposal is stale or crosses project identity"
+        )
+    engine = TimelineEditEngine(_timeline_from_snapshot(snapshot))
+    changes: list[ManualEditChange] = []
+    for edit in proposal.edits:
+        before = _state_map(engine.timeline)
+        try:
+            outcomes = []
+            if isinstance(edit, ManualTrackManage):
+                key, track = engine._resolve_track(
+                    edit.track_id,
+                    allow_locked=True,
+                )
+                track_before = track.model_dump(
+                    mode="json",
+                    exclude={"clips"},
+                )
+                changed_properties = any(
+                    value is not None
+                    and value != getattr(track, field)
+                    for field, value in (
+                        ("role", edit.role),
+                        ("enabled", edit.enabled),
+                        ("muted", edit.muted),
+                        ("locked", edit.locked),
+                    )
+                )
+                updated = engine.timeline
+                if changed_properties:
+                    updated, outcome = engine.manage_track(
+                        action="update",
+                        track_id=edit.track_id,
+                        kind=None,
+                        role=edit.role,
+                        order=None,
+                        enabled=edit.enabled,
+                        muted=edit.muted,
+                        locked=edit.locked,
+                    )
+                if edit.order is not None and edit.order != track.order:
+                    updated, outcome = engine.manage_track(
+                        action="reorder",
+                        track_id=edit.track_id,
+                        kind=None,
+                        role=None,
+                        order=edit.order,
+                        enabled=None,
+                        muted=None,
+                        locked=None,
+                    )
+                if not changed_properties and (
+                    edit.order is None or edit.order == track.order
+                ):
+                    raise ManualEditValidationError(
+                        "Track settings proposal changes nothing"
+                    )
+                _, changed_track = engine._resolve_track(
+                    edit.track_id,
+                    allow_locked=True,
+                )
+                changes.append(
+                    ManualEditChange(
+                        operation_id=edit.operation_id,
+                        target_kind="track",
+                        track_key=key,
+                        track_id=edit.track_id,
+                        clip_id=edit.track_id,
+                        action="update",
+                        before=track_before,
+                        after=changed_track.model_dump(
+                            mode="json",
+                            exclude={"clips"},
+                        ),
+                    )
+                )
+                continue
+            if isinstance(edit, ManualClipLink):
+                updated, outcome = engine.set_clip_link(
+                    action=edit.action,
+                    members=(
+                        (member.track_id, member.clip_id)
+                        for member in edit.members
+                    ),
+                    link_group_id=edit.link_group_id,
+                )
+                outcomes.append(outcome)
+            else:
+                track_reference = edit.track_id or edit.track_key
+            if isinstance(edit, ManualClipRemove):
+                updated, outcome = engine.remove(
+                    track_reference,
+                    edit.clip_id,
+                    ripple=edit.mode == "ripple",
+                    edit_scope=edit.edit_scope,
+                )
+                outcomes.append(outcome)
+            elif isinstance(edit, ManualClipSplit):
+                updated, outcome = engine.split(
+                    track_reference,
+                    edit.clip_id,
+                    edit.split_at_seconds,
+                    right_clip_id=edit.right_clip_id,
+                    edit_scope=edit.edit_scope,
+                )
+                outcomes.append(outcome)
+            elif isinstance(edit, ManualClipUpdate):
+                _, _, target = engine._clip(
+                    track_reference,
+                    edit.clip_id,
+                )
+                updated = engine.timeline
+                if (
+                    abs(target.trim_in - edit.trim_in_seconds) > 1e-6
+                    or abs(target.trim_out - edit.trim_out_seconds) > 1e-6
+                ):
+                    updated, outcome = engine.trim(
+                        track_reference,
+                        edit.clip_id,
+                        edit.trim_in_seconds,
+                        edit.trim_out_seconds,
+                        ripple=edit.ripple,
+                        edit_scope=edit.edit_scope,
+                    )
+                    outcomes.append(outcome)
+                _, _, target = engine._clip(
+                    track_reference,
+                    edit.clip_id,
+                )
+                if (
+                    abs(
+                        target.timeline_start
+                        - edit.timeline_start_seconds
+                    )
+                    > 1e-6
+                ):
+                    updated, outcome = engine.move(
+                        track_reference,
+                        edit.clip_id,
+                        edit.timeline_start_seconds,
+                        ripple=False,
+                        edit_scope=edit.edit_scope,
+                    )
+                    outcomes.append(outcome)
+                if not outcomes:
+                    raise ManualEditValidationError(
+                        f"Update for clip {edit.clip_id!r} changes nothing"
+                    )
+                _, target_track = engine._resolve_track(
+                    track_reference,
+                    allow_locked=True,
+                )
+                actual_index = next(
+                    index
+                    for index, clip in enumerate(target_track.clips)
+                    if clip.id == edit.clip_id
+                )
+                if edit.order_index >= len(target_track.clips):
+                    raise ManualEditValidationError(
+                        f"Clip order {edit.order_index} is outside the "
+                        f"current track range 0..{len(target_track.clips) - 1}"
+                    )
+                if edit.order_index != actual_index:
+                    moved = target_track.clips.pop(actual_index)
+                    target_track.clips.insert(edit.order_index, moved)
+        except TimelineEditError as exc:
+            raise ManualEditValidationError(str(exc)) from exc
+        after = _state_map(updated)
+        direct = {
+            clip_id
+            for outcome in outcomes
+            for clip_id in outcome.direct_clip_ids
+        }
+        changed = sorted(
+            before.keys() | after.keys(),
+            key=lambda key: (key[1] not in direct, key),
+        )
+        for key in changed:
+            old = before.get(key)
+            new = after.get(key)
+            if old == new:
+                continue
+            if (
+                isinstance(edit, ManualClipSplit)
+                and key[1] not in direct
+                and old is not None
+                and new is not None
+                and {
+                    field: value
+                    for field, value in old[1].items()
+                    if field != "order_index"
+                }
+                == {
+                    field: value
+                    for field, value in new[1].items()
+                    if field != "order_index"
+                }
+            ):
+                continue
+            state = new or old
+            assert state is not None
+            changes.append(
+                ManualEditChange(
+                    operation_id=edit.operation_id,
+                    track_key=key[0],
+                    track_id=state[0],
+                    clip_id=key[1],
+                    action=(
+                        "create"
+                        if old is None
+                        else "remove"
+                        if new is None
+                        else "update"
+                    ),
+                    effect_kind=(
+                        "direct" if key[1] in direct else "consequential"
+                    ),
+                    before=None if old is None else old[1],
+                    after=None if new is None else new[1],
+                )
+            )
+    if not changes:
+        raise ManualEditValidationError("Manual proposal has no effect")
     return ManualEditReview(
         proposal_ref=ManualEditProposalReference.from_proposal(proposal),
         snapshot_id=snapshot.snapshot_id,

@@ -99,10 +99,10 @@ def test_snapshot_is_deterministic_ordered_and_has_derived_summary() -> None:
     ]
     assert first.track_count == 3
     assert first.clip_count == 4
-    assert first.video_clip_count == 2
+    assert first.video_clip_count == 3
     assert first.audio_clip_count == 1
     assert first.duration_seconds == 6.0
-    assert first.tracks[2].kind == "other"
+    assert first.tracks[2].kind == "video"
     assert first.tracks[2].clips[0].effective_duration_seconds == 2.0
     assert first.tracks[2].clips[0].timeline_end_seconds == 2.5
     assert first.tracks[1].clips[0].source.display_name == "music.wav"
@@ -133,8 +133,8 @@ def test_snapshot_round_trip_enforces_schema_version() -> None:
     assert restored == snapshot
 
     invalid = snapshot.model_dump(mode="json")
-    invalid["schema_version"] = "2.0.0"
-    with pytest.raises(ValidationError, match="1.0.0"):
+    invalid["schema_version"] = "1.0.0"
+    with pytest.raises(ValidationError, match="2.0.0"):
         TimelineSnapshot.model_validate(invalid)
 
 
