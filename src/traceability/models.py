@@ -17,6 +17,8 @@ from contracts import (
     ManualEditProposal,
     ManualTrackManage,
     ManualTrackMix,
+    ManualSubtitleCue,
+    ManualSubtitleTrack,
     PlanReference,
 )
 
@@ -66,14 +68,16 @@ class SnapshotTraceReference(TraceModel):
 class TraceEntityReference(TraceModel):
     """Opaque timeline or generated-media entity identity."""
 
-    entity_kind: Literal["clip", "track", "media_output"]
+    entity_kind: Literal[
+        "clip", "track", "subtitle_track", "subtitle_cue", "media_output"
+    ]
     entity_id: str = Field(min_length=1, max_length=160)
     track_key: str | None = Field(default=None, min_length=1)
     track_id: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def track_matches_entity_kind(self) -> TraceEntityReference:
-        if self.entity_kind in {"clip", "track"} and self.track_key is None:
+        if self.entity_kind != "media_output" and self.track_key is None:
             raise ValueError("Timeline trace entities require a track key")
         if self.entity_kind == "media_output" and self.track_key is not None:
             raise ValueError("Generated media trace entities have no track")
@@ -106,16 +110,19 @@ class ConfirmedEntityRelation(TraceModel):
     def relation_matches_entity(self) -> ConfirmedEntityRelation:
         if len(self.evidence_ids) != len(set(self.evidence_ids)):
             raise ValueError("Confirmed relation evidence IDs must be unique")
-        if self.entity.entity_kind == "clip":
+        if self.entity.entity_kind != "media_output":
             if self.relation_type == "generates":
-                raise ValueError("Clip relations cannot use generates")
+                raise ValueError("Timeline entity relations cannot use generates")
             if self.origin_kind != "director_plan":
                 raise ValueError(
-                    "Confirmed clip effects originate from Director intent"
+                    "Confirmed timeline effects originate from Director intent"
                 )
             if (
                 self.inherited_from_entity_id is not None
-                and self.relation_type != "creates"
+                and (
+                    self.entity.entity_kind != "clip"
+                    or self.relation_type != "creates"
+                )
             ):
                 raise ValueError(
                     "Only a created clip can inherit another clip's origin"
@@ -254,7 +261,9 @@ class ManualEntityRelation(TraceModel):
 
     @model_validator(mode="after")
     def entity_is_a_clip(self) -> ManualEntityRelation:
-        if self.entity.entity_kind not in {"clip", "track"}:
+        if self.entity.entity_kind not in {
+            "clip", "track", "subtitle_track", "subtitle_cue"
+        }:
             raise ValueError(
                 "Manual edit traces may reference clips or tracks only"
             )
@@ -331,6 +340,22 @@ class ManualEditTrace(TraceModel):
                     raise ValueError(
                         "Manual track trace differs from its proposal"
                     )
+                continue
+            if isinstance(edit, ManualSubtitleTrack):
+                if (
+                    len(direct) != 1
+                    or direct[0].entity.entity_kind != "subtitle_track"
+                    or direct[0].entity.entity_id != edit.track_id
+                ):
+                    raise ValueError("Manual subtitle track trace differs from proposal")
+                continue
+            if isinstance(edit, ManualSubtitleCue):
+                if not direct or any(
+                    relation.entity.entity_kind != "subtitle_cue"
+                    or relation.entity.track_id != edit.track_id
+                    for relation in direct
+                ):
+                    raise ValueError("Manual subtitle cue trace differs from proposal")
                 continue
             if isinstance(edit, ManualClipLink):
                 expected = {

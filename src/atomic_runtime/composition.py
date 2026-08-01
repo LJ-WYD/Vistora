@@ -14,6 +14,12 @@ from skills.audio_timeline_edits import (
     AudioSetTrackMixSkill,
     AudioSetVolumeEnvelopeSkill,
 )
+from skills.subtitle_timeline_edits import (
+    SubtitleEditCueSkill,
+    SubtitleExportSidecarSkill,
+    SubtitleImportSkill,
+    SubtitleManageTrackSkill,
+)
 
 from skills.video_add_clip import VideoAddClipSkill
 from skills.video_apply_manual_edits import VideoApplyManualEditsSkill
@@ -62,6 +68,9 @@ class ExportResult(_Result):
     status: str
     message: str
     output_path: str
+    subtitle_mode: str = "none"
+    subtitle_track_ids: list[str] = []
+    font_warnings: list[str] = []
 
 
 class TimelapseResult(ExportResult):
@@ -119,12 +128,42 @@ class CoreTimelineEditResult(_Result):
     created_clip_ids: list[str]
     modified_clip_ids: list[str]
     deleted_clip_ids: list[str]
+    consequential_subtitle_cue_ids: list[str] = []
     warnings: list[str]
     before_snapshot_id: str
     after_snapshot_id: str
     project_id: str
     revision: int
     timeline_digest: str
+
+
+class SubtitleEditResult(_Result):
+    status: Literal["success"]
+    operation: str
+    track_id: str
+    direct_cue_ids: list[str]
+    consequential_cue_ids: list[str]
+    created_cue_ids: list[str]
+    modified_cue_ids: list[str]
+    deleted_cue_ids: list[str]
+    created_track_ids: list[str]
+    modified_track_ids: list[str]
+    deleted_track_ids: list[str]
+    warnings: list[str]
+    before_snapshot_id: str
+    after_snapshot_id: str
+    project_id: str
+    revision: int
+    timeline_digest: str
+
+
+class SubtitleSidecarResult(_Result):
+    status: Literal["success"]
+    format: Literal["srt", "vtt"]
+    output_path: str
+    track_ids: list[str]
+    cue_count: int
+    sha256: str
 
 
 def _entry(
@@ -180,7 +219,7 @@ def build_production_registry(
     )
     return AtomicSkillRegistry(
         registry_id="registry_atomic_skills",
-        registry_revision=3,
+        registry_revision=4,
         entries=(
             _entry(
                 VideoAddClipSkill(),
@@ -278,6 +317,37 @@ def build_production_registry(
                     AudioSetTrackMixSkill(),
                     AudioSetVolumeEnvelopeSkill(),
                 )
+            ),
+            *tuple(
+                _entry(
+                    skill,
+                    SubtitleEditResult,
+                    side_effects=("files", "timeline"),
+                    transactionality="atomic_project_state",
+                    retry_safety="gateway_replay_only",
+                    preview_supported=True,
+                    rollback_support="checkpoint_restore",
+                    required_capabilities=(
+                        ("local_subtitle_read",)
+                        if isinstance(skill, SubtitleImportSkill)
+                        else ()
+                    ),
+                )
+                for skill in (
+                    SubtitleManageTrackSkill(),
+                    SubtitleEditCueSkill(),
+                    SubtitleImportSkill(),
+                )
+            ),
+            _entry(
+                SubtitleExportSidecarSkill(),
+                SubtitleSidecarResult,
+                side_effects=("files",),
+                transactionality="atomic_file",
+                retry_safety="gateway_replay_only",
+                preview_supported=True,
+                rollback_support="none",
+                required_capabilities=(),
             ),
             *tuple(
                 _entry(

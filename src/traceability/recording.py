@@ -18,6 +18,8 @@ from contracts import (
     ManualTrackManage,
     ManualTrackMix,
     ManualVolumeEnvelope,
+    ManualSubtitleCue,
+    ManualSubtitleTrack,
 )
 from timeline_query import TimelineSnapshot
 
@@ -58,6 +60,21 @@ def _clips(snapshot: TimelineSnapshot) -> dict[tuple[str, str], dict[str, Any]]:
     }
 
 
+def _subtitle_tracks(snapshot: TimelineSnapshot) -> dict[str, dict[str, Any]]:
+    return {
+        track.track_id: track.model_dump(mode="json", exclude={"cues"})
+        for track in snapshot.subtitle_tracks
+    }
+
+
+def _subtitle_cues(snapshot: TimelineSnapshot) -> dict[tuple[str, str], dict[str, Any]]:
+    return {
+        (track.track_id, cue.cue_id): cue.model_dump(mode="json")
+        for track in snapshot.subtitle_tracks
+        for cue in track.cues
+    }
+
+
 class ConfirmedTraceRecorder:
     """Correlate one confirmed atomic result with observed state effects."""
 
@@ -76,21 +93,50 @@ class ConfirmedTraceRecorder:
             track.track_key: track.track_id
             for track in (*before_snapshot.tracks, *after_snapshot.tracks)
         }
-        effects: list[tuple[str, str, str]] = []
+        track_ids.update(
+            {
+                track.track_id: track.track_id
+                for track in (
+                    *before_snapshot.subtitle_tracks,
+                    *after_snapshot.subtitle_tracks,
+                )
+            }
+        )
+        effects: list[tuple[str, str, str, str]] = []
         for track_key, clip_id in sorted(before.keys() | after.keys()):
             key = (track_key, clip_id)
             if key not in before:
-                effects.append(("creates", track_key, clip_id))
+                effects.append(("creates", "clip", track_key, clip_id))
             elif key not in after:
-                effects.append(("deletes", track_key, clip_id))
+                effects.append(("deletes", "clip", track_key, clip_id))
             elif before[key] != after[key]:
-                effects.append(("modifies", track_key, clip_id))
+                effects.append(("modifies", "clip", track_key, clip_id))
+
+        before_subtitle_tracks = _subtitle_tracks(before_snapshot)
+        after_subtitle_tracks = _subtitle_tracks(after_snapshot)
+        for track_id in sorted(before_subtitle_tracks.keys() | after_subtitle_tracks.keys()):
+            if track_id not in before_subtitle_tracks:
+                effects.append(("creates", "subtitle_track", track_id, track_id))
+            elif track_id not in after_subtitle_tracks:
+                effects.append(("deletes", "subtitle_track", track_id, track_id))
+            elif before_subtitle_tracks[track_id] != after_subtitle_tracks[track_id]:
+                effects.append(("modifies", "subtitle_track", track_id, track_id))
+        before_subtitle_cues = _subtitle_cues(before_snapshot)
+        after_subtitle_cues = _subtitle_cues(after_snapshot)
+        for track_id, cue_id in sorted(before_subtitle_cues.keys() | after_subtitle_cues.keys()):
+            key = (track_id, cue_id)
+            if key not in before_subtitle_cues:
+                effects.append(("creates", "subtitle_cue", track_id, cue_id))
+            elif key not in after_subtitle_cues:
+                effects.append(("deletes", "subtitle_cue", track_id, cue_id))
+            elif before_subtitle_cues[key] != after_subtitle_cues[key]:
+                effects.append(("modifies", "subtitle_cue", track_id, cue_id))
 
         inherited: dict[tuple[str, str], str] = {}
         changed_before_ids = {
             (track_key, clip_id)
-            for relation_type, track_key, clip_id in effects
-            if relation_type in {"modifies", "deletes"}
+            for relation_type, entity_kind, track_key, clip_id in effects
+            if entity_kind == "clip" and relation_type in {"modifies", "deletes"}
         }
         if request.tool_name in {
             "VideoSplitClipSkill",
@@ -104,8 +150,8 @@ class ConfirmedTraceRecorder:
                 created_ids = result.payload.get("created_clip_ids")
                 if isinstance(created_ids, list) and created_ids:
                     inserted_id = created_ids[0]
-            for relation_type, track_key, clip_id in effects:
-                if relation_type != "creates":
+            for relation_type, entity_kind, track_key, clip_id in effects:
+                if entity_kind != "clip" or relation_type != "creates":
                     continue
                 if clip_id == inserted_id:
                     continue
@@ -132,8 +178,7 @@ class ConfirmedTraceRecorder:
             if isinstance(output_path, str) and output_path:
                 effects.append(
                     (
-                        "generates",
-                        "",
+                        "generates", "media_output", "",
                         _stable_id(
                             "media_output",
                             {
@@ -166,6 +211,14 @@ class ConfirmedTraceRecorder:
                     for item in raw_consequential
                     if isinstance(item, str)
                 }
+            raw_subtitle = result.payload.get(
+                "consequential_subtitle_cue_ids",
+                (),
+            )
+            if isinstance(raw_subtitle, (list, tuple)):
+                consequential_ids.update(
+                    item for item in raw_subtitle if isinstance(item, str)
+                )
         relations = tuple(
             ConfirmedEntityRelation(
                 relation_id=_stable_id(
@@ -174,6 +227,7 @@ class ConfirmedTraceRecorder:
                         "request_id": request.request_id,
                         "result_id": result.result_id,
                         "relation_type": relation_type,
+                        "entity_kind": entity_kind,
                         "track_key": track_key,
                         "track_id": track_ids.get(track_key),
                         "entity_id": entity_id,
@@ -187,16 +241,11 @@ class ConfirmedTraceRecorder:
                     else "direct"
                 ),
                 origin_kind=(
-                    "generated_media"
-                    if relation_type == "generates"
+                    "generated_media" if entity_kind == "media_output"
                     else "director_plan"
                 ),
                 entity=TraceEntityReference(
-                    entity_kind=(
-                        "media_output"
-                        if relation_type == "generates"
-                        else "clip"
-                    ),
+                    entity_kind=entity_kind,
                     entity_id=entity_id,
                     track_key=track_key or None,
                     track_id=track_ids.get(track_key),
@@ -207,15 +256,13 @@ class ConfirmedTraceRecorder:
                 result_id=result.result_id,
                 evidence_ids=evidence_ids,
                 inherited_from_entity_id=inherited.get(
-                    (track_key, entity_id)
+                    (track_key, entity_id) if entity_kind == "clip" else ("", "")
                 ),
                 before_snapshot=before_ref,
                 after_snapshot=after_ref,
             )
             for relation_index, (
-                relation_type,
-                track_key,
-                entity_id,
+                relation_type, entity_kind, track_key, entity_id,
             ) in enumerate(effects, start=1)
         )
         trace = ConfirmedAtomicTrace(
@@ -263,7 +310,28 @@ class ManualTraceRecorder:
             )
             for track in after_snapshot.tracks
         }
+        before_subtitle_tracks = _subtitle_tracks(before_snapshot)
+        after_subtitle_tracks = _subtitle_tracks(after_snapshot)
+        before_subtitle_cues = _subtitle_cues(before_snapshot)
+        after_subtitle_cues = _subtitle_cues(after_snapshot)
         for edit in proposal.edits:
+            if isinstance(edit, ManualSubtitleTrack):
+                old = before_subtitle_tracks.get(edit.track_id)
+                new = after_subtitle_tracks.get(edit.track_id)
+                if old == new:
+                    raise ValueError("Manual subtitle track trace has no exact state change")
+                continue
+            if isinstance(edit, ManualSubtitleCue):
+                if not any(
+                    track_id == edit.track_id
+                    and before_subtitle_cues.get((track_id, cue_id))
+                    != after_subtitle_cues.get((track_id, cue_id))
+                    for track_id, cue_id in (
+                        before_subtitle_cues.keys() | after_subtitle_cues.keys()
+                    )
+                ):
+                    raise ValueError("Manual subtitle cue trace has no exact state change")
+                continue
             if isinstance(edit, (ManualTrackManage, ManualTrackMix)):
                 if (
                     edit.track_key not in before_tracks
@@ -340,6 +408,35 @@ class ManualTraceRecorder:
         effect_rows: list[tuple[Any, str, str, str, str]] = []
         seen_effects: set[tuple[str, str, str]] = set()
         for edit in proposal.edits:
+            if isinstance(edit, ManualSubtitleTrack):
+                old = before_subtitle_tracks.get(edit.track_id)
+                new = after_subtitle_tracks.get(edit.track_id)
+                effect_rows.append((
+                    edit,
+                    "creates" if old is None else "deletes" if new is None else "modifies",
+                    edit.track_id,
+                    edit.track_id,
+                    "direct",
+                ))
+                continue
+            if isinstance(edit, ManualSubtitleCue):
+                for track_id, cue_id in sorted(
+                    before_subtitle_cues.keys() | after_subtitle_cues.keys()
+                ):
+                    if track_id != edit.track_id:
+                        continue
+                    old = before_subtitle_cues.get((track_id, cue_id))
+                    new = after_subtitle_cues.get((track_id, cue_id))
+                    if old == new:
+                        continue
+                    effect_rows.append((
+                        edit,
+                        "creates" if old is None else "deletes" if new is None else "modifies",
+                        track_id,
+                        cue_id,
+                        "direct",
+                    ))
+                continue
             if isinstance(edit, (ManualTrackManage, ManualTrackMix)):
                 effect_rows.append(
                     (
@@ -475,7 +572,11 @@ class ManualTraceRecorder:
                 effect_kind=effect_kind,
                 entity=TraceEntityReference(
                     entity_kind=(
-                        "track"
+                        "subtitle_track"
+                        if isinstance(edit, ManualSubtitleTrack)
+                        else "subtitle_cue"
+                        if isinstance(edit, ManualSubtitleCue)
+                        else "track"
                         if isinstance(edit, (ManualTrackManage, ManualTrackMix))
                         else "clip"
                     ),
@@ -512,6 +613,8 @@ class ManualTraceRecorder:
                         ),
                         None,
                     )
+                    if not isinstance(edit, (ManualSubtitleTrack, ManualSubtitleCue))
+                    else None
                 ),
                 before_snapshot=before_ref,
                 after_snapshot=after_ref,

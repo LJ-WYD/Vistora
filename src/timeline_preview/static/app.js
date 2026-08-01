@@ -8,6 +8,7 @@ const ui = {
   previewVideo: document.querySelector("#preview-video"),
   previewStatus: document.querySelector("#preview-status"),
   monitor: document.querySelector(".monitor"),
+  subtitleOverlay: document.querySelector("#subtitle-overlay"),
   timecode: document.querySelector("#timecode"),
   clipDetails: document.querySelector("#clip-details"),
   zoom: document.querySelector("#zoom"),
@@ -31,6 +32,8 @@ const ui = {
   editSplitAt: document.querySelector("#edit-split-at"),
   editRemoveMode: document.querySelector("#edit-remove-mode"),
   editScope: document.querySelector("#edit-scope"),
+  editSubtitleRipple: document.querySelector("#edit-subtitle-ripple"),
+  editSubtitleTracks: document.querySelector("#edit-subtitle-tracks"),
   editLinkTarget: document.querySelector("#edit-link-target"),
   editTrackOrder: document.querySelector("#edit-track-order"),
   editTrackEnabled: document.querySelector("#edit-track-enabled"),
@@ -62,6 +65,42 @@ const ui = {
   clearEnvelope: document.querySelector("#clear-envelope"),
   analyzeLoudness: document.querySelector("#analyze-loudness"),
   applyLoudness: document.querySelector("#apply-loudness"),
+  subtitleEditor: document.querySelector("#subtitle-editor"),
+  subtitleTrackSelect: document.querySelector("#subtitle-track-select"),
+  subtitleTrackLanguage: document.querySelector("#subtitle-track-language"),
+  subtitleTrackOrder: document.querySelector("#subtitle-track-order"),
+  subtitleTrackEnabled: document.querySelector("#subtitle-track-enabled"),
+  subtitleTrackLocked: document.querySelector("#subtitle-track-locked"),
+  subtitleCreateTrack: document.querySelector("#subtitle-create-track"),
+  subtitleStageTrack: document.querySelector("#subtitle-stage-track"),
+  subtitleDeleteTrack: document.querySelector("#subtitle-delete-track"),
+  subtitleCueId: document.querySelector("#subtitle-cue-id"),
+  subtitleStart: document.querySelector("#subtitle-start"),
+  subtitleEnd: document.querySelector("#subtitle-end"),
+  subtitleLanguage: document.querySelector("#subtitle-language"),
+  subtitleSpeaker: document.querySelector("#subtitle-speaker"),
+  subtitleText: document.querySelector("#subtitle-text"),
+  subtitleSplitAt: document.querySelector("#subtitle-split-at"),
+  subtitleFont: document.querySelector("#subtitle-font"),
+  subtitleFontSize: document.querySelector("#subtitle-font-size"),
+  subtitleColor: document.querySelector("#subtitle-color"),
+  subtitleOutlineColor: document.querySelector("#subtitle-outline-color"),
+  subtitleBackgroundColor: document.querySelector("#subtitle-background-color"),
+  subtitleAlignment: document.querySelector("#subtitle-alignment"),
+  subtitlePosition: document.querySelector("#subtitle-position"),
+  subtitleBold: document.querySelector("#subtitle-bold"),
+  subtitleItalic: document.querySelector("#subtitle-italic"),
+  subtitleAddCue: document.querySelector("#subtitle-add-cue"),
+  subtitleUpdateCue: document.querySelector("#subtitle-update-cue"),
+  subtitleSplitCue: document.querySelector("#subtitle-split-cue"),
+  subtitleMergeNext: document.querySelector("#subtitle-merge-next"),
+  subtitleDeleteCue: document.querySelector("#subtitle-delete-cue"),
+  subtitleStageStyle: document.querySelector("#subtitle-stage-style"),
+  subtitleImportFile: document.querySelector("#subtitle-import-file"),
+  subtitleImport: document.querySelector("#subtitle-import"),
+  subtitleDownloadSrt: document.querySelector("#subtitle-download-srt"),
+  subtitleDownloadVtt: document.querySelector("#subtitle-download-vtt"),
+  subtitleFormMessage: document.querySelector("#subtitle-form-message"),
   draftPanel: document.querySelector("#draft-panel"),
   draftState: document.querySelector("#draft-state"),
   draftChanges: document.querySelector("#draft-changes"),
@@ -109,6 +148,7 @@ const state = {
   pixelsPerSecond: Number(ui.zoom.value),
   playheadSeconds: 0,
   selected: null,
+  selectedSubtitle: null,
   animationFrame: null,
   capabilities: {},
   analysis: {},
@@ -1185,6 +1225,134 @@ function existingDraftForClip(clipId, kinds = null) {
   ) || null;
 }
 
+function subtitleStyleFromUi() {
+  return {
+    schema_name: "vistora.subtitle-style",
+    schema_version: "1.0.0",
+    font_family: ui.subtitleFont.value,
+    fallback_families: [ui.subtitleFont.value],
+    font_size: readFiniteInput(ui.subtitleFontSize, "Subtitle font size"),
+    color: ui.subtitleColor.value.trim().toUpperCase(),
+    outline_color: ui.subtitleOutlineColor.value.trim().toUpperCase(),
+    background_color: ui.subtitleBackgroundColor.value.trim().toUpperCase(),
+    outline_width: 2,
+    alignment: ui.subtitleAlignment.value,
+    position: ui.subtitlePosition.value,
+    safe_margin_x: 0.05,
+    safe_margin_y: 0.08,
+    bold: ui.subtitleBold.checked,
+    italic: ui.subtitleItalic.checked,
+  };
+}
+
+function populateSubtitleStyle(style = null) {
+  const value = style || {
+    font_family: "sans",
+    font_size: 42,
+    color: "#FFFFFFFF",
+    outline_color: "#000000FF",
+    background_color: "#00000000",
+    alignment: "center",
+    position: "bottom",
+    bold: false,
+    italic: false,
+  };
+  ui.subtitleFont.value = value.font_family;
+  ui.subtitleFontSize.value = String(value.font_size);
+  ui.subtitleColor.value = value.color;
+  ui.subtitleOutlineColor.value = value.outline_color;
+  ui.subtitleBackgroundColor.value = value.background_color;
+  ui.subtitleAlignment.value = value.alignment;
+  ui.subtitlePosition.value = value.position;
+  ui.subtitleBold.checked = value.bold;
+  ui.subtitleItalic.checked = value.italic;
+}
+
+function showSubtitleEditor(track = null, cue = null) {
+  const enabled = state.capabilities.manual_edit_apply === true;
+  ui.subtitleEditor.hidden = !enabled;
+  ui.manualEditor.hidden = true;
+  ui.manualEditDisabled.hidden = enabled;
+  if (!enabled) return;
+  state.selectedSubtitle = track ? {track, cue} : null;
+  ui.subtitleTrackSelect.replaceChildren();
+  for (const item of state.snapshot.subtitle_tracks || []) {
+    const option = document.createElement("option");
+    option.value = item.track_id;
+    option.textContent = `${item.track_id} · ${item.language}`;
+    option.selected = item.track_id === track?.track_id;
+    ui.subtitleTrackSelect.append(option);
+  }
+  if (track) {
+    ui.subtitleTrackLanguage.value = track.language;
+    ui.subtitleTrackOrder.value = String(track.order_index);
+    ui.subtitleTrackEnabled.checked = track.enabled;
+    ui.subtitleTrackLocked.checked = track.locked;
+  } else {
+    ui.subtitleTrackLanguage.value = "und";
+    ui.subtitleTrackOrder.value = String(state.snapshot.subtitle_track_count || 0);
+    ui.subtitleTrackEnabled.checked = true;
+    ui.subtitleTrackLocked.checked = false;
+  }
+  ui.subtitleCueId.value = cue?.cue_id || newStableId("cue");
+  ui.subtitleStart.value = String(cue?.start_seconds ?? state.playheadSeconds);
+  ui.subtitleEnd.value = String(cue?.end_seconds ?? (state.playheadSeconds + 2));
+  ui.subtitleSplitAt.value = String(
+    cue ? (cue.start_seconds + cue.end_seconds) / 2 : state.playheadSeconds + 1,
+  );
+  ui.subtitleText.value = cue?.text || "";
+  ui.subtitleLanguage.value = cue?.language || track?.language || "und";
+  ui.subtitleSpeaker.value = cue?.speaker || "";
+  populateSubtitleStyle(cue?.style || track?.style);
+  const locked = track?.locked === true;
+  for (const control of [
+    ui.subtitleDeleteTrack,
+    ui.subtitleAddCue,
+    ui.subtitleUpdateCue,
+    ui.subtitleSplitCue,
+    ui.subtitleMergeNext,
+    ui.subtitleDeleteCue,
+    ui.subtitleStageStyle,
+    ui.subtitleImport,
+  ]) control.disabled = locked || (!track && control !== ui.subtitleCreateTrack);
+  ui.subtitleStageTrack.disabled = !track;
+  ui.subtitleCreateTrack.disabled = false;
+  ui.subtitleDownloadSrt.disabled = !track;
+  ui.subtitleDownloadVtt.disabled = !track;
+  ui.subtitleFormMessage.classList.remove("error");
+  ui.subtitleFormMessage.textContent = locked
+    ? "This subtitle track is locked. Stage an unlock first."
+    : "Subtitle changes stay detached until review and explicit confirmation.";
+}
+
+function showSubtitleDetails(track, cue) {
+  ui.clipDetails.replaceChildren(
+    detailRow("Cue ID", cue.cue_id),
+    detailRow("Track", `${track.track_id} · ${track.kind} · ${track.role}`),
+    detailRow("Timeline", `${formatSeconds(cue.start_seconds)} → ${formatSeconds(cue.end_seconds)}`),
+    detailRow("Duration", formatSeconds(cue.duration_seconds)),
+    detailRow("Language", cue.language),
+    detailRow("Speaker", cue.speaker || "Not specified"),
+    detailRow("Text", cue.text),
+    detailRow("State", `${cue.enabled ? "enabled" : "disabled"} · ${track.locked ? "track locked" : "editable draft"}`),
+    detailRow("Style", `${cue.style?.font_family || track.style.font_family} · ${cue.style?.font_size || track.style.font_size}px · ${cue.style?.position || track.style.position}`),
+    detailRow("Preview", "Browser overlay is approximate; burned export is authoritative."),
+  );
+}
+
+function selectSubtitleCue(track, cue, element) {
+  document.querySelectorAll(".clip.selected").forEach((item) => item.classList.remove("selected"));
+  element?.classList.add("selected");
+  state.selected = null;
+  state.selectedSubtitle = {track, cue, element};
+  state.playheadSeconds = cue.start_seconds;
+  updatePlayhead();
+  showSubtitleDetails(track, cue);
+  showSubtitleEditor(track, cue);
+  clearPreview("Subtitle cue selected. Browser text overlay is an approximate preview; final burn-in is export exact.");
+  ui.previewTitle.textContent = cue.text.split("\n")[0];
+}
+
 function showManualEditor(track, clip) {
   const applyEnabled = state.capabilities.manual_edit_apply === true;
   ui.manualEditDisabled.hidden = applyEnabled;
@@ -1192,6 +1360,7 @@ function showManualEditor(track, clip) {
   if (!applyEnabled) {
     return;
   }
+  ui.subtitleEditor.hidden = true;
   const existing = existingDraftForClip(
     clip.clip_id,
     ["update", "remove", "split"],
@@ -1226,6 +1395,25 @@ function showManualEditor(track, clip) {
   ui.editRipple.checked =
     existing?.kind === "update" ? existing.ripple === true : false;
   ui.editScope.value = existing?.edit_scope || "current_clip";
+  const subtitleRipple = existing?.subtitle_ripple || {
+    mode: "none",
+    selected_track_ids: [],
+  };
+  ui.editSubtitleRipple.value = subtitleRipple.mode;
+  ui.editSubtitleTracks.replaceChildren();
+  for (const subtitleTrack of state.snapshot.subtitle_tracks || []) {
+    const option = document.createElement("option");
+    option.value = subtitleTrack.track_id;
+    option.textContent =
+      `${subtitleTrack.track_id} · ${subtitleTrack.language}` +
+      (subtitleTrack.locked ? " · locked" : "");
+    option.selected = subtitleRipple.selected_track_ids.includes(
+      subtitleTrack.track_id,
+    );
+    option.disabled = subtitleTrack.locked;
+    ui.editSubtitleTracks.append(option);
+  }
+  ui.editSubtitleTracks.disabled = subtitleRipple.mode !== "selected_subtitle_tracks";
   ui.editLinkTarget.replaceChildren();
   for (const candidateTrack of state.snapshot.tracks) {
     for (const candidateClip of candidateTrack.clips) {
@@ -1310,6 +1498,22 @@ function showManualEditor(track, clip) {
       : "Changes remain detached until you review and confirm them.";
 }
 
+function selectedSubtitleTrackIds() {
+  return Array.from(ui.editSubtitleTracks.selectedOptions)
+    .map((option) => option.value)
+    .sort();
+}
+
+function subtitleRipplePayload() {
+  const mode = ui.editSubtitleRipple.value;
+  return {
+    schema_version: "1.0.0",
+    mode,
+    selected_track_ids:
+      mode === "selected_subtitle_tracks" ? selectedSubtitleTrackIds() : [],
+  };
+}
+
 function proposalPayload() {
   if (!state.proposalId) {
     initializeProposalIdentity();
@@ -1334,6 +1538,15 @@ function setDraftState(label, kind = "") {
 
 function changedFieldLines(change) {
   if (change.action === "create") {
+    if (change.target_kind === "subtitle_track") {
+      return [`Create ${change.after.kind} track`, change.after.language || "und"];
+    }
+    if (change.target_kind === "subtitle_cue") {
+      return [
+        `${formatSeconds(change.after.start_seconds)} → ${formatSeconds(change.after.end_seconds)}`,
+        change.after.text,
+      ];
+    }
     return [
       `Create at ${formatSeconds(change.after.timeline_start_seconds)}`,
       `${formatSeconds(change.after.trim_in_seconds)} → ` +
@@ -1342,6 +1555,15 @@ function changedFieldLines(change) {
     ];
   }
   if (change.action === "remove") {
+    if (change.target_kind === "subtitle_track") {
+      return [`Delete subtitle track`, `${change.before.cues?.length || 0} cues`];
+    }
+    if (change.target_kind === "subtitle_cue") {
+      return [
+        `${formatSeconds(change.before.start_seconds)} → ${formatSeconds(change.before.end_seconds)}`,
+        change.before.text,
+      ];
+    }
     return [
       `Remove from order ${change.before.order_index}`,
       `${formatSeconds(change.before.timeline_start_seconds)} → ` +
@@ -1363,6 +1585,14 @@ function changedFieldLines(change) {
     mix_gain_db: "Track gain",
     mix_muted: "Track mix mute",
     mix_pan: "Track pan",
+    text: "Text",
+    start_seconds: "Start",
+    end_seconds: "End",
+    language: "Language",
+    speaker: "Speaker",
+    style: "Style",
+    locked: "Locked",
+    enabled: "Enabled",
   };
   const lines = [];
   for (const [field, label] of Object.entries(labels)) {
@@ -1373,6 +1603,8 @@ function changedFieldLines(change) {
         "timeline_start_seconds",
         "audio_fade_in_seconds",
         "audio_fade_out_seconds",
+        "start_seconds",
+        "end_seconds",
       ].includes(field);
       const display = (value) =>
         Array.isArray(value)
@@ -1496,6 +1728,13 @@ function stageEdit(edit) {
     if (value.kind === "volume_envelope") {
       return `envelope:${value.track_id}/${value.clip_id}/${value.point_id || value.action}`;
     }
+    if (value.kind === "subtitle_track") {
+      return `subtitle_track:${value.track_id}`;
+    }
+    if (value.kind === "subtitle_cue") {
+      const target = value.cue_id || value.merged_cue_id || value.operation_id;
+      return `subtitle_cue:${value.track_id}/${value.action}/${target}`;
+    }
     const domain = value.kind === "clip_audio" ? "audio" : "timing";
     return `clip:${domain}:${value.track_id || value.track_key}/${value.clip_id}`;
   };
@@ -1535,7 +1774,11 @@ function renderSummary() {
     ["Duration", timecode(snapshot.duration_seconds)],
     ["Canvas", `${snapshot.width}×${snapshot.height}`],
     ["Frame rate", `${snapshot.fps} fps`],
-    ["Contents", `${snapshot.track_count} tracks / ${snapshot.clip_count} clips`],
+    [
+      "Contents",
+      `${snapshot.track_count} media + ${snapshot.subtitle_track_count || 0} text tracks / ` +
+        `${snapshot.clip_count} clips + ${snapshot.subtitle_cue_count || 0} cues`,
+    ],
   ];
   for (const [label, value] of stats) {
     const wrapper = document.createElement("div");
@@ -1696,6 +1939,7 @@ function selectClip(track, clip, element) {
     .forEach((item) => item.classList.remove("selected"));
   element.classList.add("selected");
   state.selected = { track, clip, element };
+  state.selectedSubtitle = null;
   state.playheadSeconds = Math.max(0, clip.timeline_start_seconds);
   updatePlayhead();
   showDetails(track, clip);
@@ -2035,6 +2279,69 @@ function renderTimeline() {
     ui.trackLanes.append(lane);
   });
 
+  (snapshot.subtitle_tracks || []).forEach((track) => {
+    const label = document.createElement("button");
+    label.type = "button";
+    label.className = "track-label-row subtitle-track-label";
+    const copy = document.createElement("div");
+    copy.className = "track-label-copy";
+    copy.append(
+      textElement("strong", "", track.track_id),
+      textElement(
+        "span",
+        "",
+        `${track.cue_count} cue${track.cue_count === 1 ? "" : "s"} · ` +
+          formatSeconds(track.duration_seconds),
+      ),
+    );
+    const flags = [
+      track.kind,
+      track.language,
+      !track.enabled ? "disabled" : "",
+      track.locked ? "locked" : "",
+    ].filter(Boolean);
+    label.append(copy, textElement("span", "track-kind", flags.join(" · ")));
+    label.addEventListener("click", () => showSubtitleEditor(track, null));
+    ui.trackLabels.append(label);
+
+    const lane = document.createElement("div");
+    lane.className = `track-lane ${track.kind}`;
+    lane.style.width = `${width}px`;
+    lane.style.setProperty("--grid-size", `${state.pixelsPerSecond}px`);
+    lane.dataset.trackKey = track.track_key;
+    lane.dataset.trackId = track.track_id;
+    if (!track.enabled) lane.classList.add("disabled");
+    for (const cue of track.cues) {
+      const block = document.createElement("button");
+      block.type = "button";
+      block.className = "clip subtitle";
+      block.style.left = `${cue.start_seconds * state.pixelsPerSecond}px`;
+      block.style.width = `${Math.max(28, cue.duration_seconds * state.pixelsPerSecond)}px`;
+      block.dataset.clipId = cue.cue_id;
+      block.dataset.trackKey = track.track_key;
+      block.dataset.trackId = track.track_id;
+      block.title = `${cue.cue_id}\n${formatSeconds(cue.start_seconds)} → ${formatSeconds(cue.end_seconds)}\n${cue.text}`;
+      block.setAttribute("aria-label", `${cue.cue_id}, subtitle cue, ${cue.text}`);
+      block.append(
+        textElement("strong", "", cue.text),
+        textElement("span", "", `${formatSeconds(cue.start_seconds)} → ${formatSeconds(cue.end_seconds)}`),
+      );
+      if (
+        state.selectedSubtitle?.track.track_id === track.track_id &&
+        state.selectedSubtitle?.cue?.cue_id === cue.cue_id
+      ) {
+        block.classList.add("selected");
+        state.selectedSubtitle = {track, cue, element: block};
+      }
+      block.addEventListener("click", (event) => {
+        event.stopPropagation();
+        selectSubtitleCue(track, cue, block);
+      });
+      lane.append(block);
+    }
+    ui.trackLanes.append(lane);
+  });
+
   ui.trackLanes.onclick = (event) => {
     const bounds = ui.trackLanes.getBoundingClientRect();
     const seconds =
@@ -2100,10 +2407,61 @@ async function loadAnalysis() {
   }
 }
 
+function rgbaCss(value) {
+  if (!/^#[0-9A-Fa-f]{8}$/.test(value || "")) return "transparent";
+  const red = Number.parseInt(value.slice(1, 3), 16);
+  const green = Number.parseInt(value.slice(3, 5), 16);
+  const blue = Number.parseInt(value.slice(5, 7), 16);
+  const alpha = Number.parseInt(value.slice(7, 9), 16) / 255;
+  return `rgba(${red}, ${green}, ${blue}, ${alpha.toFixed(3)})`;
+}
+
+function updateSubtitleOverlay() {
+  const active = [];
+  for (const track of state.snapshot?.subtitle_tracks || []) {
+    if (!track.enabled) continue;
+    for (const cue of track.cues) {
+      if (
+        cue.enabled &&
+        state.playheadSeconds >= cue.start_seconds &&
+        state.playheadSeconds < cue.end_seconds
+      ) active.push({track, cue});
+    }
+  }
+  if (active.length === 0) {
+    ui.subtitleOverlay.hidden = true;
+    ui.subtitleOverlay.textContent = "";
+    return;
+  }
+  active.sort((left, right) =>
+    left.track.order_index - right.track.order_index ||
+    left.cue.order_index - right.cue.order_index,
+  );
+  const {track, cue} = active.at(-1);
+  const style = cue.style || track.style;
+  ui.subtitleOverlay.textContent = active.map((item) => item.cue.text).join("\n");
+  ui.subtitleOverlay.style.fontFamily =
+    style.font_family === "serif"
+      ? "Georgia, serif"
+      : style.font_family === "monospace"
+        ? "Consolas, monospace"
+        : "Arial, sans-serif";
+  ui.subtitleOverlay.style.fontSize = `${Math.max(12, Math.min(54, style.font_size / 1.5))}px`;
+  ui.subtitleOverlay.style.color = rgbaCss(style.color);
+  ui.subtitleOverlay.style.background = rgbaCss(style.background_color);
+  ui.subtitleOverlay.style.fontWeight = style.bold ? "800" : "700";
+  ui.subtitleOverlay.style.fontStyle = style.italic ? "italic" : "normal";
+  ui.subtitleOverlay.style.textAlign = style.alignment;
+  ui.subtitleOverlay.style.top = style.position === "top" ? "8%" : style.position === "middle" ? "45%" : "auto";
+  ui.subtitleOverlay.style.bottom = style.position === "bottom" ? "8%" : "auto";
+  ui.subtitleOverlay.hidden = false;
+}
+
 function updatePlayhead() {
   ui.timecode.textContent = timecode(state.playheadSeconds);
   const x = Math.max(0, state.playheadSeconds * state.pixelsPerSecond);
   ui.playhead.style.transform = `translateX(${x}px)`;
+  updateSubtitleOverlay();
 }
 
 function syncPlayheadFromMedia() {
@@ -2161,6 +2519,7 @@ async function loadPreview({ preserveSuccess = false } = {}) {
       ? "Click a clip to inspect it. Drafts stay local and do not write until Confirm & apply."
       : "Click a clip to inspect it. Preview interactions only move the local playhead; project data is unchanged.";
     state.selected = null;
+    state.selectedSubtitle = null;
     ui.previewVideo.pause();
     ui.previewVideo.removeAttribute("src");
     ui.previewVideo.load();
@@ -2174,10 +2533,14 @@ async function loadPreview({ preserveSuccess = false } = {}) {
     );
     showOrphanedProvenance();
     ui.manualEditor.hidden = true;
+    ui.subtitleEditor.hidden = true;
     ui.manualEditDisabled.hidden = true;
     resetDraft({ keepSuccess: preserveSuccess });
     renderSummary();
     renderTimeline();
+    if (state.capabilities.manual_edit_apply === true) {
+      showSubtitleEditor(state.snapshot.subtitle_tracks?.[0] || null, null);
+    }
     ui.previewStatus.textContent = state.snapshot.empty
       ? "This snapshot is empty. No media preview is available."
       : "Select a video clip to preview allowlisted local media.";
@@ -2214,6 +2577,256 @@ function readFiniteInput(input, label) {
   }
   return value;
 }
+
+function currentSubtitleTrack() {
+  const trackId = ui.subtitleTrackSelect.value;
+  return (state.snapshot?.subtitle_tracks || []).find(
+    (track) => track.track_id === trackId,
+  ) || null;
+}
+
+function subtitleMessage(message, error = false) {
+  ui.subtitleFormMessage.classList.toggle("error", error);
+  ui.subtitleFormMessage.textContent = message;
+}
+
+function subtitleCuePayload() {
+  const start = readFiniteInput(ui.subtitleStart, "Subtitle start");
+  const end = readFiniteInput(ui.subtitleEnd, "Subtitle end");
+  const text = ui.subtitleText.value.trim();
+  if (end <= start) throw new Error("Subtitle end must be after start.");
+  if (!text) throw new Error("Subtitle text cannot be empty.");
+  return {
+    schema_name: "vistora.subtitle-cue",
+    schema_version: "1.0.0",
+    cue_id: ui.subtitleCueId.value.trim(),
+    start_seconds: start,
+    end_seconds: end,
+    text,
+    language: ui.subtitleLanguage.value.trim() || "und",
+    speaker: ui.subtitleSpeaker.value.trim() || null,
+    enabled: true,
+    settings: [],
+    style: null,
+  };
+}
+
+ui.editSubtitleRipple.addEventListener("change", () => {
+  ui.editSubtitleTracks.disabled =
+    ui.editSubtitleRipple.value !== "selected_subtitle_tracks";
+});
+
+ui.subtitleTrackSelect.addEventListener("change", () => {
+  const track = currentSubtitleTrack();
+  showSubtitleEditor(track, null);
+});
+
+ui.subtitleCreateTrack.addEventListener("click", () => {
+  const trackId = newStableId("subtitle");
+  stageEdit({
+    schema_version: "1.0.0",
+    operation_id: newStableId("manual_subtitle_track"),
+    kind: "subtitle_track",
+    action: "create",
+    track_id: trackId,
+    track_kind: "subtitle",
+    role: "captions",
+    language: ui.subtitleTrackLanguage.value.trim() || "und",
+    order: Number(ui.subtitleTrackOrder.value || 0),
+    enabled: true,
+    locked: false,
+    allow_overlaps: false,
+    style: subtitleStyleFromUi(),
+  });
+  subtitleMessage(`Subtitle track ${trackId} staged. Apply it before adding cues.`);
+});
+
+ui.subtitleStageTrack.addEventListener("click", () => {
+  const track = currentSubtitleTrack();
+  if (!track) return subtitleMessage("Select a subtitle track first.", true);
+  const edit = {
+    schema_version: "1.0.0",
+    operation_id: newStableId("manual_subtitle_track"),
+    kind: "subtitle_track",
+    action: "update",
+    track_id: track.track_id,
+    locked: ui.subtitleTrackLocked.checked,
+  };
+  if (!track.locked) {
+    edit.language = ui.subtitleTrackLanguage.value.trim() || "und";
+    edit.order = Number(ui.subtitleTrackOrder.value);
+    edit.enabled = ui.subtitleTrackEnabled.checked;
+    edit.style = subtitleStyleFromUi();
+  }
+  stageEdit(edit);
+  subtitleMessage("Subtitle track settings staged for review.");
+});
+
+ui.subtitleDeleteTrack.addEventListener("click", () => {
+  const track = currentSubtitleTrack();
+  if (!track) return subtitleMessage("Select a subtitle track first.", true);
+  stageEdit({
+    schema_version: "1.0.0",
+    operation_id: newStableId("manual_subtitle_track"),
+    kind: "subtitle_track",
+    action: "delete",
+    track_id: track.track_id,
+  });
+  subtitleMessage("Subtitle track deletion staged. Cues remain until confirmation.");
+});
+
+ui.subtitleAddCue.addEventListener("click", () => {
+  try {
+    const track = currentSubtitleTrack();
+    if (!track || track.locked) throw new Error("Select an unlocked subtitle track.");
+    stageEdit({
+      schema_version: "1.0.0",
+      operation_id: newStableId("manual_subtitle_cue"),
+      kind: "subtitle_cue",
+      action: "add",
+      track_id: track.track_id,
+      cues: [subtitleCuePayload()],
+    });
+    subtitleMessage("New cue staged; no project write has occurred.");
+  } catch (error) { subtitleMessage(error.message || String(error), true); }
+});
+
+ui.subtitleUpdateCue.addEventListener("click", () => {
+  try {
+    const track = currentSubtitleTrack();
+    const cue = state.selectedSubtitle?.cue;
+    if (!track || !cue || track.locked) throw new Error("Select an editable subtitle cue.");
+    const value = subtitleCuePayload();
+    stageEdit({
+      schema_version: "1.0.0",
+      operation_id: newStableId("manual_subtitle_cue"),
+      kind: "subtitle_cue",
+      action: "update",
+      track_id: track.track_id,
+      cue_id: cue.cue_id,
+      text: value.text,
+      language: value.language,
+      speaker: value.speaker,
+      start_seconds: value.start_seconds,
+      end_seconds: value.end_seconds,
+    });
+    subtitleMessage("Cue text and timing staged for review.");
+  } catch (error) { subtitleMessage(error.message || String(error), true); }
+});
+
+ui.subtitleSplitCue.addEventListener("click", () => {
+  try {
+    const track = currentSubtitleTrack();
+    const cue = state.selectedSubtitle?.cue;
+    if (!track || !cue || track.locked) throw new Error("Select an editable subtitle cue.");
+    stageEdit({
+      schema_version: "1.0.0",
+      operation_id: newStableId("manual_subtitle_cue"),
+      kind: "subtitle_cue",
+      action: "split",
+      track_id: track.track_id,
+      cue_id: cue.cue_id,
+      split_at_seconds: readFiniteInput(ui.subtitleSplitAt, "Subtitle split point"),
+      right_cue_id: newStableId("cue"),
+    });
+    subtitleMessage("Cue split staged for review.");
+  } catch (error) { subtitleMessage(error.message || String(error), true); }
+});
+
+ui.subtitleMergeNext.addEventListener("click", () => {
+  const track = currentSubtitleTrack();
+  const cue = state.selectedSubtitle?.cue;
+  const index = track?.cues.findIndex((item) => item.cue_id === cue?.cue_id) ?? -1;
+  const next = index >= 0 ? track.cues[index + 1] : null;
+  if (!track || !cue || !next || track.locked) {
+    return subtitleMessage("Select an unlocked cue with an adjacent next cue.", true);
+  }
+  stageEdit({
+    schema_version: "1.0.0",
+    operation_id: newStableId("manual_subtitle_cue"),
+    kind: "subtitle_cue",
+    action: "merge",
+    track_id: track.track_id,
+    merge_cue_ids: [cue.cue_id, next.cue_id],
+    merged_cue_id: cue.cue_id,
+  });
+  subtitleMessage("Adjacent cue merge staged for review.");
+});
+
+ui.subtitleDeleteCue.addEventListener("click", () => {
+  const track = currentSubtitleTrack();
+  const cue = state.selectedSubtitle?.cue;
+  if (!track || !cue || track.locked) return subtitleMessage("Select an editable cue.", true);
+  stageEdit({
+    schema_version: "1.0.0",
+    operation_id: newStableId("manual_subtitle_cue"),
+    kind: "subtitle_cue",
+    action: "delete",
+    track_id: track.track_id,
+    cue_id: cue.cue_id,
+  });
+  subtitleMessage("Cue deletion staged for review.");
+});
+
+ui.subtitleStageStyle.addEventListener("click", () => {
+  try {
+    const track = currentSubtitleTrack();
+    const cue = state.selectedSubtitle?.cue;
+    if (!track || !cue || track.locked) throw new Error("Select an editable cue.");
+    stageEdit({
+      schema_version: "1.0.0",
+      operation_id: newStableId("manual_subtitle_cue"),
+      kind: "subtitle_cue",
+      action: "set_style",
+      track_id: track.track_id,
+      cue_id: cue.cue_id,
+      style: subtitleStyleFromUi(),
+    });
+    subtitleMessage("Controlled cue style staged for review.");
+  } catch (error) { subtitleMessage(error.message || String(error), true); }
+});
+
+ui.subtitleImport.addEventListener("click", async () => {
+  const track = currentSubtitleTrack();
+  const file = ui.subtitleImportFile.files?.[0];
+  if (!track || track.locked || !file) {
+    return subtitleMessage("Choose a file and an unlocked subtitle track.", true);
+  }
+  try {
+    const content = await file.text();
+    const extension = file.name.toLowerCase().endsWith(".vtt") ? "vtt" : "srt";
+    const response = await fetch("/api/subtitles/parse", {
+      method: "POST",
+      headers: {Accept: "application/json", "Content-Type": "application/json"},
+      body: JSON.stringify({content, format: extension, language: track.language}),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error?.message || "Subtitle parsing failed.");
+    stageEdit({
+      schema_version: "1.0.0",
+      operation_id: newStableId("manual_subtitle_import"),
+      kind: "subtitle_cue",
+      action: "batch_add",
+      track_id: track.track_id,
+      cues: payload.cues,
+    });
+    subtitleMessage(`${payload.cue_count} parsed cues staged; the source file was not modified.`);
+  } catch (error) { subtitleMessage(error.message || String(error), true); }
+});
+
+function downloadSubtitles(format) {
+  const track = currentSubtitleTrack();
+  if (!track) return subtitleMessage("Select a subtitle track first.", true);
+  const query = new URLSearchParams({format, track_id: track.track_id});
+  const anchor = document.createElement("a");
+  anchor.href = `/api/subtitles/export?${query}`;
+  anchor.download = `vistora-${track.track_id}.${format}`;
+  anchor.click();
+  subtitleMessage(`Prepared a detached ${format.toUpperCase()} download.`);
+}
+
+ui.subtitleDownloadSrt.addEventListener("click", () => downloadSubtitles("srt"));
+ui.subtitleDownloadVtt.addEventListener("click", () => downloadSubtitles("vtt"));
 
 ui.clipEditForm.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -2260,6 +2873,7 @@ ui.clipEditForm.addEventListener("submit", (event) => {
       timeline_start_seconds: timelineStart,
       order_index: orderIndex,
       ripple: ui.editRipple.checked,
+      subtitle_ripple: subtitleRipplePayload(),
       edit_scope: ui.editScope.value,
     });
     ui.editFormMessage.classList.remove("error");
@@ -2289,6 +2903,7 @@ ui.stageRemove.addEventListener("click", () => {
     clip_id: state.selected.clip.clip_id,
     mode: ui.editRemoveMode.value,
     edit_scope: ui.editScope.value,
+    subtitle_ripple: subtitleRipplePayload(),
   });
   ui.manualEditor.hidden = true;
 });

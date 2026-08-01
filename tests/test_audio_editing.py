@@ -272,7 +272,7 @@ def test_registry_gateway_requires_exact_gate_and_applies_analysis_evidence(
     monkeypatch.setattr(timeline_manager, "PROJECT_FILE", str(project))
     monkeypatch.setattr(timeline_manager, "WORKSPACE_DIR", str(project.parent))
     registry = build_production_registry()
-    assert registry.reference.registry_revision == 3
+    assert registry.reference.registry_revision == 4
     assert registry.descriptor("AudioAnalyzeLoudnessSkill").mutation is False
     assert registry.descriptor("AudioSetClipPropertiesSkill").transactionality == "atomic_project_state"
     analysis = LoudnessAnalysisService().analyze(

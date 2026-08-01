@@ -14,7 +14,12 @@ from pydantic import (
     model_validator,
 )
 
-from core.timeline import AppliedLoudnessNormalization, TimelineConfig
+from core.timeline import (
+    AppliedLoudnessNormalization,
+    SubtitleCue,
+    SubtitleStyle,
+    TimelineConfig,
+)
 
 
 CONTRACT_VERSION = "1.0.0"
@@ -344,6 +349,26 @@ class EditingExecutionPlan(ContractModel):
         )
 
 
+class ManualSubtitleRipplePolicy(ContractModel):
+    schema_name: Literal["vistora.manual-subtitle-ripple-policy"] = (
+        "vistora.manual-subtitle-ripple-policy"
+    )
+    mode: Literal["none", "selected_subtitle_tracks", "all_unlocked"] = "none"
+    selected_track_ids: tuple[StableId, ...] = ()
+
+    @model_validator(mode="after")
+    def exact_selection(self) -> "ManualSubtitleRipplePolicy":
+        if self.mode == "selected_subtitle_tracks" and not self.selected_track_ids:
+            raise ValueError("Selected subtitle ripple requires track IDs")
+        if self.mode != "selected_subtitle_tracks" and self.selected_track_ids:
+            raise ValueError("Only selected subtitle ripple accepts track IDs")
+        if len(self.selected_track_ids) != len(set(self.selected_track_ids)):
+            raise ValueError("Subtitle ripple track IDs must be unique")
+        if self.selected_track_ids != tuple(sorted(self.selected_track_ids)):
+            raise ValueError("Subtitle ripple track IDs must use stable ordering")
+        return self
+
+
 class ManualClipUpdate(ContractModel):
     """User-authored timing/order replacement for one existing video clip."""
 
@@ -357,6 +382,9 @@ class ManualClipUpdate(ContractModel):
     timeline_start_seconds: float = Field(ge=0, allow_inf_nan=False)
     order_index: int = Field(ge=0)
     ripple: bool = False
+    subtitle_ripple: ManualSubtitleRipplePolicy = Field(
+        default_factory=ManualSubtitleRipplePolicy
+    )
     edit_scope: Literal["current_clip", "linked_group"] = "current_clip"
 
     @model_validator(mode="after")
@@ -376,6 +404,9 @@ class ManualClipRemove(ContractModel):
     clip_id: str = Field(min_length=1)
     mode: Literal["lift", "ripple"] = "lift"
     edit_scope: Literal["current_clip", "linked_group"] = "current_clip"
+    subtitle_ripple: ManualSubtitleRipplePolicy = Field(
+        default_factory=ManualSubtitleRipplePolicy
+    )
 
 
 class ManualClipSplit(ContractModel):
@@ -528,6 +559,80 @@ class ManualVolumeEnvelope(ContractModel):
         return self
 
 
+class ManualSubtitleTrack(ContractModel):
+    operation_id: StableId
+    kind: Literal["subtitle_track"] = "subtitle_track"
+    action: Literal["create", "update", "delete"]
+    track_id: StableId
+    track_kind: Literal["subtitle", "text"] | None = None
+    role: str | None = Field(default=None, min_length=1, max_length=80)
+    language: str | None = Field(default=None, pattern=r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$")
+    order: int | None = Field(default=None, ge=0)
+    enabled: bool | None = None
+    locked: bool | None = None
+    allow_overlaps: bool | None = None
+    style: SubtitleStyle | None = None
+
+    @model_validator(mode="after")
+    def action_fields(self) -> "ManualSubtitleTrack":
+        values = (self.track_kind, self.role, self.language, self.order, self.enabled, self.locked, self.allow_overlaps, self.style)
+        if self.action == "create" and self.track_kind is None:
+            raise ValueError("Manual subtitle track create requires track_kind")
+        if self.action == "update" and all(value is None for value in values):
+            raise ValueError("Manual subtitle track update requires a property")
+        if self.action == "delete" and any(value is not None for value in values):
+            raise ValueError("Manual subtitle track delete accepts only track_id")
+        return self
+
+
+class ManualSubtitleCue(ContractModel):
+    operation_id: StableId
+    kind: Literal["subtitle_cue"] = "subtitle_cue"
+    action: Literal[
+        "add", "batch_add", "update", "split", "merge", "move", "trim",
+        "ripple_shift", "delete", "set_style",
+    ]
+    track_id: StableId
+    cue_id: StableId | None = None
+    cues: tuple[SubtitleCue, ...] = ()
+    text: str | None = Field(default=None, min_length=1, max_length=4096)
+    language: str | None = Field(default=None, pattern=r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$")
+    speaker: str | None = Field(default=None, min_length=1, max_length=120)
+    enabled: bool | None = None
+    start_seconds: float | None = Field(default=None, ge=0)
+    end_seconds: float | None = Field(default=None, gt=0)
+    split_at_seconds: float | None = Field(default=None, gt=0)
+    right_cue_id: StableId | None = None
+    merge_cue_ids: tuple[StableId, ...] = ()
+    merged_cue_id: StableId | None = None
+    timeline_start_seconds: float | None = Field(default=None, ge=0)
+    anchor_seconds: float | None = Field(default=None, ge=0)
+    delta_seconds: float | None = None
+    style: SubtitleStyle | None = None
+
+    @model_validator(mode="after")
+    def action_fields(self) -> "ManualSubtitleCue":
+        if self.action == "add" and len(self.cues) != 1:
+            raise ValueError("Manual subtitle add requires one cue")
+        if self.action == "batch_add" and not self.cues:
+            raise ValueError("Manual subtitle batch add requires cues")
+        if self.action in {"update", "split", "move", "trim", "delete", "set_style"} and self.cue_id is None:
+            raise ValueError(f"Manual subtitle {self.action} requires cue_id")
+        if self.action == "split" and (self.split_at_seconds is None or self.right_cue_id is None):
+            raise ValueError("Manual subtitle split requires point and output ID")
+        if self.action == "merge" and len(self.merge_cue_ids) < 2:
+            raise ValueError("Manual subtitle merge requires two cues")
+        if self.action == "move" and self.timeline_start_seconds is None:
+            raise ValueError("Manual subtitle move requires timeline start")
+        if self.action == "trim" and (self.start_seconds is None or self.end_seconds is None):
+            raise ValueError("Manual subtitle trim requires a range")
+        if self.action == "ripple_shift" and (self.anchor_seconds is None or self.delta_seconds is None):
+            raise ValueError("Manual subtitle ripple requires anchor and delta")
+        if self.action == "set_style" and self.style is None:
+            raise ValueError("Manual subtitle style edit requires style")
+        return self
+
+
 ManualEditOperation = Annotated[
     ManualClipUpdate
     | ManualClipRemove
@@ -536,7 +641,9 @@ ManualEditOperation = Annotated[
     | ManualTrackManage
     | ManualClipAudio
     | ManualTrackMix
-    | ManualVolumeEnvelope,
+    | ManualVolumeEnvelope
+    | ManualSubtitleTrack
+    | ManualSubtitleCue,
     Field(discriminator="kind"),
 ]
 
@@ -645,7 +752,7 @@ class ManualEditChange(ContractModel):
     """Reviewable before/after diff for one manual edit operation."""
 
     operation_id: StableId
-    target_kind: Literal["clip", "track"] = "clip"
+    target_kind: Literal["clip", "track", "subtitle_track", "subtitle_cue"] = "clip"
     track_key: str = Field(min_length=1)
     track_id: StableId | None = None
     clip_id: str = Field(min_length=1)
@@ -721,7 +828,7 @@ class TimelineProjectDocument(ContractModel):
                 "timeline",
                 "migration_source",
             }
-            legacy_keys = {"width", "height", "fps", "tracks"}
+            legacy_keys = {"width", "height", "fps", "tracks", "subtitle_tracks"}
             if {
                 "project_id",
                 "timeline",

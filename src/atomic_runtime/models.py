@@ -50,6 +50,7 @@ Transactionality = Literal[
     "none",
     "best_effort",
     "atomic_project_state",
+    "atomic_file",
 ]
 RetrySafety = Literal[
     "unsafe",

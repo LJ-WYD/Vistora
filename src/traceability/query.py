@@ -101,19 +101,25 @@ class TraceabilityQuery:
             for track in snapshot.tracks
             for clip in track.clips
         }
-        events: list[TraceEvent] = []
+        all_events: list[TraceEvent] = []
         for trace in document.confirmed_traces:
-            events.extend(
+            all_events.extend(
                 (trace.trace_sequence, trace, relation)
                 for relation in trace.relations
-                if relation.entity.entity_kind == "clip"
             )
         for trace in document.manual_traces:
-            events.extend(
+            all_events.extend(
                 (trace.trace_sequence, trace, relation)
                 for relation in trace.relations
-                if relation.entity.entity_kind == "clip"
             )
+        self._all_events = tuple(sorted(
+            all_events,
+            key=lambda item: (item[0], item[2].relation_sequence),
+        ))
+        events = [
+            event for event in self._all_events
+            if event[2].entity.entity_kind == "clip"
+        ]
         self._events = tuple(
             sorted(
                 events,
@@ -132,6 +138,34 @@ class TraceabilityQuery:
         self._by_clip = {
             key: tuple(value) for key, value in grouped.items()
         }
+
+    def entity_relations(
+        self,
+        entity_kind: str,
+        track_id: str,
+        entity_id: str,
+    ) -> tuple[ConfirmedEntityRelation | ManualEntityRelation, ...]:
+        """Return stable ordered provenance relations for any timeline entity."""
+
+        return tuple(
+            event[2]
+            for event in self._all_events
+            if event[2].entity.entity_kind == entity_kind
+            and event[2].entity.track_id == track_id
+            and event[2].entity.entity_id == entity_id
+        )
+
+    def plan_to_subtitle_entities(
+        self,
+        plan_ref: PlanReference,
+    ) -> tuple[ConfirmedEntityRelation, ...]:
+        return tuple(
+            relation
+            for trace in self.document.confirmed_traces
+            if trace.request.plan_ref == plan_ref
+            for relation in trace.relations
+            if relation.entity.entity_kind in {"subtitle_track", "subtitle_cue"}
+        )
 
     def _summary(
         self,

@@ -29,6 +29,8 @@ from contracts import (
     ManualTrackManage,
     ManualTrackMix,
     ManualVolumeEnvelope,
+    ManualSubtitleCue,
+    ManualSubtitleTrack,
     PlanReference,
 )
 from core.timeline import (
@@ -38,7 +40,11 @@ from core.timeline import (
     TimelineConfig,
     TrackConfig,
     TrackMixSettings,
+    SubtitleCue,
+    SubtitleStyle,
+    SubtitleTrackConfig,
 )
+from subtitles import SubtitleEditCueInput, SubtitleEditEngine, SubtitleEditError, SubtitleManageTrackInput
 from timeline_edit import TimelineEditEngine, TimelineEditError
 from timeline_query import TimelineSnapshot, TimelineSnapshotService
 
@@ -311,7 +317,7 @@ def _review_manual_edit_proposal_legacy(
 
 
 def _timeline_from_snapshot(snapshot: TimelineSnapshot) -> TimelineConfig:
-    return TimelineConfig(
+    timeline = TimelineConfig(
         width=snapshot.width,
         height=snapshot.height,
         fps=snapshot.fps,
@@ -364,6 +370,48 @@ def _timeline_from_snapshot(snapshot: TimelineSnapshot) -> TimelineConfig:
             for track in snapshot.tracks
         },
     )
+    timeline.subtitle_tracks = {
+        track.track_key: SubtitleTrackConfig(
+            track_id=track.track_id,
+            kind=track.kind,
+            role=track.role,
+            language=track.language,
+            order=track.order_index,
+            enabled=track.enabled,
+            locked=track.locked,
+            allow_overlaps=track.allow_overlaps,
+            style=SubtitleStyle.model_validate(track.style.model_dump(mode="python", exclude={"schema_name"})),
+            cues=tuple(
+                SubtitleCue(
+                    cue_id=cue.cue_id,
+                    start_seconds=cue.start_seconds,
+                    end_seconds=cue.end_seconds,
+                    text=cue.text,
+                    language=cue.language,
+                    speaker=cue.speaker,
+                    enabled=cue.enabled,
+                    settings=cue.settings,
+                    style=(SubtitleStyle.model_validate(cue.style.model_dump(mode="python", exclude={"schema_name"})) if cue.style is not None else None),
+                )
+                for cue in track.cues
+            ),
+        )
+        for track in snapshot.subtitle_tracks
+    }
+    return TimelineConfig.model_validate(timeline.model_dump(mode="python"))
+
+
+def _subtitle_states(timeline: TimelineConfig) -> tuple[dict[str, dict[str, Any]], dict[tuple[str, str], dict[str, Any]]]:
+    tracks = {
+        track.track_id: track.model_dump(mode="json", exclude={"cues"})
+        for track in timeline.subtitle_tracks.values()
+    }
+    cues = {
+        (track.track_id, cue.cue_id): cue.model_dump(mode="json")
+        for track in timeline.subtitle_tracks.values()
+        for cue in track.cues
+    }
+    return tracks, cues
 
 
 def _state_map(
@@ -400,6 +448,60 @@ def review_manual_edit_proposal(
         before = _state_map(engine.timeline)
         try:
             outcomes = []
+            if isinstance(edit, ManualSubtitleTrack):
+                before_tracks, _ = _subtitle_states(engine.timeline)
+                subtitle_engine = SubtitleEditEngine(engine.timeline)
+                updated, _ = subtitle_engine.manage_track(SubtitleManageTrackInput(
+                    action=edit.action,
+                    track_id=edit.track_id,
+                    kind=edit.track_kind,
+                    role=edit.role,
+                    language=edit.language,
+                    order=edit.order,
+                    enabled=edit.enabled,
+                    locked=edit.locked,
+                    allow_overlaps=edit.allow_overlaps,
+                    style=edit.style,
+                ))
+                engine.timeline = updated
+                after_tracks, _ = _subtitle_states(updated)
+                old, new = before_tracks.get(edit.track_id), after_tracks.get(edit.track_id)
+                changes.append(ManualEditChange(
+                    operation_id=edit.operation_id,
+                    target_kind="subtitle_track",
+                    track_key=edit.track_id,
+                    track_id=edit.track_id,
+                    clip_id=edit.track_id,
+                    action="create" if old is None else "remove" if new is None else "update",
+                    before=old,
+                    after=new,
+                ))
+                continue
+            if isinstance(edit, ManualSubtitleCue):
+                _, before_cues = _subtitle_states(engine.timeline)
+                subtitle_engine = SubtitleEditEngine(engine.timeline)
+                updated, outcome = subtitle_engine.edit_cues(SubtitleEditCueInput(
+                    **edit.model_dump(mode="python", exclude={"operation_id", "kind"})
+                ))
+                engine.timeline = updated
+                _, after_cues = _subtitle_states(updated)
+                direct = set(outcome.direct_cue_ids)
+                for key in sorted(before_cues.keys() | after_cues.keys()):
+                    old, new = before_cues.get(key), after_cues.get(key)
+                    if old == new:
+                        continue
+                    changes.append(ManualEditChange(
+                        operation_id=edit.operation_id,
+                        target_kind="subtitle_cue",
+                        track_key=key[0],
+                        track_id=key[0],
+                        clip_id=key[1],
+                        action="create" if old is None else "remove" if new is None else "update",
+                        effect_kind="direct" if key[1] in direct else "consequential",
+                        before=old,
+                        after=new,
+                    ))
+                continue
             if isinstance(edit, ManualTrackMix):
                 key, track = engine._resolve_track(edit.track_id)
                 track_before = track.model_dump(mode="json", exclude={"clips"})
@@ -532,6 +634,7 @@ def review_manual_edit_proposal(
                     edit.clip_id,
                     ripple=edit.mode == "ripple",
                     edit_scope=edit.edit_scope,
+                    subtitle_ripple=edit.subtitle_ripple,
                 )
                 outcomes.append(outcome)
             elif isinstance(edit, ManualClipSplit):
@@ -560,6 +663,7 @@ def review_manual_edit_proposal(
                         edit.trim_out_seconds,
                         ripple=edit.ripple,
                         edit_scope=edit.edit_scope,
+                        subtitle_ripple=edit.subtitle_ripple,
                     )
                     outcomes.append(outcome)
                 _, _, target = engine._clip(
@@ -602,7 +706,7 @@ def review_manual_edit_proposal(
                 if edit.order_index != actual_index:
                     moved = target_track.clips.pop(actual_index)
                     target_track.clips.insert(edit.order_index, moved)
-        except TimelineEditError as exc:
+        except (TimelineEditError, SubtitleEditError) as exc:
             raise ManualEditValidationError(str(exc)) from exc
         after = _state_map(updated)
         direct = {

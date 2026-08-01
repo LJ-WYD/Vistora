@@ -278,6 +278,22 @@ h3 {
   display: none;
 }
 
+.subtitle-overlay {
+  position: absolute;
+  z-index: 8;
+  right: 5%;
+  bottom: 8%;
+  left: 5%;
+  padding: 0.35em 0.7em;
+  color: #fff;
+  font-weight: 700;
+  line-height: 1.35;
+  text-align: center;
+  text-shadow: 0 1px 3px #000, 0 0 1px #000;
+  white-space: pre-wrap;
+  pointer-events: none;
+}
+
 .monitor-placeholder {
   display: grid;
   max-width: 420px;
@@ -418,7 +434,8 @@ h3 {
 }
 
 .field-grid input,
-.field-grid select {
+.field-grid select,
+.manual-editor textarea {
   width: 100%;
   min-width: 0;
   padding: 9px 10px;
@@ -429,6 +446,17 @@ h3 {
   background: #0b1017;
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 0.76rem;
+}
+
+.manual-editor textarea {
+  width: 100%;
+  resize: vertical;
+}
+
+.editor-divider {
+  margin: 14px 0;
+  border: 0;
+  border-top: 1px solid var(--line);
 }
 
 .editor-check {
@@ -747,6 +775,21 @@ h3 {
   border-bottom: 1px solid var(--line);
 }
 
+button.track-label-row {
+  width: 100%;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  background: transparent;
+  cursor: pointer;
+}
+
+button.track-label-row:hover,
+button.track-label-row:focus-visible {
+  outline: none;
+  background: rgb(255 218 121 / 8%);
+}
+
 .track-label-copy {
   min-width: 0;
 }
@@ -935,6 +978,33 @@ h3 {
   background:
     linear-gradient(135deg, rgb(255 255 255 / 12%), transparent 54%),
     #246f68;
+}
+
+.clip.subtitle {
+  display: grid;
+  align-content: center;
+  padding: 7px 9px;
+  border-color: rgb(255 218 121 / 52%);
+  color: #fff7d6;
+  background: linear-gradient(135deg, #6b4b18, #9d6d23);
+}
+
+.track-lane.subtitle,
+.track-lane.text {
+  background:
+    repeating-linear-gradient(
+      90deg,
+      transparent 0,
+      transparent calc(var(--grid-size, 88px) - 1px),
+      rgb(255 218 121 / 7%) calc(var(--grid-size, 88px) - 1px),
+      rgb(255 218 121 / 7%) var(--grid-size, 88px)
+    ),
+    rgb(82 57 16 / 15%);
+}
+
+.subtitle-editor[hidden],
+.subtitle-overlay[hidden] {
+  display: none;
 }
 
 .clip.other {
@@ -1313,7 +1383,8 @@ h3 {
   }
 
   .app-shell {
-    width: calc(100% - 20px);
+    width: auto;
+    margin-inline: 10px;
     padding-top: 12px;
   }
 

@@ -297,7 +297,7 @@ The ledger keeps one stable logical identity for the workspace while every revie
 ## Atomic skill registry and execution gateway
 
 `src/atomic_runtime/` is the single production composition root for the
-nineteen existing atomic skills. A fresh immutable `AtomicSkillRegistry` carries an
+twenty-three existing atomic skills. A fresh immutable `AtomicSkillRegistry` carries an
 explicit ID, semantic version, revision, deterministic input-schema digest, and
 full descriptor digest. Every frozen `SkillDescriptor` declares the stable
 skill version, exact input and output schemas, timeline/media/file/external
@@ -365,8 +365,8 @@ legacy compatibility surfaces. Property-only edits can use
 `VideoSetClipPropertiesSkill` without generating a reverse proxy. Existing
 reverse behavior is not expanded or promised transactionally reversible.
 Linked A/V and arbitrary video/audio track foundations are implemented.
-Automatic link inference, linked-source ingest as one operation, unlimited
-track kinds, color, subtitles/transcription, transitions, visual keyframes,
+Automatic link inference, linked-source ingest as one operation, color,
+transcription/ASR, transitions, visual keyframes,
 masks, denoise/de-reverb/source separation, plugin hosting, AI audio
 providers, complex mastering, and effects remain unimplemented.
 
@@ -386,6 +386,38 @@ dB gain, mute, equal-power pan, fades and linear envelope automation, then
 mixes without hidden normalization. A deterministic `0.95` peak limiter and
 48 kHz stereo output policy protect the combined bus. Browser waveforms are a
 read-only approximation; FFmpeg export is authoritative.
+
+## Subtitle and text tracks
+
+Timeline schema `2.0.0` now carries optional first-class `subtitle_tracks`
+without changing existing video/audio track or clip JSON. Frozen subtitle
+track/cue/style contracts use stable IDs, millisecond timing, deterministic
+order, explicit overlap policy, language/speaker metadata, enabled/locked
+state, and a controlled logical-font style. Subtitle cues are never modeled
+as video clips. Legacy projects with no subtitle field load and render as
+before; the read-only snapshot is version `3.0.0` and adds detached subtitle
+track/cue counts and state.
+
+`SubtitleManageTrackSkill`, `SubtitleEditCueSkill`,
+`SubtitleImportSkill`, and `SubtitleExportSidecarSkill` are registered
+production tools. They cover track lifecycle, add/batch-add/update,
+split/merge/move/trim/ripple-shift/delete, controlled styling, read-only
+UTF-8 SRT/WebVTT import, and atomic sidecar export. Locked tracks accept only
+an explicit reviewed unlock. Media ripple defaults to `none`; moving captions
+requires the reviewed `selected_subtitle_tracks` or `all_unlocked` policy, and
+locked subtitle tracks never move.
+
+The loopback timeline shows deterministic subtitle lanes, cue details, a
+current-time approximate overlay, safe SRT/WebVTT parsing/download, and a
+compact draft editor. Browser edits remain detached until structured diff
+and explicit confirmation, then use `VideoApplyManualEditsSkill` through the
+registry/gateway. Final `VideoExportSkill` can burn selected subtitle tracks
+through a generated, escaped ASS file and controlled logical-font fallback;
+temporary files are removed and FFmpeg export is authoritative. No arbitrary
+font path, filter, or script is accepted.
+
+ASR/automatic timing, translation, AI copy editing, karaoke highlighting,
+animated title templates, and general motion graphics remain out of scope.
 
 ## Constrained Editing Agent
 

@@ -16,7 +16,7 @@ from core.timeline import (
     TrackMixSettings,
 )
 
-from .models import TimelineEditOutcome
+from .models import TimelineEditOutcome, TimelineSubtitleRipplePolicy
 
 
 TIME_EPSILON = 1e-6
@@ -331,6 +331,7 @@ class TimelineEditEngine:
         created: Iterable[str] = (),
         modified: Iterable[str] = (),
         deleted: Iterable[str] = (),
+        subtitle_cues: Iterable[str] = (),
         warnings: Iterable[str] = (),
     ) -> tuple[TimelineConfig, TimelineEditOutcome]:
         self._sort_all()
@@ -344,8 +345,49 @@ class TimelineEditEngine:
             created_clip_ids=tuple(dict.fromkeys(created)),
             modified_clip_ids=tuple(sorted(set(modified))),
             deleted_clip_ids=tuple(sorted(set(deleted))),
+            consequential_subtitle_cue_ids=tuple(sorted(set(subtitle_cues))),
             warnings=tuple(warnings),
         )
+
+    def _apply_subtitle_ripple(
+        self,
+        *,
+        anchor_seconds: float,
+        delta_seconds: float,
+        policy: TimelineSubtitleRipplePolicy,
+    ) -> tuple[str, ...]:
+        if policy.mode == "none" or abs(delta_seconds) <= TIME_EPSILON:
+            return ()
+        selected = set(policy.selected_track_ids)
+        known = {track.track_id for track in self.timeline.subtitle_tracks.values()}
+        if selected - known:
+            raise TimelineEditError("Subtitle ripple references an unknown track")
+        changed: list[str] = []
+        next_tracks = dict(self.timeline.subtitle_tracks)
+        for key, track in sorted(
+            self.timeline.subtitle_tracks.items(),
+            key=lambda item: (item[1].order, item[1].track_id),
+        ):
+            if policy.mode == "selected_subtitle_tracks" and track.track_id not in selected:
+                continue
+            if track.locked:
+                if policy.mode == "selected_subtitle_tracks" and track.track_id in selected:
+                    raise TimelineEditError(f"Subtitle ripple selected locked track {track.track_id!r}")
+                continue
+            cues = []
+            for cue in track.cues:
+                if cue.start_seconds >= anchor_seconds - TIME_EPSILON:
+                    start = cue.start_seconds + delta_seconds
+                    end = cue.end_seconds + delta_seconds
+                    if start < -TIME_EPSILON:
+                        raise TimelineEditError("Subtitle ripple would move a cue before zero")
+                    cues.append(cue.model_copy(update={"start_seconds": max(0.0, start), "end_seconds": end}))
+                    changed.append(cue.cue_id)
+                else:
+                    cues.append(cue)
+            next_tracks[key] = track.model_copy(update={"cues": tuple(cues)})
+        self.timeline.subtitle_tracks = next_tracks
+        return tuple(sorted(set(changed)))
 
     def split(
         self,
@@ -433,12 +475,14 @@ class TimelineEditEngine:
         *,
         ripple: bool,
         edit_scope: str = "current_clip",
+        subtitle_ripple: TimelineSubtitleRipplePolicy | None = None,
     ):
         members = self._linked_members(
             track_reference, clip_id, edit_scope
         )
         target = next(item for item in members if item[2].id == clip_id)
         target_clip = target[2]
+        subtitle_anchor = clip_end(target_clip)
         if trim_out <= trim_in + TIME_EPSILON:
             raise TimelineEditError("Trim must retain positive source duration")
         if (
@@ -499,6 +543,11 @@ class TimelineEditEngine:
                         )
                         modified.append(other.id)
                         consequential.append(other.id)
+        subtitle_cues = self._apply_subtitle_ripple(
+            anchor_seconds=subtitle_anchor,
+            delta_seconds=-(left_delta_seconds + right_delta_seconds),
+            policy=subtitle_ripple or TimelineSubtitleRipplePolicy(),
+        ) if ripple else ()
         return self._finish(
             operation="trim",
             primary_key=target[0],
@@ -506,6 +555,7 @@ class TimelineEditEngine:
             direct=(clip_id,),
             consequential=consequential,
             modified=modified,
+            subtitle_cues=subtitle_cues,
         )
 
     def move(
@@ -516,6 +566,7 @@ class TimelineEditEngine:
         *,
         ripple: bool,
         edit_scope: str = "current_clip",
+        subtitle_ripple: TimelineSubtitleRipplePolicy | None = None,
     ):
         members = self._linked_members(
             track_reference, clip_id, edit_scope
@@ -539,7 +590,20 @@ class TimelineEditEngine:
         consequential = [
             clip.id for _, _, clip in members if clip.id != clip_id
         ]
+        subtitle_cues: tuple[str, ...] = ()
         if ripple:
+            policy = subtitle_ripple or TimelineSubtitleRipplePolicy()
+            changed_subtitles = list(self._apply_subtitle_ripple(
+                anchor_seconds=clip_end(target_clip),
+                delta_seconds=-clip_duration(target_clip),
+                policy=policy,
+            ))
+            changed_subtitles.extend(self._apply_subtitle_ripple(
+                anchor_seconds=timeline_start,
+                delta_seconds=clip_duration(target_clip),
+                policy=policy,
+            ))
+            subtitle_cues = tuple(sorted(set(changed_subtitles)))
             for _, track, clip in members:
                 duration = clip_duration(clip)
                 old_end = clip_end(clip)
@@ -570,6 +634,7 @@ class TimelineEditEngine:
             direct=(clip_id,),
             consequential=consequential,
             modified=modified,
+            subtitle_cues=subtitle_cues,
             warnings=(
                 ("Non-ripple move may intentionally overlap clips.",)
                 if not ripple else ()
@@ -583,6 +648,7 @@ class TimelineEditEngine:
         *,
         ripple: bool,
         edit_scope: str = "current_clip",
+        subtitle_ripple: TimelineSubtitleRipplePolicy | None = None,
     ):
         members = self._linked_members(
             track_reference, clip_id, edit_scope
@@ -592,6 +658,13 @@ class TimelineEditEngine:
         deleted: list[str] = []
         modified: list[str] = []
         consequential: list[str] = []
+        subtitle_cues: tuple[str, ...] = ()
+        if ripple:
+            subtitle_cues = self._apply_subtitle_ripple(
+                anchor_seconds=clip_end(target[2]),
+                delta_seconds=-clip_duration(target[2]),
+                policy=subtitle_ripple or TimelineSubtitleRipplePolicy(),
+            )
         for _, track, clip in members:
             end = clip_end(clip)
             duration = clip_duration(clip)
@@ -618,6 +691,7 @@ class TimelineEditEngine:
             consequential=consequential,
             modified=modified,
             deleted=deleted,
+            subtitle_cues=subtitle_cues,
         )
 
     def insert_overwrite(
@@ -627,6 +701,7 @@ class TimelineEditEngine:
         *,
         mode: str,
         edit_scope: str = "current_clip",
+        subtitle_ripple: TimelineSubtitleRipplePolicy | None = None,
     ):
         key, track = self._resolve_track(track_reference)
         if edit_scope == "linked_group" and clip.link_group_id is None:
@@ -648,6 +723,11 @@ class TimelineEditEngine:
         deleted: list[str] = []
         consequential: list[str] = []
         if mode == "insert":
+            subtitle_cues = self._apply_subtitle_ripple(
+                anchor_seconds=start,
+                delta_seconds=duration,
+                policy=subtitle_ripple or TimelineSubtitleRipplePolicy(),
+            )
             replacements: list[ClipConfig] = []
             for other in list(track.clips):
                 if other.timeline_start >= start - TIME_EPSILON:
@@ -678,6 +758,7 @@ class TimelineEditEngine:
                     consequential.extend((other.id, right.id))
             track.clips.extend(replacements)
         elif mode == "overwrite":
+            subtitle_cues = ()
             replacements: list[ClipConfig] = []
             for other in list(track.clips):
                 other_start, other_end = other.timeline_start, clip_end(other)
@@ -726,6 +807,7 @@ class TimelineEditEngine:
             created=created,
             modified=modified,
             deleted=deleted,
+            subtitle_cues=subtitle_cues,
             warnings=(
                 (
                     "Linked insertion joins an explicit group; a separate "

@@ -19,12 +19,15 @@ from contracts import (
     ManualTrackManage,
     ManualTrackMix,
     ManualVolumeEnvelope,
+    ManualSubtitleCue,
+    ManualSubtitleTrack,
 )
 from core import timeline_manager
 from core.timeline import TimelineConfig
 from timeline_query import TimelineSnapshotService
 from timeline_edit import TimelineEditEngine, TimelineEditTransaction
 from traceability.recording import ManualTraceRecorder
+from subtitles import SubtitleEditCueInput, SubtitleEditEngine, SubtitleManageTrackInput
 
 from .base import BaseSkill
 
@@ -177,6 +180,29 @@ class VideoApplyManualEditsSkill(BaseSkill):
 
         engine = TimelineEditEngine(current)
         for edit in proposal.edits:
+            if isinstance(edit, ManualSubtitleTrack):
+                subtitle_engine = SubtitleEditEngine(engine.timeline)
+                updated, _ = subtitle_engine.manage_track(SubtitleManageTrackInput(
+                    action=edit.action,
+                    track_id=edit.track_id,
+                    kind=edit.track_kind,
+                    role=edit.role,
+                    language=edit.language,
+                    order=edit.order,
+                    enabled=edit.enabled,
+                    locked=edit.locked,
+                    allow_overlaps=edit.allow_overlaps,
+                    style=edit.style,
+                ))
+                engine.timeline = updated
+                continue
+            if isinstance(edit, ManualSubtitleCue):
+                subtitle_engine = SubtitleEditEngine(engine.timeline)
+                updated, _ = subtitle_engine.edit_cues(SubtitleEditCueInput(
+                    **edit.model_dump(mode="python", exclude={"operation_id", "kind"})
+                ))
+                engine.timeline = updated
+                continue
             if isinstance(edit, ManualTrackMix):
                 engine.set_track_mix(
                     edit.track_id,
@@ -275,6 +301,7 @@ class VideoApplyManualEditsSkill(BaseSkill):
                     edit.clip_id,
                     ripple=edit.mode == "ripple",
                     edit_scope=edit.edit_scope,
+                    subtitle_ripple=edit.subtitle_ripple,
                 )
             elif isinstance(edit, ManualClipSplit):
                 engine.split(
@@ -301,6 +328,7 @@ class VideoApplyManualEditsSkill(BaseSkill):
                         edit.trim_out_seconds,
                         ripple=edit.ripple,
                         edit_scope=edit.edit_scope,
+                        subtitle_ripple=edit.subtitle_ripple,
                     )
                     changed = True
                 _, _, target = engine._clip(

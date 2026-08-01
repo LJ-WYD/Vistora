@@ -12,7 +12,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from media_analysis import (
     MediaAnalysisCollection,
@@ -40,6 +40,8 @@ from product_entry import (
 )
 from timeline_query import TimelineSnapshot, TimelineSnapshotService
 from traceability.store import TraceabilityStore
+from core.timeline import SubtitleCue, SubtitleStyle, SubtitleTrackConfig
+from subtitles import SubtitleCodecError, export_subtitles, parse_subtitles
 from workflow import (
     WorkflowApplicationError,
     WorkflowApplicationService,
@@ -277,6 +279,8 @@ class PreviewApplication:
                 "manual_edit_apply": self.manual_edits is not None,
                 "confirmed_manual_dispatch": self.manual_edits is not None,
                 "audio_loudness_analysis": self.manual_edits is not None,
+                "subtitle_parse": True,
+                "subtitle_download": True,
                 "plan_review": (
                     self.plan_review_enabled
                 ),
@@ -296,6 +300,91 @@ class PreviewApplication:
                 "production_entry": self.product_entry is not None,
             },
         }
+
+    @staticmethod
+    def parse_subtitle_payload(payload: dict[str, Any]) -> dict[str, Any]:
+        """Parse user-selected subtitle text without reading or writing files."""
+
+        content = payload.get("content")
+        format_name = payload.get("format", "auto")
+        language = payload.get("language", "und")
+        if not isinstance(content, str) or not content.strip():
+            raise SubtitleCodecError("Subtitle content is required")
+        if len(content.encode("utf-8")) > 128 * 1024:
+            raise SubtitleCodecError("Subtitle content exceeds 128 KiB")
+        if format_name not in {"auto", "srt", "vtt"}:
+            raise SubtitleCodecError("Subtitle format must be auto, srt, or vtt")
+        if not isinstance(language, str):
+            raise SubtitleCodecError("Subtitle language must be text")
+        cues = parse_subtitles(content, format_name, language=language)
+        return {
+            "schema_name": "vistora.subtitle-parse-result",
+            "schema_version": "1.0.0",
+            "format": format_name,
+            "cue_count": len(cues),
+            "cues": [cue.model_dump(mode="json") for cue in cues],
+            "persisted": False,
+        }
+
+    def subtitle_export(
+        self,
+        *,
+        format_name: str,
+        track_ids: tuple[str, ...],
+    ) -> str:
+        """Create a browser download from detached snapshot data only."""
+
+        if format_name not in {"srt", "vtt"}:
+            raise SubtitleCodecError("Subtitle format must be srt or vtt")
+        snapshot = self.snapshot()
+        selected = set(track_ids)
+        if len(selected) != len(track_ids):
+            raise SubtitleCodecError("Subtitle track IDs must be unique")
+        known = {track.track_id for track in snapshot.subtitle_tracks}
+        if selected - known:
+            raise SubtitleCodecError("Requested subtitle track is unavailable")
+        tracks: list[SubtitleTrackConfig] = []
+        for track in snapshot.subtitle_tracks:
+            if selected and track.track_id not in selected:
+                continue
+            style = SubtitleStyle(**track.style.model_dump(
+                mode="python",
+                exclude={"schema_name", "schema_version"},
+            ))
+            cues = tuple(
+                SubtitleCue(
+                    cue_id=cue.cue_id,
+                    start_seconds=cue.start_seconds,
+                    end_seconds=cue.end_seconds,
+                    text=cue.text,
+                    language=cue.language,
+                    speaker=cue.speaker,
+                    enabled=cue.enabled,
+                    settings=cue.settings,
+                    style=(
+                        None
+                        if cue.style is None
+                        else SubtitleStyle(**cue.style.model_dump(
+                            mode="python",
+                            exclude={"schema_name", "schema_version"},
+                        ))
+                    ),
+                )
+                for cue in track.cues
+            )
+            tracks.append(SubtitleTrackConfig(
+                track_id=track.track_id,
+                kind=track.kind,
+                role=track.role,
+                language=track.language,
+                order=track.order_index,
+                enabled=track.enabled,
+                locked=track.locked,
+                allow_overlaps=track.allow_overlaps,
+                style=style,
+                cues=cues,
+            ))
+        return export_subtitles(tuple(tracks), format_name)
 
     def product_payload(self) -> dict[str, Any]:
         """Return the path-safe product state plus an ephemeral CSRF token."""
@@ -678,6 +767,41 @@ def _handler_class(
                 return
             self._send_json(HTTPStatus.OK, payload, head_only=head_only)
 
+        def _serve_subtitle_export(self, head_only: bool) -> None:
+            query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+            format_name = query.get("format", ["srt"])[0]
+            track_ids = tuple(sorted(query.get("track_id", [])))
+            try:
+                content = application.subtitle_export(
+                    format_name=format_name,
+                    track_ids=track_ids,
+                ).encode("utf-8")
+            except SubtitleCodecError as exc:
+                self._send_error_json(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    "subtitle_export_rejected",
+                    str(exc),
+                    head_only=head_only,
+                )
+                return
+            self.send_response(HTTPStatus.OK)
+            self._security_headers()
+            self.send_header("Cache-Control", "no-store")
+            self.send_header(
+                "Content-Type",
+                "text/vtt; charset=utf-8"
+                if format_name == "vtt"
+                else "application/x-subrip; charset=utf-8",
+            )
+            self.send_header(
+                "Content-Disposition",
+                f'attachment; filename="vistora-subtitles.{format_name}"',
+            )
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            if not head_only:
+                self.wfile.write(content)
+
         def _serve_analysis(self, head_only: bool) -> None:
             try:
                 payload = application.analysis_payload()
@@ -862,6 +986,9 @@ def _handler_class(
             if route == "/api/snapshot":
                 self._serve_snapshot(head_only)
                 return
+            if route == "/api/subtitles/export":
+                self._serve_subtitle_export(head_only)
+                return
             if route == "/api/analysis":
                 self._serve_analysis(head_only)
                 return
@@ -948,6 +1075,18 @@ def _handler_class(
         def _manual_edit(self, route: str) -> None:
             payload = self._read_json_body()
             if payload is None:
+                return
+            if route == "/api/subtitles/parse":
+                try:
+                    result = application.parse_subtitle_payload(payload)
+                except (SubtitleCodecError, TypeError, ValueError) as exc:
+                    self._send_error_json(
+                        HTTPStatus.UNPROCESSABLE_ENTITY,
+                        "subtitle_parse_rejected",
+                        str(exc),
+                    )
+                    return
+                self._send_json(HTTPStatus.OK, result)
                 return
             if application.manual_edits is None:
                 self._send_error_json(
@@ -1118,6 +1257,7 @@ def _handler_class(
                 "/api/manual-edits/validate",
                 "/api/manual-edits/apply",
                 "/api/audio/loudness/analyze",
+                "/api/subtitles/parse",
             }:
                 self._manual_edit(route)
                 return

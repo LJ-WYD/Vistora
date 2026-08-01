@@ -7,8 +7,8 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-TIMELINE_SNAPSHOT_VERSION = "2.0.0"
-SnapshotVersion = Literal["2.0.0"]
+TIMELINE_SNAPSHOT_VERSION = "3.0.0"
+SnapshotVersion = Literal["2.0.0", "3.0.0"]
 SnapshotId = Annotated[
     str,
     Field(
@@ -155,6 +155,61 @@ class TrackSnapshot(ReadModel):
     duration_seconds: FiniteFloat = Field(ge=0)
 
 
+class SubtitleStyleSnapshot(ReadModel):
+    schema_name: Literal["vistora.subtitle-style-snapshot"] = (
+        "vistora.subtitle-style-snapshot"
+    )
+    font_family: Literal["sans", "serif", "monospace"]
+    fallback_families: tuple[Literal["sans", "serif", "monospace"], ...]
+    font_size: int = Field(ge=8, le=200)
+    color: str
+    outline_color: str
+    background_color: str
+    outline_width: FiniteFloat
+    alignment: Literal["left", "center", "right"]
+    position: Literal["top", "middle", "bottom"]
+    safe_margin_x: FiniteFloat
+    safe_margin_y: FiniteFloat
+    bold: bool
+    italic: bool
+
+
+class SubtitleCueSnapshot(ReadModel):
+    schema_name: Literal["vistora.subtitle-cue-snapshot"] = (
+        "vistora.subtitle-cue-snapshot"
+    )
+    cue_id: SnapshotId
+    order_index: int = Field(ge=0)
+    start_seconds: FiniteFloat = Field(ge=0)
+    end_seconds: FiniteFloat = Field(gt=0)
+    duration_seconds: FiniteFloat = Field(gt=0)
+    text: str = Field(min_length=1)
+    language: str = Field(min_length=2)
+    speaker: str | None = None
+    enabled: bool
+    settings: tuple[str, ...] = ()
+    style: SubtitleStyleSnapshot | None = None
+
+
+class SubtitleTrackSnapshot(ReadModel):
+    schema_name: Literal["vistora.subtitle-track-snapshot"] = (
+        "vistora.subtitle-track-snapshot"
+    )
+    track_key: str = Field(min_length=1)
+    track_id: SnapshotId
+    kind: Literal["subtitle", "text"]
+    role: str = Field(min_length=1)
+    language: str = Field(min_length=2)
+    order_index: int = Field(ge=0)
+    enabled: bool
+    locked: bool
+    allow_overlaps: bool
+    style: SubtitleStyleSnapshot
+    cues: tuple[SubtitleCueSnapshot, ...] = ()
+    cue_count: int = Field(ge=0)
+    duration_seconds: FiniteFloat = Field(ge=0)
+
+
 class TimelineSnapshotReference(ReadModel):
     """Optimistic read guard for a specific project revision."""
 
@@ -196,7 +251,10 @@ class TimelineSnapshot(ReadModel):
     height: int = Field(gt=0)
     fps: int = Field(gt=0)
     tracks: tuple[TrackSnapshot, ...] = ()
+    subtitle_tracks: tuple[SubtitleTrackSnapshot, ...] = ()
     track_count: int = Field(ge=0)
+    subtitle_track_count: int = Field(ge=0)
+    subtitle_cue_count: int = Field(ge=0)
     clip_count: int = Field(ge=0)
     video_clip_count: int = Field(ge=0)
     audio_clip_count: int = Field(ge=0)

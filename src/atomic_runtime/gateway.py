@@ -128,7 +128,7 @@ class AtomicExecutionGateway:
                     recovery_required=(
                         descriptor.mutation
                         and descriptor.transactionality
-                        not in {"atomic_project_state"}
+                        not in {"atomic_project_state", "atomic_file"}
                     ),
                 )
             except Exception:
@@ -144,7 +144,7 @@ class AtomicExecutionGateway:
                     recovery_required=(
                         descriptor.mutation
                         and descriptor.transactionality
-                        not in {"atomic_project_state"}
+                        not in {"atomic_project_state", "atomic_file"}
                     ),
                 )
             self._replays[context.idempotency_key] = (

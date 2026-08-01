@@ -326,8 +326,35 @@ class PreviewTrackMixState(ReviewModel):
     pan: FiniteFloat
 
 
+class PreviewSubtitleCueState(ReviewModel):
+    cue_id: StableId
+    track_id: StableId
+    start_seconds: FiniteFloat = Field(ge=0)
+    end_seconds: FiniteFloat = Field(gt=0)
+    text: str = Field(min_length=1)
+    language: str = Field(min_length=2)
+    speaker: str | None = None
+    enabled: bool
+    style: dict[str, Any] | None = None
+
+
+class PreviewSubtitleTrackState(ReviewModel):
+    track_id: StableId
+    kind: Literal["subtitle", "text"]
+    role: str
+    language: str
+    order: int = Field(ge=0)
+    enabled: bool
+    locked: bool
+    allow_overlaps: bool
+    style: dict[str, Any]
+    cue_count: int = Field(ge=0)
+
+
 class ProposedEntityReference(ReviewModel):
-    entity_kind: Literal["clip", "track", "project", "media_output", "none"]
+    entity_kind: Literal[
+        "clip", "track", "subtitle_track", "subtitle_cue", "project", "media_output", "none"
+    ]
     entity_id: str = Field(min_length=1)
     track_key: str | None = None
     track_id: str | None = None
@@ -351,6 +378,12 @@ class PlanChange(ReviewModel):
         "track_mix",
         "audio_analysis",
         "track_management",
+        "subtitle_track",
+        "subtitle_cue_addition",
+        "subtitle_cue_removal",
+        "subtitle_cue_change",
+        "subtitle_import",
+        "subtitle_export",
         "project_settings",
         "export_only",
         "media_output",
@@ -370,6 +403,10 @@ class PlanChange(ReviewModel):
     after_project: PreviewProjectSettings | None = None
     before_track_mix: PreviewTrackMixState | None = None
     after_track_mix: PreviewTrackMixState | None = None
+    before_subtitle_cue: PreviewSubtitleCueState | None = None
+    after_subtitle_cue: PreviewSubtitleCueState | None = None
+    before_subtitle_track: PreviewSubtitleTrackState | None = None
+    after_subtitle_track: PreviewSubtitleTrackState | None = None
     reason: str = Field(min_length=1)
     evidence: tuple[EvidenceSummary, ...] = ()
     current_provenance: ClipProvenanceSummary | None = None
@@ -424,6 +461,24 @@ class PlanChange(ReviewModel):
             raise ValueError(
                 "Only project settings changes carry project before/after"
             )
+        if self.category == "subtitle_cue_addition" and (
+            self.entity.entity_kind != "subtitle_cue"
+            or self.before_subtitle_cue is not None
+            or self.after_subtitle_cue is None
+        ):
+            raise ValueError("Subtitle cue addition requires only an after state")
+        if self.category == "subtitle_cue_removal" and (
+            self.entity.entity_kind != "subtitle_cue"
+            or self.before_subtitle_cue is None
+            or self.after_subtitle_cue is not None
+        ):
+            raise ValueError("Subtitle cue removal requires only a before state")
+        if self.category == "subtitle_cue_change" and (
+            self.entity.entity_kind != "subtitle_cue"
+            or self.before_subtitle_cue is None
+            or self.after_subtitle_cue is None
+        ):
+            raise ValueError("Subtitle cue change requires before and after states")
         return self
 
 
@@ -446,6 +501,8 @@ class PlanDiffSummary(ReviewModel):
     blockers: int = Field(ge=0)
     before_clip_count: int = Field(ge=0)
     after_clip_count: int = Field(ge=0)
+    before_subtitle_cue_count: int = Field(default=0, ge=0)
+    after_subtitle_cue_count: int = Field(default=0, ge=0)
     before_duration_seconds: FiniteFloat = Field(ge=0)
     after_duration_seconds: FiniteFloat = Field(ge=0)
     before_project: PreviewProjectSettings

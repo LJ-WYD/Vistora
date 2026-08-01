@@ -25,6 +25,26 @@ class TimelineEditModel(BaseModel):
     schema_version: Literal["1.0.0", "2.0.0"] = "2.0.0"
 
 
+class TimelineSubtitleRipplePolicy(TimelineEditModel):
+    schema_name: Literal["vistora.timeline-subtitle-ripple-policy"] = (
+        "vistora.timeline-subtitle-ripple-policy"
+    )
+    mode: Literal["none", "selected_subtitle_tracks", "all_unlocked"] = "none"
+    selected_track_ids: tuple[StableTrackId, ...] = ()
+
+    @model_validator(mode="after")
+    def exact_selection(self) -> "TimelineSubtitleRipplePolicy":
+        if self.mode == "selected_subtitle_tracks" and not self.selected_track_ids:
+            raise ValueError("Selected subtitle ripple requires track IDs")
+        if self.mode != "selected_subtitle_tracks" and self.selected_track_ids:
+            raise ValueError("Only selected subtitle ripple accepts track IDs")
+        if len(self.selected_track_ids) != len(set(self.selected_track_ids)):
+            raise ValueError("Subtitle ripple track IDs must be unique")
+        if self.selected_track_ids != tuple(sorted(self.selected_track_ids)):
+            raise ValueError("Subtitle ripple track IDs must use stable ordering")
+        return self
+
+
 class TrackTargetModel(TimelineEditModel):
     """New callers use track_id; track_key remains a legacy compatibility key."""
 
@@ -55,6 +75,9 @@ class TrimClipInput(TrackTargetModel):
     trim_out: float = Field(gt=0, allow_inf_nan=False)
     ripple: bool = False
     edit_scope: EditScope = "current_clip"
+    subtitle_ripple: TimelineSubtitleRipplePolicy = Field(
+        default_factory=TimelineSubtitleRipplePolicy
+    )
 
     @model_validator(mode="after")
     def forward_range(self) -> TrimClipInput:
@@ -68,12 +91,18 @@ class MoveClipInput(TrackTargetModel):
     timeline_start: float = Field(ge=0, allow_inf_nan=False)
     ripple: bool = False
     edit_scope: EditScope = "current_clip"
+    subtitle_ripple: TimelineSubtitleRipplePolicy = Field(
+        default_factory=TimelineSubtitleRipplePolicy
+    )
 
 
 class RemoveClipInput(TrackTargetModel):
     clip_id: StableClipId
     mode: Literal["lift", "ripple"] = "lift"
     edit_scope: EditScope = "current_clip"
+    subtitle_ripple: TimelineSubtitleRipplePolicy = Field(
+        default_factory=TimelineSubtitleRipplePolicy
+    )
 
 
 class InsertOverwriteClipInput(TrackTargetModel):
@@ -89,6 +118,9 @@ class InsertOverwriteClipInput(TrackTargetModel):
     rotate: Literal[0, 90, 180, 270] = 0
     link_group_id: StableClipId | None = None
     edit_scope: EditScope = "current_clip"
+    subtitle_ripple: TimelineSubtitleRipplePolicy = Field(
+        default_factory=TimelineSubtitleRipplePolicy
+    )
 
     @model_validator(mode="after")
     def inserted_link_scope(self) -> "InsertOverwriteClipInput":
@@ -286,4 +318,5 @@ class TimelineEditOutcome(TimelineEditModel):
     created_clip_ids: tuple[str, ...] = ()
     modified_clip_ids: tuple[str, ...] = ()
     deleted_clip_ids: tuple[str, ...] = ()
+    consequential_subtitle_cue_ids: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()

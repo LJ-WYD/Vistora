@@ -446,11 +446,13 @@ Rollback is a second workflow, never an automatic failure handler. The service r
 
 ### Timeline state and rendering
 
-`src/core/timeline.py` defines three Pydantic models:
+`src/core/timeline.py` defines the compatible media timeline models plus a
+separate first-class subtitle domain:
 
 - `ClipConfig`: stable clip ID, source, trim, timeline placement, optional explicit link-group ID, legacy audio flags/volume, frozen versioned clip-audio settings, speed, reverse, and rotation properties.
 - `TrackConfig`: stable track ID, video/audio kind, role, unique order, enabled/muted/locked state, frozen versioned mix settings, and an ordered list of clips.
-- `TimelineConfig`: schema version `2.0.0`, output dimensions, frame rate, and an arbitrary mapping of video/audio tracks.
+- `SubtitleTrackConfig` / `SubtitleCue` / `SubtitleStyle`: frozen versioned text lanes, stable timed cues, and safe logical-font styling, separate from media clips.
+- `TimelineConfig`: schema version `2.0.0`, output dimensions, frame rate, an arbitrary mapping of video/audio tracks, and an optional mapping of subtitle/text tracks.
 
 `TimelineManager` persists one active timeline at `.workspace/current_timeline.json`. It creates default primary video and audio tracks, deterministically migrates legacy fixed-track JSON, loads and validates schema-v2 JSON, saves the full model, and deletes the file when reset. Native v2 documents reject duplicate track IDs/order and clip IDs. It has no first-class project identifier or canonical project-store revision; guarded workflow transactions/checkpoints remain separate.
 
@@ -460,20 +462,22 @@ Rollback is a second workflow, never an automatic failure handler. The service r
 
 `src/timeline_query/` is the stable library boundary for future timeline/player visualization. `TimelineSnapshotService.snapshot` accepts a `TimelineConfig`, legacy timeline dictionary, or `TimelineProjectDocument`; `snapshot_current` delegates only to `TimelineManager.get_current_timeline`. Neither method saves, resets, renders, executes a skill, probes media, or writes files.
 
-The returned `vistora.timeline-snapshot` schema is version `2.0.0`. Its frozen, recursively detached read models expose:
+The returned `vistora.timeline-snapshot` schema is version `3.0.0`. Its frozen, recursively detached read models expose:
 
 - snapshot, project, revision, source-schema, migration, and timeline-digest identity;
 - output width, height, and frame rate;
 - every configured track with its mapping key, stable ID, video/audio kind, role, unique order, enabled/muted/locked state, gain/mix mute/pan, clips, count, and derived duration;
 - every clip with its configured ID, optional explicit link-group ID, source reference, trim, placement, speed-adjusted duration, legacy audio flags/volume, dB gain, mute, pan, fades, stable linear envelope, applied loudness evidence ID, reversal, and rotation;
+- every subtitle/text track and cue with stable IDs, language/speaker metadata, timing, enable/lock/overlap state, safe style data, counts, and derived duration;
 - a detached `vistora.clip-provenance-summary` for each clip, reporting recorded origin, latest change origin, mapping health, confirmed plan/operation/step/request/result identity, execution status, and browser-safe evidence locators;
-- aggregate track/clip/video/audio counts, timeline duration, and empty state.
+- aggregate media/subtitle track, clip/cue, video/audio counts, timeline duration, and empty state.
 
 Track order is deterministic by unique numeric `order`, then stable track ID
 and mapping key. Clip order is deterministic by timeline start and stable
-clip ID after exact-ID edits. All configured video/audio tracks are exposed
+clip ID after exact-ID edits. Subtitle cues use deterministic start/end/ID
+order. All configured video/audio and subtitle/text tracks are exposed
 without collapsing them into fixed lanes. The read layer does not invent
-subtitle or effect track kinds, transitions, or link membership.
+effect tracks, transitions, or link membership.
 
 Legacy timelines receive the existing content-derived `project_legacy_*` identity and revision `1`. A native `TimelineProjectDocument` retains its explicit project ID and revision. Consumers that need optimistic consistency can supply a `TimelineSnapshotReference`; a mismatched project or revision fails before data is returned. Configured source paths are stable references only and are not checked for existence, keeping repeated snapshots independent of machine and filesystem state.
 
@@ -529,6 +533,8 @@ The loopback-only server has a deliberately narrow route surface:
 | `/api/manual-edits/validate` | `POST` | Validates a detached user-authored proposal and returns a reviewable diff; never writes. |
 | `/api/manual-edits/apply` | `POST` | Requires an exact matching confirmation, then asks the application service to dispatch the registered manual-edit atomic skill. |
 | `/api/audio/loudness/analyze` | `POST` | Dispatches the registered read-only analyzer for one exact current clip; returns path-free evidence and never changes timeline/media state. |
+| `/api/subtitles/parse` | `POST` | Parses exact browser-provided UTF-8 SRT/WebVTT text into detached cue contracts; never reads a browser-supplied path or writes project state. |
+| `/api/subtitles/export` | `GET`, `HEAD` | Builds a path-free SRT/WebVTT download from the detached current snapshot; production filesystem sidecar writes remain a confirmed atomic tool. |
 | `/api/workflow/reviews` | `POST` | Persists the exact current fixture review; never confirms it. |
 | `/api/workflow/confirmations` | `POST` | Persists one explicit immutable confirmation or rejection. |
 | `/api/workflow/executions` | `POST` | Runs only an exact unused confirmation through the workflow service and registry. |
@@ -555,7 +561,8 @@ Current-workspace mode adds a deliberately narrow manual path:
 
 ```text
 TimelineSnapshot (detached read)
-  -> local browser draft (timeline edits, track/link state, audio mix/envelope)
+  -> local browser draft (timeline edits, track/link state, audio mix/envelope,
+     subtitle tracks/cues/style and explicit subtitle ripple policy)
   -> POST validate -> ManualEditReview (no persistence)
   -> explicit Confirm & apply
   -> ManualEditConfirmationRecord bound to exact proposal digest
@@ -619,6 +626,10 @@ The implemented mutation ownership is:
 | `AudioSetClipPropertiesSkill` | Atomically sets bounded clip gain/mute/pan/fades or audio-track playback rate; analyzed gain requires exact evidence. | None. |
 | `AudioSetTrackMixSkill` | Atomically sets bounded gain/mute/pan on one exact unlocked audio track. | None. |
 | `AudioSetVolumeEnvelopeSkill` | Atomically upserts/deletes/clears stable linear clip gain-envelope points. | None. |
+| `SubtitleManageTrackSkill` | Atomically creates, updates, explicitly unlocks, or deletes one first-class subtitle/text track. | None. |
+| `SubtitleEditCueSkill` | Atomically adds/batches/updates/splits/merges/moves/trims/ripple-shifts/deletes/styles exact cues on one unlocked track. | None. |
+| `SubtitleImportSkill` | Atomically imports validated UTF-8 SRT/WebVTT cue data; the source file is read-only. | Reads a configured subtitle file or exact inline content; never rewrites it. |
+| `SubtitleExportSidecarSkill` | None. | Atomically writes deterministic UTF-8 SRT/WebVTT sidecar output. |
 
 These are the only registered atomic mutation entry points. Tests may reset state directly as test-fixture setup. The CLI `render` command remains a documented nonconforming compatibility exception.
 
@@ -795,7 +806,7 @@ Mutation-capable utilities and core objects are implementation details behind to
 | G-03 | Operator combines incompatible roles | `OperatorAgent` owns dialogue, planning, and execution. | Separate/retire the hybrid behind Director and Editing contracts. |
 | G-06 | Direct CLI render bypass | `render` instantiates `TimelineRenderer` directly. | Route mutations through an explicit atomic tool or clearly isolated maintenance interface. |
 | G-07 | Canonical timeline persistence remains legacy | Workflow checkpoints and confirmed restore add guarded history/recovery, but the canonical timeline is still one legacy JSON file with content-derived snapshot identity. | Introduce a first-class versioned project store only in a separately approved migration. |
-| G-11 | Professional controls remain intentionally bounded | The loopback UI provides arbitrary video/audio lanes, track/link state, thumbnails/waveforms with envelope overlay, confirmed exact-ID edits, bounded clip/track mixing, and evidenced loudness gain. Insert/overwrite remains available through structured Director plans. | Add subtitles/transcription, color, transitions, visual keyframes, masks, denoise/de-reverb/separation, plugin hosting, richer track kinds, and later professional controls only through separately approved contracts and atomic tools. |
+| G-11 | Professional controls remain intentionally bounded | The loopback UI provides arbitrary video/audio lanes, first-class subtitle/text lanes, track/link state, thumbnails/waveforms/subtitle overlay, confirmed exact-ID edits, bounded audio mixing, SRT/WebVTT import/export, and deterministic subtitle burn-in. Insert/overwrite remains available through structured Director plans. | Add ASR/transcription, translation, color, transitions, visual keyframes, masks, denoise/de-reverb/separation, plugin hosting, animated titles, and later professional controls only through separately approved contracts and atomic tools. |
 
 This gap register is descriptive. Closing any gap requires a separate approved implementation task.
 
@@ -823,10 +834,10 @@ tracks; the reference workflow covers four tracks, linked split/move/ripple,
 current-only editing, trace, export/ffprobe, and rollback. Index-based
 `VideoModifyClipSkill`, legacy `track_key`, and manual list order remain
 compatibility surfaces. This does not close G-06 or G-07 and does not add
-automatic A/V linking, linked multi-source ingest, subtitles, color,
+automatic A/V linking, linked multi-source ingest, ASR/translation, color,
 transitions, keyframes, masks, AI providers, or effects.
 
-STEP 19 adds four registry entries (nineteen total): a read-only cached
+STEP 19 added four registry entries (nineteen at that step): a read-only cached
 loudness analyzer plus transactional clip-audio, track-mix, and linear-envelope
 skills. Clip and track audio contracts are frozen/versioned and optional, so
 legacy `volume`, `keep_audio`, and timeline JSON retain their meaning.
@@ -841,6 +852,26 @@ mixing, then uses a fixed peak limiter and 48 kHz stereo output. The extended
 reference covers analyzed dialogue gain, track mix, mute, pan, fades,
 automation, linked editing, confirmed Editing-Agent dispatch, ffprobe,
 provenance, and rollback. This is not a general keyframe system or mastering
-suite; ASR/subtitles, noise reduction, de-reverb, source separation, plugin
+suite; ASR/translation, noise reduction, de-reverb, source separation, plugin
 hosting, AI audio providers, complex mastering, color, transitions, visual
 keyframes, masks, and effects remain out of scope.
+
+STEP 20 adds four production registry entries (twenty-three total) for
+subtitle track management, exact cue editing, deterministic SRT/WebVTT
+import, and atomic sidecar export. Optional frozen subtitle tracks/cues/styles
+extend compatible timeline-v2 JSON; snapshot v3 exposes detached subtitle
+state. The detached review engine and manual proposal service simulate cue
+and track changes before confirmation, and confirmed workflow/EditingAgent
+dispatch records subtitle entity relations and tombstones through the same
+gateway/trace/checkpoint boundaries. Video/audio ripple affects captions only
+under an explicit `none`, `selected_subtitle_tracks`, or `all_unlocked`
+policy; locked tracks fail closed.
+
+The renderer keeps subtitle data separate from media composition. Sidecars
+use deterministic UTF-8 SRT/WebVTT; burn-in generates an escaped internal ASS
+file, resolves only controlled logical font names with deterministic fallback,
+and cleans temporary files. The browser renders subtitle lanes/cues, an
+approximate current-time overlay, cue/style inspection, and detached draft
+controls; final FFmpeg burn-in remains authoritative. This step does not add
+ASR, translation, AI wording, karaoke, animated templates, or general visual
+effects.

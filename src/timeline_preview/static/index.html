@@ -55,6 +55,7 @@
               <p>Select an available video clip from the timeline.</p>
               <span>Only explicitly allowlisted local media can play.</span>
             </div>
+            <div id="subtitle-overlay" class="subtitle-overlay" hidden></div>
           </div>
           <p id="preview-status" class="preview-status" aria-live="polite">
             Timeline data is loading.
@@ -152,6 +153,18 @@
                     <option value="linked_group">Explicit linked group</option>
                   </select>
                 </label>
+                <label>
+                  <span>Subtitle ripple</span>
+                  <select id="edit-subtitle-ripple" name="subtitle_ripple">
+                    <option value="none">None (safe default)</option>
+                    <option value="selected_subtitle_tracks">Selected subtitle tracks</option>
+                    <option value="all_unlocked">All unlocked subtitle tracks</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Selected subtitle tracks</span>
+                  <select id="edit-subtitle-tracks" multiple></select>
+                </label>
               </div>
               <label class="editor-check">
                 <input id="edit-ripple" type="checkbox">
@@ -233,6 +246,66 @@
                 </div>
               </fieldset>
             </form>
+          </section>
+          <section id="subtitle-editor" class="manual-editor subtitle-editor" hidden>
+            <div class="manual-editor-heading">
+              <div>
+                <p class="eyebrow">Subtitle draft</p>
+                <h3>Text track &amp; cue</h3>
+              </div>
+              <span class="draft-badge">Review required</span>
+            </div>
+            <div class="field-grid">
+              <label><span>Subtitle track</span><select id="subtitle-track-select"></select></label>
+              <label><span>Track language</span><input id="subtitle-track-language" value="und" maxlength="35"></label>
+              <label><span>Track order</span><input id="subtitle-track-order" type="number" min="0" step="1" value="0"></label>
+              <label class="editor-check"><input id="subtitle-track-enabled" type="checkbox" checked> Track enabled</label>
+              <label class="editor-check"><input id="subtitle-track-locked" type="checkbox"> Track locked</label>
+            </div>
+            <div class="editor-actions">
+              <button id="subtitle-create-track" class="button" type="button">Create track</button>
+              <button id="subtitle-stage-track" class="button" type="button">Stage track settings</button>
+              <button id="subtitle-delete-track" class="button danger" type="button">Delete track</button>
+            </div>
+            <hr class="editor-divider">
+            <div class="field-grid">
+              <label><span>Cue ID</span><input id="subtitle-cue-id" maxlength="160"></label>
+              <label><span>Start</span><input id="subtitle-start" type="number" min="0" step="0.001"></label>
+              <label><span>End</span><input id="subtitle-end" type="number" min="0.001" step="0.001"></label>
+              <label><span>Language</span><input id="subtitle-language" value="und" maxlength="35"></label>
+              <label><span>Speaker</span><input id="subtitle-speaker" maxlength="120"></label>
+            </div>
+            <label><span>Subtitle text</span><textarea id="subtitle-text" rows="3" maxlength="4096"></textarea></label>
+            <div class="field-grid">
+              <label><span>Split at</span><input id="subtitle-split-at" type="number" min="0.001" step="0.001"></label>
+              <label><span>Font</span><select id="subtitle-font"><option value="sans">Sans</option><option value="serif">Serif</option><option value="monospace">Monospace</option></select></label>
+              <label><span>Font size</span><input id="subtitle-font-size" type="number" min="8" max="200" value="42"></label>
+              <label><span>Text color (RGBA)</span><input id="subtitle-color" value="#FFFFFFFF" pattern="#[0-9A-Fa-f]{8}"></label>
+              <label><span>Outline color</span><input id="subtitle-outline-color" value="#000000FF" pattern="#[0-9A-Fa-f]{8}"></label>
+              <label><span>Background color</span><input id="subtitle-background-color" value="#00000000" pattern="#[0-9A-Fa-f]{8}"></label>
+              <label><span>Alignment</span><select id="subtitle-alignment"><option value="left">Left</option><option value="center" selected>Center</option><option value="right">Right</option></select></label>
+              <label><span>Position</span><select id="subtitle-position"><option value="top">Top</option><option value="middle">Middle</option><option value="bottom" selected>Bottom</option></select></label>
+              <label class="editor-check"><input id="subtitle-bold" type="checkbox"> Bold</label>
+              <label class="editor-check"><input id="subtitle-italic" type="checkbox"> Italic</label>
+            </div>
+            <div class="editor-actions">
+              <button id="subtitle-add-cue" class="button primary" type="button">Add cue</button>
+              <button id="subtitle-update-cue" class="button" type="button">Stage cue changes</button>
+              <button id="subtitle-split-cue" class="button" type="button">Split cue</button>
+              <button id="subtitle-merge-next" class="button" type="button">Merge with next</button>
+              <button id="subtitle-delete-cue" class="button danger" type="button">Delete cue</button>
+              <button id="subtitle-stage-style" class="button" type="button">Stage cue style</button>
+            </div>
+            <hr class="editor-divider">
+            <label><span>Import SRT/WebVTT (read only)</span><input id="subtitle-import-file" type="file" accept=".srt,.vtt,text/vtt,application/x-subrip"></label>
+            <div class="editor-actions">
+              <button id="subtitle-import" class="button" type="button">Parse &amp; stage import</button>
+              <button id="subtitle-download-srt" class="button" type="button">Download SRT</button>
+              <button id="subtitle-download-vtt" class="button" type="button">Download WebVTT</button>
+            </div>
+            <p id="subtitle-form-message" class="form-message" aria-live="polite">
+              Subtitle changes stay detached until review and explicit confirmation.
+            </p>
           </section>
           <p id="manual-edit-disabled" class="manual-edit-disabled" hidden>
             Manual apply is disabled while previewing an external timeline

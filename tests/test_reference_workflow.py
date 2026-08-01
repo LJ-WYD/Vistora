@@ -155,16 +155,26 @@ def test_reference_main_workflow_is_traceable_and_repeatable() -> None:
     assert first.traced_clips[0]["provenance"]["mapping_status"] == "deleted"
 
 
+def test_multitrack_reference_carries_subtitle_provenance_and_tombstones() -> None:
+    result = run_multitrack_reference_workflow()
+
+    assert result["subtitle_trace_count"] >= 6
+    assert result["subtitle_tombstone_count"] >= 1
+
+
 def test_multitrack_reference_is_confirmed_rendered_and_repeatable() -> None:
     first = run_multitrack_reference_workflow()
     second = run_multitrack_reference_workflow()
     assert first == second
     assert first["execution_status"] == "succeeded"
-    assert first["step_count"] == 9
-    assert first["trace_count"] == 9
+    assert first["step_count"] == 16
+    assert first["trace_count"] == 16
     assert first["current_track_count"] == 4
     assert first["current_video_clip_count"] >= 2
     assert first["current_audio_clip_count"] >= 2
+    assert first["current_subtitle_track_count"] == 1
+    assert first["current_subtitle_cue_count"] == 2
+    assert first["subtitle_sidecar"].startswith("WEBVTT")
     assert first["rollback_status"] == "succeeded"
     assert first["loudness_analysis_id"].startswith("loud_")
     streams = first["output"]["streams"]

@@ -117,6 +117,7 @@ def run_multitrack_reference_workflow() -> dict:
         workspace = root / "workspace"
         project_file = workspace / "current_timeline.json"
         output = root / "multitrack_output.mp4"
+        subtitle_sidecar = root / "multitrack_output.vtt"
         timeline = TimelineConfig(
             width=320,
             height=180,
@@ -371,11 +372,130 @@ def run_multitrack_reference_workflow() -> dict:
                     evidence_ids=tuple(item.evidence_id for item in evidence),
                 ),
                 DirectorOperation(
+                    operation_id="operation_subtitle_track",
+                    tool_name="SubtitleManageTrackSkill",
+                    arguments={
+                        "action": "create",
+                        "track_id": "subtitle_reference",
+                        "kind": "subtitle",
+                        "role": "captions",
+                        "language": "en",
+                        "order": 0,
+                    },
+                    rationale="Create a first-class caption lane for the verified cut.",
+                    expected_effect="Add one unlocked subtitle track without changing media.",
+                ),
+                DirectorOperation(
+                    operation_id="operation_subtitle_batch",
+                    tool_name="SubtitleEditCueSkill",
+                    arguments={
+                        "action": "batch_add",
+                        "track_id": "subtitle_reference",
+                        "cues": [
+                            {
+                                "cue_id": "cue_reference_intro",
+                                "start_seconds": 0.2,
+                                "end_seconds": 0.9,
+                                "text": "Vistora reference",
+                                "language": "en",
+                            },
+                            {
+                                "cue_id": "cue_reference_outro",
+                                "start_seconds": 1.1,
+                                "end_seconds": 2.2,
+                                "text": "Confirmed subtitle flow",
+                                "language": "en",
+                            },
+                        ],
+                    },
+                    rationale="Add exact reviewed cue timings.",
+                    expected_effect="Create two deterministic subtitle cues.",
+                ),
+                DirectorOperation(
+                    operation_id="operation_subtitle_update",
+                    tool_name="SubtitleEditCueSkill",
+                    arguments={
+                        "action": "update",
+                        "track_id": "subtitle_reference",
+                        "cue_id": "cue_reference_intro",
+                        "text": "Vistora · confirmed reference",
+                    },
+                    rationale="Use the approved opening caption copy.",
+                    expected_effect="Change only the first cue text.",
+                ),
+                DirectorOperation(
+                    operation_id="operation_subtitle_split",
+                    tool_name="SubtitleEditCueSkill",
+                    arguments={
+                        "action": "split",
+                        "track_id": "subtitle_reference",
+                        "cue_id": "cue_reference_outro",
+                        "split_at_seconds": 1.6,
+                        "right_cue_id": "cue_reference_outro_right",
+                    },
+                    rationale="Exercise exact cue splitting.",
+                    expected_effect="Create two adjacent timed subtitle cues.",
+                ),
+                DirectorOperation(
+                    operation_id="operation_subtitle_merge",
+                    tool_name="SubtitleEditCueSkill",
+                    arguments={
+                        "action": "merge",
+                        "track_id": "subtitle_reference",
+                        "merge_cue_ids": [
+                            "cue_reference_outro",
+                            "cue_reference_outro_right",
+                        ],
+                        "merged_cue_id": "cue_reference_outro",
+                    },
+                    rationale="Exercise deterministic adjacent cue merging.",
+                    expected_effect="Restore one exact outro cue range.",
+                ),
+                DirectorOperation(
+                    operation_id="operation_subtitle_style",
+                    tool_name="SubtitleEditCueSkill",
+                    arguments={
+                        "action": "set_style",
+                        "track_id": "subtitle_reference",
+                        "cue_id": "cue_reference_intro",
+                        "style": {
+                            "font_family": "sans",
+                            "fallback_families": ["sans"],
+                            "font_size": 34,
+                            "color": "#FFFFFFFF",
+                            "outline_color": "#000000FF",
+                            "background_color": "#00000000",
+                            "outline_width": 2,
+                            "alignment": "center",
+                            "position": "bottom",
+                            "safe_margin_x": 0.05,
+                            "safe_margin_y": 0.08,
+                            "bold": True,
+                            "italic": False,
+                        },
+                    },
+                    rationale="Apply one controlled logical-font subtitle style.",
+                    expected_effect="Style only the opening cue without accepting a font path.",
+                ),
+                DirectorOperation(
+                    operation_id="operation_subtitle_sidecar",
+                    tool_name="SubtitleExportSidecarSkill",
+                    arguments={
+                        "output_path": str(subtitle_sidecar),
+                        "format": "vtt",
+                        "track_ids": ["subtitle_reference"],
+                    },
+                    rationale="Export the reviewed subtitle cues as a sidecar.",
+                    expected_effect="Write one deterministic UTF-8 WebVTT artifact.",
+                ),
+                DirectorOperation(
                     operation_id="operation_export_multitrack",
                     tool_name="VideoExportSkill",
                     arguments={
                         "output_path": str(output),
                         "clear_timeline_after": False,
+                        "subtitle_mode": "burn",
+                        "subtitle_track_ids": ["subtitle_reference"],
                     },
                     rationale="Render the reviewed layers and audio mix.",
                     expected_effect="Produce one deterministic local export.",
@@ -425,6 +545,23 @@ def run_multitrack_reference_workflow() -> dict:
                 raise AssertionError(report.model_dump(mode="json"))
             metadata = _metadata(output)
             trace = TraceabilityStore.load(project_file)
+            subtitle_relations = tuple(
+                relation
+                for confirmed_trace in trace.confirmed_traces
+                for relation in confirmed_trace.relations
+                if relation.entity.entity_kind
+                in {"subtitle_track", "subtitle_cue"}
+            )
+            if not any(
+                relation.relation_type == "creates"
+                for relation in subtitle_relations
+            ):
+                raise AssertionError("Subtitle creation provenance was not recorded")
+            if not any(
+                relation.relation_type == "deletes"
+                for relation in subtitle_relations
+            ):
+                raise AssertionError("Subtitle merge tombstone was not recorded")
             current = TimelineSnapshotService.snapshot_current()
             rollback_review = workflow.propose_rollback(report.run_id)
             rollback_confirmation = workflow.confirm_rollback(
@@ -444,10 +581,18 @@ def run_multitrack_reference_workflow() -> dict:
                 "execution_status": report.status,
                 "step_count": len(report.steps),
                 "trace_count": len(trace.confirmed_traces),
+                "subtitle_trace_count": len(subtitle_relations),
+                "subtitle_tombstone_count": sum(
+                    relation.relation_type == "deletes"
+                    for relation in subtitle_relations
+                ),
                 "current_track_count": current.track_count,
                 "current_video_clip_count": current.video_clip_count,
                 "current_audio_clip_count": current.audio_clip_count,
+                "current_subtitle_track_count": current.subtitle_track_count,
+                "current_subtitle_cue_count": current.subtitle_cue_count,
                 "rollback_status": rollback.status,
+                "subtitle_sidecar": subtitle_sidecar.read_text(encoding="utf-8"),
                 "loudness_analysis_id": loudness.analysis_id,
                 "loudness_gain_db": loudness.recommended_gain_db,
                 "output": metadata,

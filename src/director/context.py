@@ -63,6 +63,29 @@ class DirectorContextService:
                 "clip_count": snapshot.clip_count,
                 "video_clip_count": snapshot.video_clip_count,
                 "audio_clip_count": snapshot.audio_clip_count,
+                "subtitle_track_count": snapshot.subtitle_track_count,
+                "subtitle_cue_count": snapshot.subtitle_cue_count,
+                "subtitles": [
+                    {
+                        "track_id": track.track_id,
+                        "kind": track.kind,
+                        "language": track.language,
+                        "enabled": track.enabled,
+                        "locked": track.locked,
+                        "cues": [
+                            {
+                                "cue_id": cue.cue_id,
+                                "start_seconds": cue.start_seconds,
+                                "end_seconds": cue.end_seconds,
+                                "text": cue.text,
+                                "language": cue.language,
+                                "speaker": cue.speaker,
+                            }
+                            for cue in track.cues
+                        ],
+                    }
+                    for track in snapshot.subtitle_tracks
+                ],
                 "audio_editing": {
                     "clips_with_custom_mix": sum(
                         1

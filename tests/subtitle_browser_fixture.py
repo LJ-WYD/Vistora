@@ -1,0 +1,153 @@
+"""Local deterministic STEP 20 browser-regression fixture server."""
+
+from __future__ import annotations
+
+import argparse
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from atomic_runtime import build_production_registry  # noqa: E402
+from core import timeline_manager  # noqa: E402
+from core.timeline import (  # noqa: E402
+    ClipConfig,
+    SubtitleCue,
+    SubtitleTrackConfig,
+    TimelineConfig,
+    TrackConfig,
+)
+from timeline_preview import PreviewApplication, create_preview_server  # noqa: E402
+from timeline_query import TimelineSnapshotService  # noqa: E402
+
+
+def _timeline(root: Path, mode: str) -> tuple[TimelineConfig, Path]:
+    media = root / "media"
+    media.mkdir(parents=True, exist_ok=True)
+    if mode == "empty":
+        return TimelineConfig(
+            width=640,
+            height=360,
+            fps=24,
+            tracks={
+                "video": TrackConfig(id="video_main", kind="video", order=0),
+                "audio": TrackConfig(id="audio_main", kind="audio", order=1),
+            },
+        ), media
+    source = media / "source.mp4"
+    subprocess.run(
+        [
+            "ffmpeg", "-nostdin", "-y", "-loglevel", "error",
+            "-f", "lavfi", "-i", "color=c=0x243b6b:s=640x360:d=4:r=24",
+            "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(source),
+        ],
+        check=True,
+        timeout=60,
+    )
+    return TimelineConfig(
+        width=640,
+        height=360,
+        fps=24,
+        tracks={
+            "video": TrackConfig(
+                id="video_main",
+                kind="video",
+                order=0,
+                clips=[ClipConfig(
+                    id="clip_available",
+                    source=str(source),
+                    trim_out=4,
+                    keep_audio=False,
+                )],
+            ),
+            "video_missing": TrackConfig(
+                id="video_missing",
+                kind="video",
+                role="missing-reference",
+                order=1,
+                clips=[ClipConfig(
+                    id="clip_missing",
+                    source=str(media / "missing.mp4"),
+                    trim_out=2,
+                    timeline_start=1,
+                    keep_audio=False,
+                )],
+            ),
+            "audio": TrackConfig(id="audio_main", kind="audio", order=2),
+        },
+        subtitle_tracks={
+            "captions": SubtitleTrackConfig(
+                track_id="subtitle_editable",
+                language="en",
+                order=0,
+                cues=(
+                    SubtitleCue(
+                        cue_id="cue_welcome",
+                        start_seconds=0.2,
+                        end_seconds=1.5,
+                        text="Welcome to Vistora",
+                        language="en",
+                    ),
+                    SubtitleCue(
+                        cue_id="cue_confirm",
+                        start_seconds=1.7,
+                        end_seconds=3.3,
+                        text="Review, confirm, then apply",
+                        language="en",
+                    ),
+                ),
+            ),
+            "locked": SubtitleTrackConfig(
+                track_id="subtitle_locked",
+                language="en",
+                order=1,
+                locked=True,
+                cues=(SubtitleCue(
+                    cue_id="cue_locked",
+                    start_seconds=0.5,
+                    end_seconds=1.2,
+                    text="Locked reference caption",
+                    language="en",
+                ),),
+            ),
+        },
+    ), media
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--mode", choices=("normal", "empty"), default="normal")
+    args = parser.parse_args()
+    root = ROOT / "tests" / "test_data" / f"subtitle_browser_{args.mode}"
+    shutil.rmtree(root, ignore_errors=True)
+    workspace = root / ".workspace"
+    workspace.mkdir(parents=True)
+    timeline, media = _timeline(root, args.mode)
+    timeline_manager.WORKSPACE_DIR = str(workspace)
+    timeline_manager.PROJECT_FILE = str(workspace / "current_timeline.json")
+    timeline_manager.TimelineManager.save_current_timeline(timeline)
+    registry = build_production_registry()
+    application = PreviewApplication(
+        TimelineSnapshotService.snapshot_current,
+        [media],
+        skill_registry=registry,
+        manual_edits_enabled=True,
+    )
+    server = create_preview_server(
+        application,
+        host="127.0.0.1",
+        port=args.port,
+    )
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
+
+
+if __name__ == "__main__":
+    main()

@@ -27,6 +27,17 @@ from timeline_edit import (
     TrackMixSettings,
 )
 from audio_analysis import clip_audio_state_digest
+from subtitles import (
+    SubtitleCue,
+    SubtitleCodecError,
+    SubtitleEditCueInput,
+    SubtitleEditEngine,
+    SubtitleEditError,
+    SubtitleManageTrackInput,
+    SubtitleStyle,
+    SubtitleTrackConfig,
+    parse_subtitles,
+)
 from timeline_query import TimelineSnapshot, TimelineSnapshotReference
 
 from .models import (
@@ -38,6 +49,8 @@ from .models import (
     PreviewClipState,
     PreviewMaterialFact,
     PreviewProjectSettings,
+    PreviewSubtitleCueState,
+    PreviewSubtitleTrackState,
     PreviewTrackMixState,
     ProposedEntityReference,
     ProposedExecutionReference,
@@ -192,7 +205,72 @@ def _timeline_from_snapshot(snapshot: TimelineSnapshot) -> TimelineConfig:
                 for clip in track.clips
             ],
         )
+    timeline.subtitle_tracks = {
+        track.track_key: SubtitleTrackConfig(
+            track_id=track.track_id,
+            kind=track.kind,
+            role=track.role,
+            language=track.language,
+            order=track.order_index,
+            enabled=track.enabled,
+            locked=track.locked,
+            allow_overlaps=track.allow_overlaps,
+            style=SubtitleStyle.model_validate(track.style.model_dump(mode="python", exclude={"schema_name"})),
+            cues=tuple(
+                SubtitleCue(
+                    cue_id=cue.cue_id,
+                    start_seconds=cue.start_seconds,
+                    end_seconds=cue.end_seconds,
+                    text=cue.text,
+                    language=cue.language,
+                    speaker=cue.speaker,
+                    enabled=cue.enabled,
+                    settings=cue.settings,
+                    style=(
+                        SubtitleStyle.model_validate(cue.style.model_dump(mode="python", exclude={"schema_name"}))
+                        if cue.style is not None
+                        else None
+                    ),
+                )
+                for cue in track.cues
+            ),
+        )
+        for track in snapshot.subtitle_tracks
+    }
     return TimelineConfig.model_validate(timeline.model_dump(mode="python"))
+
+
+def _subtitle_maps(timeline: TimelineConfig) -> tuple[
+    dict[str, PreviewSubtitleTrackState], dict[tuple[str, str], PreviewSubtitleCueState]
+]:
+    tracks: dict[str, PreviewSubtitleTrackState] = {}
+    cues: dict[tuple[str, str], PreviewSubtitleCueState] = {}
+    for track in sorted(timeline.subtitle_tracks.values(), key=lambda item: (item.order, item.track_id)):
+        tracks[track.track_id] = PreviewSubtitleTrackState(
+            track_id=track.track_id,
+            kind=track.kind,
+            role=track.role,
+            language=track.language,
+            order=track.order,
+            enabled=track.enabled,
+            locked=track.locked,
+            allow_overlaps=track.allow_overlaps,
+            style=track.style.model_dump(mode="json"),
+            cue_count=len(track.cues),
+        )
+        for cue in track.cues:
+            cues[(track.track_id, cue.cue_id)] = PreviewSubtitleCueState(
+                cue_id=cue.cue_id,
+                track_id=track.track_id,
+                start_seconds=cue.start_seconds,
+                end_seconds=cue.end_seconds,
+                text=cue.text,
+                language=cue.language,
+                speaker=cue.speaker,
+                enabled=cue.enabled,
+                style=cue.style.model_dump(mode="json") if cue.style is not None else None,
+            )
+    return tracks, cues
 
 
 def _preview_state(
@@ -326,6 +404,7 @@ class PlanDiffEngine:
         }
         core_timeline = _timeline_from_snapshot(snapshot)
         before_clip_count = snapshot.clip_count
+        before_subtitle_cue_count = snapshot.subtitle_cue_count
         before_duration = snapshot.duration_seconds
         project_settings = PreviewProjectSettings(
             width=snapshot.width,
@@ -350,6 +429,10 @@ class PlanDiffEngine:
             after_project: PreviewProjectSettings | None = None,
             before_track_mix: PreviewTrackMixState | None = None,
             after_track_mix: PreviewTrackMixState | None = None,
+            before_subtitle_cue: PreviewSubtitleCueState | None = None,
+            after_subtitle_cue: PreviewSubtitleCueState | None = None,
+            before_subtitle_track: PreviewSubtitleTrackState | None = None,
+            after_subtitle_track: PreviewSubtitleTrackState | None = None,
         ) -> PlanChange:
             sequence = len(changes) + 1
             identity = {
@@ -385,6 +468,10 @@ class PlanDiffEngine:
                 after_project=after_project,
                 before_track_mix=before_track_mix,
                 after_track_mix=after_track_mix,
+                before_subtitle_cue=before_subtitle_cue,
+                after_subtitle_cue=after_subtitle_cue,
+                before_subtitle_track=before_subtitle_track,
+                after_subtitle_track=after_subtitle_track,
                 reason=reason,
                 evidence=evidence_summaries(
                     tuple(
@@ -564,6 +651,49 @@ class PlanDiffEngine:
                     ),
                 )
                 message = "Read-only loudness analysis is safely previewable."
+            elif step.tool_name in {
+                "SubtitleManageTrackSkill",
+                "SubtitleEditCueSkill",
+                "SubtitleImportSkill",
+            }:
+                status, message, core_timeline = PlanDiffEngine._preview_subtitle_edit(
+                    step=step,
+                    params=params,
+                    timeline=core_timeline,
+                    append_change=append_change,
+                )
+            elif step.tool_name == "SubtitleExportSidecarSkill":
+                selected = set(params.track_ids)
+                known = {track.track_id for track in core_timeline.subtitle_tracks.values()}
+                if selected - known:
+                    raise PlanDiffValidationError("Subtitle export references an unknown track")
+                cue_count = sum(
+                    1
+                    for track in core_timeline.subtitle_tracks.values()
+                    if not selected or track.track_id in selected
+                    for cue in track.cues
+                    if track.enabled and cue.enabled
+                )
+                append_change(
+                    step=step,
+                    category="subtitle_export",
+                    effect_kind="informational",
+                    severity="info" if cue_count else "blocker",
+                    entity=ProposedEntityReference(
+                        entity_kind="media_output",
+                        entity_id=f"subtitle_output_{digest_json({'step': step.step_id})[7:23]}",
+                    ),
+                    reason=(
+                        f"The confirmed step writes {cue_count} enabled cues as a deterministic {params.format.upper()} sidecar."
+                        if cue_count
+                        else "Subtitle sidecar export has no enabled cues."
+                    ),
+                )
+                if not cue_count:
+                    status = "unsupported"
+                    message = "Sidecar export requires an enabled cue."
+                else:
+                    message = "Sidecar export is previewed without writing a file."
             elif step.tool_name == "VideoClearTimelineSkill":
                 removed = list(clips)
                 clips.clear()
@@ -616,6 +746,29 @@ class PlanDiffEngine:
                     raise PlanDiffValidationError(
                         f"Step {step.step_id} has an empty output path"
                     )
+                if params.subtitle_mode == "burn":
+                    selected = set(params.subtitle_track_ids)
+                    known = {track.track_id for track in core_timeline.subtitle_tracks.values()}
+                    if selected - known:
+                        raise PlanDiffValidationError("Subtitle burn references an unknown track")
+                    enabled_cues = [
+                        cue
+                        for track in core_timeline.subtitle_tracks.values()
+                        if track.enabled and (not selected or track.track_id in selected)
+                        for cue in track.cues
+                        if cue.enabled
+                    ]
+                    if not enabled_cues:
+                        append_change(
+                            step=step,
+                            category="warning",
+                            effect_kind="informational",
+                            severity="blocker",
+                            entity=ProposedEntityReference(entity_kind="none", entity_id=f"subtitle_burn_{step.step_id}"),
+                            reason="Subtitle burn-in requires at least one enabled cue and a video stream.",
+                        )
+                        status = "unsupported"
+                        message = "Subtitle burn-in is not currently executable."
                 append_change(
                     step=step,
                     category="export_only",
@@ -744,10 +897,12 @@ class PlanDiffEngine:
         warnings = sum(change.severity == "warning" for change in changes)
         blockers = sum(change.severity == "blocker" for change in changes)
         additions = sum(
-            change.category == "clip_addition" for change in changes
+            change.category in {"clip_addition", "subtitle_cue_addition"}
+            for change in changes
         )
         removals = sum(
-            change.category == "clip_removal" for change in changes
+            change.category in {"clip_removal", "subtitle_cue_removal"}
+            for change in changes
         )
         consequential = sum(
             change.effect_kind == "consequential" for change in changes
@@ -764,6 +919,8 @@ class PlanDiffEngine:
                 "audio_envelope",
                 "track_mix",
                 "project_settings",
+                "subtitle_track",
+                "subtitle_cue_change",
             }
             for change in changes
         )
@@ -820,6 +977,10 @@ class PlanDiffEngine:
                 blockers=blockers,
                 before_clip_count=before_clip_count,
                 after_clip_count=len(after_states),
+                before_subtitle_cue_count=before_subtitle_cue_count,
+                after_subtitle_cue_count=sum(
+                    len(track.cues) for track in core_timeline.subtitle_tracks.values()
+                ),
                 before_duration_seconds=before_duration,
                 after_duration_seconds=max(
                     (
@@ -832,6 +993,86 @@ class PlanDiffEngine:
                 after_project=project_settings,
             ),
         )
+
+    @staticmethod
+    def _preview_subtitle_edit(
+        *,
+        step: Any,
+        params: BaseModel,
+        timeline: TimelineConfig,
+        append_change: Any,
+    ) -> tuple[str, str, TimelineConfig]:
+        before_tracks, before_cues = _subtitle_maps(timeline)
+        try:
+            engine = SubtitleEditEngine(timeline)
+            if step.tool_name == "SubtitleManageTrackSkill":
+                updated, outcome = engine.manage_track(params)
+            elif step.tool_name == "SubtitleEditCueSkill":
+                updated, outcome = engine.edit_cues(params)
+            else:
+                if params.input_path is not None:
+                    append_change(
+                        step=step,
+                        category="warning",
+                        effect_kind="informational",
+                        severity="blocker",
+                        entity=ProposedEntityReference(
+                            entity_kind="none",
+                            entity_id=f"subtitle_import_path_{step.step_id}",
+                        ),
+                        reason="Filesystem subtitle import is not read during detached preview; provide reviewed inline UTF-8 content.",
+                    )
+                    return "unsupported", "External subtitle input must be re-reviewed with bounded content.", timeline
+                cues = parse_subtitles(params.content or "", params.format, language=params.language)
+                if params.create_track:
+                    engine.manage_track(SubtitleManageTrackInput(
+                        action="create", track_id=params.track_id, kind="subtitle", language=params.language,
+                    ))
+                key, track = engine._find_track(params.track_id)
+                if params.replace_existing:
+                    engine._replace_track(key, track.model_copy(update={"cues": ()}))
+                updated, outcome = engine.edit_cues(
+                    SubtitleEditCueInput(
+                        action="batch_add",
+                        track_id=params.track_id,
+                        cues=cues,
+                    )
+                )
+        except (SubtitleEditError, SubtitleCodecError) as exc:
+            raise PlanDiffValidationError(str(exc)) from exc
+
+        after_tracks, after_cues = _subtitle_maps(updated)
+        direct = set(outcome.direct_cue_ids)
+        for track_id in sorted(before_tracks.keys() | after_tracks.keys()):
+            old, new = before_tracks.get(track_id), after_tracks.get(track_id)
+            if old == new:
+                continue
+            append_change(
+                step=step,
+                category="subtitle_track",
+                effect_kind="direct",
+                severity="info",
+                entity=ProposedEntityReference(entity_kind="subtitle_track", entity_id=track_id, track_id=track_id),
+                before_subtitle_track=old,
+                after_subtitle_track=new,
+                reason="The proposal changes a first-class subtitle/text track.",
+            )
+        for key in sorted(before_cues.keys() | after_cues.keys()):
+            old, new = before_cues.get(key), after_cues.get(key)
+            if old == new:
+                continue
+            category = "subtitle_cue_addition" if old is None else "subtitle_cue_removal" if new is None else "subtitle_cue_change"
+            append_change(
+                step=step,
+                category=category,
+                effect_kind="direct" if key[1] in direct else "consequential",
+                severity="info",
+                entity=ProposedEntityReference(entity_kind="subtitle_cue", entity_id=key[1], track_id=key[0]),
+                before_subtitle_cue=old,
+                after_subtitle_cue=new,
+                reason="The proposal creates, removes, or precisely changes this subtitle cue.",
+            )
+        return "previewed", f"Deterministically previews subtitle operation {outcome.operation}.", updated
 
     @staticmethod
     def _preview_core_edit(
@@ -886,6 +1127,7 @@ class PlanDiffEngine:
                     params.trim_out,
                     ripple=params.ripple,
                     edit_scope=params.edit_scope,
+                    subtitle_ripple=params.subtitle_ripple,
                 )
             elif name == "VideoMoveClipSkill":
                 updated, outcome = engine.move(
@@ -894,6 +1136,7 @@ class PlanDiffEngine:
                     params.timeline_start,
                     ripple=params.ripple,
                     edit_scope=params.edit_scope,
+                    subtitle_ripple=params.subtitle_ripple,
                 )
             elif name == "VideoRemoveClipSkill":
                 updated, outcome = engine.remove(
@@ -901,6 +1144,7 @@ class PlanDiffEngine:
                     params.clip_id,
                     ripple=params.mode == "ripple",
                     edit_scope=params.edit_scope,
+                    subtitle_ripple=params.subtitle_ripple,
                 )
             elif name == "VideoSetClipPropertiesSkill":
                 updated, outcome = engine.set_properties(
@@ -1049,6 +1293,7 @@ class PlanDiffEngine:
                     ),
                     mode=params.mode,
                     edit_scope=params.edit_scope,
+                    subtitle_ripple=params.subtitle_ripple,
                 )
         except TimelineEditError as exc:
             raise PlanDiffValidationError(str(exc)) from exc

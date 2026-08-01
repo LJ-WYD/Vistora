@@ -18,6 +18,7 @@ from .models import (
     SetVolumeEnvelopeInput,
     SplitClipInput,
     TimelineEditOutcome,
+    TimelineSubtitleRipplePolicy,
     TrimClipInput,
 )
 from .transaction import TimelineEditTransaction
@@ -42,6 +43,7 @@ __all__ = [
     "TimelineEditEngine",
     "TimelineEditError",
     "TimelineEditOutcome",
+    "TimelineSubtitleRipplePolicy",
     "TimelineEditTransaction",
     "TimelineConfig",
     "TrackConfig",

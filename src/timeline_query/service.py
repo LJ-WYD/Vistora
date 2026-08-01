@@ -20,6 +20,9 @@ from .models import (
     TimelineSnapshot,
     TimelineSnapshotReference,
     TrackSnapshot,
+    SubtitleCueSnapshot,
+    SubtitleStyleSnapshot,
+    SubtitleTrackSnapshot,
 )
 
 if TYPE_CHECKING:
@@ -219,6 +222,61 @@ class TimelineSnapshotService:
                 )
 
             tracks = tuple(track_snapshots)
+            subtitle_track_snapshots = tuple(
+                SubtitleTrackSnapshot(
+                    track_key=track_key,
+                    track_id=track.track_id,
+                    kind=track.kind,
+                    role=track.role,
+                    language=track.language,
+                    order_index=index,
+                    enabled=track.enabled,
+                    locked=track.locked,
+                    allow_overlaps=track.allow_overlaps,
+                    style=SubtitleStyleSnapshot.model_validate(
+                        track.style.model_dump(
+                            mode="python",
+                            exclude={"schema_name", "schema_version"},
+                        )
+                    ),
+                    cues=tuple(
+                        SubtitleCueSnapshot(
+                            cue_id=cue.cue_id,
+                            order_index=cue_index,
+                            start_seconds=cue.start_seconds,
+                            end_seconds=cue.end_seconds,
+                            duration_seconds=cue.end_seconds - cue.start_seconds,
+                            text=cue.text,
+                            language=cue.language,
+                            speaker=cue.speaker,
+                            enabled=cue.enabled,
+                            settings=cue.settings,
+                            style=(
+                                SubtitleStyleSnapshot.model_validate(
+                                    cue.style.model_dump(
+                                        mode="python",
+                                        exclude={"schema_name", "schema_version"},
+                                    )
+                                )
+                                if cue.style is not None
+                                else None
+                            ),
+                        )
+                        for cue_index, cue in enumerate(track.cues)
+                    ),
+                    cue_count=len(track.cues),
+                    duration_seconds=max(
+                        (cue.end_seconds for cue in track.cues),
+                        default=0.0,
+                    ),
+                )
+                for index, (track_key, track) in enumerate(
+                    sorted(
+                        project.timeline.subtitle_tracks.items(),
+                        key=lambda item: (item[1].order, item[1].track_id, item[0]),
+                    )
+                )
+            )
             timeline_payload = project.timeline.model_dump(mode="json")
             timeline_hash = _sha256(timeline_payload)
             snapshot_hash = _sha256(
@@ -240,7 +298,12 @@ class TimelineSnapshotService:
                 height=project.timeline.height,
                 fps=project.timeline.fps,
                 tracks=tracks,
+                subtitle_tracks=subtitle_track_snapshots,
                 track_count=len(tracks),
+                subtitle_track_count=len(subtitle_track_snapshots),
+                subtitle_cue_count=sum(
+                    track.cue_count for track in subtitle_track_snapshots
+                ),
                 clip_count=clip_count,
                 video_clip_count=sum(
                     track.clip_count
@@ -253,10 +316,18 @@ class TimelineSnapshotService:
                     if track.kind == "audio"
                 ),
                 duration_seconds=max(
-                    (track.duration_seconds for track in tracks),
+                    (
+                        track.duration_seconds
+                        for track in (*tracks, *subtitle_track_snapshots)
+                    ),
                     default=0.0,
                 ),
-                empty=clip_count == 0,
+                empty=(
+                    clip_count == 0
+                    and not any(
+                        track.cue_count for track in subtitle_track_snapshots
+                    )
+                ),
             )
             if expected_reference is not None:
                 if (

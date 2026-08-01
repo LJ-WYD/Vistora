@@ -1,6 +1,6 @@
 import os
 from typing import Any, List, Dict, Literal, Optional
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from moviepy import VideoFileClip, AudioFileClip, CompositeVideoClip, CompositeAudioClip
 
 TIMELINE_MODEL_VERSION = "2.0.0"
@@ -86,6 +86,125 @@ class TrackMixSettings(BaseModel):
     pan: float = Field(0, ge=-1, le=1, allow_inf_nan=False)
 
 
+class SubtitleStyle(BaseModel):
+    """Safe, versioned subtitle styling with no file or filter injection."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    schema_name: Literal["vistora.subtitle-style"] = "vistora.subtitle-style"
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    font_family: Literal["sans", "serif", "monospace"] = "sans"
+    fallback_families: tuple[Literal["sans", "serif", "monospace"], ...] = (
+        "sans",
+    )
+    font_size: int = Field(42, ge=8, le=200)
+    color: str = Field("#FFFFFFFF", pattern=r"^#[0-9A-Fa-f]{8}$")
+    outline_color: str = Field("#000000FF", pattern=r"^#[0-9A-Fa-f]{8}$")
+    background_color: str = Field("#00000000", pattern=r"^#[0-9A-Fa-f]{8}$")
+    outline_width: float = Field(2, ge=0, le=12, allow_inf_nan=False)
+    alignment: Literal["left", "center", "right"] = "center"
+    position: Literal["top", "middle", "bottom"] = "bottom"
+    safe_margin_x: float = Field(0.05, ge=0, le=0.25, allow_inf_nan=False)
+    safe_margin_y: float = Field(0.08, ge=0, le=0.25, allow_inf_nan=False)
+    bold: bool = False
+    italic: bool = False
+
+    @model_validator(mode="after")
+    def stable_fallbacks(self) -> "SubtitleStyle":
+        if not self.fallback_families:
+            raise ValueError("Subtitle style requires a logical font fallback")
+        if len(self.fallback_families) != len(set(self.fallback_families)):
+            raise ValueError("Subtitle font fallbacks must be unique")
+        return self
+
+
+class SubtitleCue(BaseModel):
+    """One immutable, precisely timed subtitle cue."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+    schema_name: Literal["vistora.subtitle-cue"] = "vistora.subtitle-cue"
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    cue_id: str = Field(
+        min_length=3,
+        max_length=160,
+        pattern=r"^[A-Za-z][A-Za-z0-9._:-]*$",
+    )
+    start_seconds: float = Field(ge=0, allow_inf_nan=False)
+    end_seconds: float = Field(gt=0, allow_inf_nan=False)
+    text: str = Field(min_length=1, max_length=4096)
+    language: str = Field("und", pattern=r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$")
+    speaker: str | None = Field(default=None, min_length=1, max_length=120)
+    enabled: bool = True
+    settings: tuple[str, ...] = ()
+    style: SubtitleStyle | None = None
+
+    @field_validator("text")
+    @classmethod
+    def normalize_text(cls, value: str) -> str:
+        normalized = value.replace("\r\n", "\n").replace("\r", "\n").strip()
+        if not normalized:
+            raise ValueError("Subtitle cue text cannot be empty")
+        if "\x00" in normalized:
+            raise ValueError("Subtitle cue text contains a null character")
+        return normalized
+
+    @model_validator(mode="after")
+    def valid_range_and_settings(self) -> "SubtitleCue":
+        if self.end_seconds <= self.start_seconds + 1e-6:
+            raise ValueError("Subtitle cue must have positive duration")
+        allowed = {"align", "line", "position", "size", "vertical"}
+        keys: list[str] = []
+        for setting in self.settings:
+            if not setting or any(char in setting for char in "\r\n<>{}\\"):
+                raise ValueError("Subtitle cue setting contains unsafe characters")
+            key, separator, value = setting.partition(":")
+            if not separator or key not in allowed or not value or len(setting) > 80:
+                raise ValueError("Subtitle cue setting is unsupported")
+            keys.append(key)
+        if len(keys) != len(set(keys)):
+            raise ValueError("Subtitle cue settings must use unique keys")
+        if self.settings != tuple(sorted(self.settings)):
+            raise ValueError("Subtitle cue settings must use stable ordering")
+        return self
+
+
+class SubtitleTrackConfig(BaseModel):
+    """Immutable first-class subtitle/text lane, separate from media clips."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+    schema_name: Literal["vistora.subtitle-track"] = "vistora.subtitle-track"
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    track_id: str = Field(
+        min_length=3,
+        max_length=160,
+        pattern=r"^[A-Za-z][A-Za-z0-9._:-]*$",
+    )
+    kind: Literal["subtitle", "text"] = "subtitle"
+    role: str = Field("captions", min_length=1, max_length=80)
+    language: str = Field("und", pattern=r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$")
+    order: int = Field(0, ge=0)
+    enabled: bool = True
+    locked: bool = False
+    allow_overlaps: bool = False
+    style: SubtitleStyle = Field(default_factory=SubtitleStyle)
+    cues: tuple[SubtitleCue, ...] = ()
+
+    @model_validator(mode="after")
+    def stable_cues(self) -> "SubtitleTrackConfig":
+        ids = [cue.cue_id for cue in self.cues]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Subtitle cue IDs must be unique within a track")
+        expected = tuple(
+            sorted(self.cues, key=lambda cue: (cue.start_seconds, cue.end_seconds, cue.cue_id))
+        )
+        if self.cues != expected:
+            raise ValueError("Subtitle cues must use deterministic time ordering")
+        if not self.allow_overlaps:
+            for previous, current in zip(self.cues, self.cues[1:]):
+                if current.start_seconds < previous.end_seconds - 1e-6:
+                    raise ValueError("Subtitle cues overlap on a non-overlap track")
+        return self
+
+
 class ClipConfig(BaseModel):
     """Declarative clip state shared by legacy and v2 timelines."""
 
@@ -151,6 +270,7 @@ class TimelineConfig(BaseModel):
     height: int = Field(1080, gt=0)
     fps: int = Field(30, gt=0)
     tracks: Dict[str, TrackConfig] = Field(default_factory=dict)
+    subtitle_tracks: Dict[str, SubtitleTrackConfig] = Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod
@@ -225,6 +345,19 @@ class TimelineConfig(BaseModel):
         ]
         if len(clip_ids) != len(set(clip_ids)):
             raise ValueError("clip IDs must be unique across all tracks")
+        subtitle_ids = [track.track_id for track in self.subtitle_tracks.values()]
+        if len(subtitle_ids) != len(set(subtitle_ids)):
+            raise ValueError("subtitle track IDs must be unique")
+        subtitle_orders = [track.order for track in self.subtitle_tracks.values()]
+        if len(subtitle_orders) != len(set(subtitle_orders)):
+            raise ValueError("subtitle track order values must be unique")
+        cue_ids = [
+            cue.cue_id
+            for track in self.subtitle_tracks.values()
+            for cue in track.cues
+        ]
+        if len(cue_ids) != len(set(cue_ids)):
+            raise ValueError("subtitle cue IDs must be unique across all tracks")
         return self
 
 

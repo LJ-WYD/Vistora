@@ -115,6 +115,7 @@ class VideoTrimClipSkill(_TransactionalEditSkill):
                 params.trim_out,
                 ripple=params.ripple,
                 edit_scope=params.edit_scope,
+                subtitle_ripple=params.subtitle_ripple,
             ),
             id_factory=self.id_factory,
         )
@@ -136,6 +137,7 @@ class VideoMoveClipSkill(_TransactionalEditSkill):
                 params.timeline_start,
                 ripple=params.ripple,
                 edit_scope=params.edit_scope,
+                subtitle_ripple=params.subtitle_ripple,
             ),
             id_factory=self.id_factory,
         )
@@ -156,6 +158,7 @@ class VideoRemoveClipSkill(_TransactionalEditSkill):
                 params.clip_id,
                 ripple=params.mode == "ripple",
                 edit_scope=params.edit_scope,
+                subtitle_ripple=params.subtitle_ripple,
             ),
             id_factory=self.id_factory,
         )
@@ -218,6 +221,7 @@ class VideoInsertOverwriteClipSkill(_TransactionalEditSkill):
                 clip,
                 mode=params.mode,
                 edit_scope=params.edit_scope,
+                subtitle_ripple=params.subtitle_ripple,
             )
 
         return TimelineEditTransaction.apply(

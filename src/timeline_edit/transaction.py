@@ -87,6 +87,9 @@ class TimelineEditTransaction:
                 "created_clip_ids": list(outcome.created_clip_ids),
                 "modified_clip_ids": list(outcome.modified_clip_ids),
                 "deleted_clip_ids": list(outcome.deleted_clip_ids),
+                "consequential_subtitle_cue_ids": list(
+                    outcome.consequential_subtitle_cue_ids
+                ),
                 "warnings": list(outcome.warnings),
                 "before_snapshot_id": before.snapshot_id,
                 "after_snapshot_id": after.snapshot_id,
