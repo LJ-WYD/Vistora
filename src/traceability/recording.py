@@ -22,6 +22,7 @@ from contracts import (
     ManualVolumeEnvelope,
     ManualSubtitleCue,
     ManualSubtitleTrack,
+    ManualTransitionEdit,
 )
 from timeline_query import TimelineSnapshot
 
@@ -75,6 +76,42 @@ def _subtitle_cues(snapshot: TimelineSnapshot) -> dict[tuple[str, str], dict[str
         for track in snapshot.subtitle_tracks
         for cue in track.cues
     }
+
+
+def _transitions(snapshot: TimelineSnapshot) -> dict[str, dict[str, Any]]:
+    return {
+        transition.transition_id: transition.model_dump(mode="json")
+        for transition in snapshot.transitions
+    }
+
+
+def _manual_transition_ids(
+    edit: ManualTransitionEdit,
+    before: dict[str, dict[str, Any]],
+) -> set[str]:
+    """Resolve only the exact transition identities owned by one operation."""
+
+    if edit.action in {"add", "update"}:
+        identities = {edit.transition.transition_id}
+        if edit.paired_transition is not None:
+            identities.add(edit.paired_transition.transition_id)
+        previous = before.get(edit.transition.transition_id)
+        if previous is not None and previous.get("paired_transition_id"):
+            identities.add(previous["paired_transition_id"])
+        return identities
+    if edit.action == "remove":
+        identities = {edit.transition_id}
+        previous = before.get(edit.transition_id)
+        if previous is not None and previous.get("paired_transition_id"):
+            identities.add(previous["paired_transition_id"])
+        return identities
+    identities = {target.transition_id for target in edit.targets}
+    identities.update(
+        target.paired_transition_id
+        for target in edit.targets
+        if target.paired_transition_id is not None
+    )
+    return identities
 
 
 class ConfirmedTraceRecorder:
@@ -133,6 +170,25 @@ class ConfirmedTraceRecorder:
                 effects.append(("deletes", "subtitle_cue", track_id, cue_id))
             elif before_subtitle_cues[key] != after_subtitle_cues[key]:
                 effects.append(("modifies", "subtitle_cue", track_id, cue_id))
+        before_transitions = _transitions(before_snapshot)
+        after_transitions = _transitions(after_snapshot)
+        track_key_by_id = {
+            track.track_id: track.track_key
+            for track in (*before_snapshot.tracks, *after_snapshot.tracks)
+        }
+        for transition_id in sorted(
+            before_transitions.keys() | after_transitions.keys()
+        ):
+            old = before_transitions.get(transition_id)
+            new = after_transitions.get(transition_id)
+            state = new or old
+            track_key = track_key_by_id.get(state["track_id"], state["track_id"])
+            if old is None:
+                effects.append(("creates", "transition", track_key, transition_id))
+            elif new is None:
+                effects.append(("deletes", "transition", track_key, transition_id))
+            elif old != new:
+                effects.append(("modifies", "transition", track_key, transition_id))
 
         inherited: dict[tuple[str, str], str] = {}
         changed_before_ids = {
@@ -221,6 +277,15 @@ class ConfirmedTraceRecorder:
                 consequential_ids.update(
                     item for item in raw_subtitle if isinstance(item, str)
                 )
+            if not request.tool_name.startswith("Timeline") or not request.tool_name.endswith("TransitionSkill"):
+                raw_transitions = result.payload.get(
+                    "deleted_transition_ids", ()
+                )
+                if isinstance(raw_transitions, (list, tuple)):
+                    consequential_ids.update(
+                        item for item in raw_transitions
+                        if isinstance(item, str)
+                    )
         relations = tuple(
             ConfirmedEntityRelation(
                 relation_id=_stable_id(
@@ -316,7 +381,22 @@ class ManualTraceRecorder:
         after_subtitle_tracks = _subtitle_tracks(after_snapshot)
         before_subtitle_cues = _subtitle_cues(before_snapshot)
         after_subtitle_cues = _subtitle_cues(after_snapshot)
+        before_transitions = _transitions(before_snapshot)
+        after_transitions = _transitions(after_snapshot)
         for edit in proposal.edits:
+            if isinstance(edit, ManualTransitionEdit):
+                expected_ids = _manual_transition_ids(
+                    edit, before_transitions
+                )
+                if not any(
+                    before_transitions.get(identity)
+                    != after_transitions.get(identity)
+                    for identity in expected_ids
+                ):
+                    raise ValueError(
+                        "Manual transition trace has no exact state change"
+                    )
+                continue
             if isinstance(edit, ManualSubtitleTrack):
                 old = before_subtitle_tracks.get(edit.track_id)
                 new = after_subtitle_tracks.get(edit.track_id)
@@ -425,6 +505,32 @@ class ManualTraceRecorder:
         effect_rows: list[tuple[Any, str, str, str, str]] = []
         seen_effects: set[tuple[str, str, str]] = set()
         for edit in proposal.edits:
+            if isinstance(edit, ManualTransitionEdit):
+                for transition_id in sorted(
+                    _manual_transition_ids(edit, before_transitions)
+                ):
+                    old = before_transitions.get(transition_id)
+                    new = after_transitions.get(transition_id)
+                    if old == new:
+                        continue
+                    state = new or old
+                    track_id = state["track_id"]
+                    track_key = next(
+                        (
+                            track.track_key
+                            for track in (*after_snapshot.tracks, *before_snapshot.tracks)
+                            if track.track_id == track_id
+                        ),
+                        track_id,
+                    )
+                    effect_rows.append((
+                        edit,
+                        "creates" if old is None else "deletes" if new is None else "modifies",
+                        track_key,
+                        transition_id,
+                        "direct",
+                    ))
+                continue
             if isinstance(edit, ManualSubtitleTrack):
                 old = before_subtitle_tracks.get(edit.track_id)
                 new = after_subtitle_tracks.get(edit.track_id)
@@ -582,6 +688,68 @@ class ManualTraceRecorder:
                 )
                 seen_effects.add(identity)
 
+        transition_relation_ids = {
+            clip_id
+            for edit, _, _, clip_id, _ in effect_rows
+            if isinstance(edit, ManualTransitionEdit)
+        }
+        for transition_id in sorted(
+            before_transitions.keys() | after_transitions.keys()
+        ):
+            old_transition = before_transitions.get(transition_id)
+            new_transition = after_transitions.get(transition_id)
+            if (
+                old_transition == new_transition
+                or transition_id in transition_relation_ids
+            ):
+                continue
+            transition_state = new_transition or old_transition
+            bound_clip_ids = {
+                transition_state["from_clip_id"],
+                transition_state["to_clip_id"],
+            }
+            candidates = []
+            for edit in proposal.edits:
+                if isinstance(edit, ManualTransitionEdit):
+                    continue
+                target_ids = set()
+                if hasattr(edit, "clip_id"):
+                    target_ids.add(edit.clip_id)
+                if isinstance(edit, ManualClipSplit):
+                    target_ids.add(edit.right_clip_id)
+                if isinstance(edit, ManualClipLink):
+                    target_ids.update(
+                        member.clip_id for member in edit.members
+                    )
+                elif isinstance(edit, ManualCopyClipVisual):
+                    target_ids.update(
+                        member.clip_id for member in edit.targets
+                    )
+                if target_ids & bound_clip_ids:
+                    candidates.append(edit)
+            if len(candidates) != 1:
+                raise ValueError(
+                    "Manual transition consequence cannot be mapped to one exact operation"
+                )
+            edit = candidates[0]
+            track_id = transition_state["track_id"]
+            track_key = next(
+                (
+                    track.track_key
+                    for track in (*after_snapshot.tracks, *before_snapshot.tracks)
+                    if track.track_id == track_id
+                ),
+                track_id,
+            )
+            effect_rows.append((
+                edit,
+                "creates" if old_transition is None else "deletes" if new_transition is None else "modifies",
+                track_key,
+                transition_id,
+                "consequential",
+            ))
+            transition_relation_ids.add(transition_id)
+
         before_ref = SnapshotTraceReference.from_snapshot(before_snapshot)
         after_ref = SnapshotTraceReference.from_snapshot(after_snapshot)
         relations = tuple(
@@ -607,6 +775,11 @@ class ManualTraceRecorder:
                         if isinstance(edit, ManualSubtitleCue)
                         else "track"
                         if isinstance(edit, (ManualTrackManage, ManualTrackMix))
+                        else "transition"
+                        if (
+                            isinstance(edit, ManualTransitionEdit)
+                            or clip_id in transition_relation_ids
+                        )
                         else "clip"
                     ),
                     entity_id=clip_id,
@@ -648,8 +821,9 @@ class ManualTraceRecorder:
                             ManualSubtitleTrack,
                             ManualSubtitleCue,
                             ManualCopyClipVisual,
+                            ManualTransitionEdit,
                         ),
-                    )
+                    ) and clip_id not in transition_relation_ids
                     else None
                 ),
                 before_snapshot=before_ref,

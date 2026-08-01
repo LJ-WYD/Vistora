@@ -13,6 +13,7 @@ from core.timeline import TimelineConfig
 from timeline_query import TimelineSnapshotService
 
 from .engine import TimelineEditEngine
+from .engine import SourceAudioResolver, SourceDurationResolver
 from .models import TimelineEditOutcome
 
 
@@ -61,14 +62,25 @@ class TimelineEditTransaction:
         ],
         *,
         id_factory: Callable[[str], str] | None = None,
+        source_duration_resolver: SourceDurationResolver | None = None,
+        source_audio_resolver: SourceAudioResolver | None = None,
     ) -> dict[str, Any]:
         prior = cls.current_bytes()
         current = timeline_manager.TimelineManager.get_current_timeline()
         before = TimelineSnapshotService.snapshot(current)
         engine = (
-            TimelineEditEngine(current, id_factory=id_factory)
+            TimelineEditEngine(
+                current,
+                id_factory=id_factory,
+                source_duration_resolver=source_duration_resolver,
+                source_audio_resolver=source_audio_resolver,
+            )
             if id_factory is not None
-            else TimelineEditEngine(current)
+            else TimelineEditEngine(
+                current,
+                source_duration_resolver=source_duration_resolver,
+                source_audio_resolver=source_audio_resolver,
+            )
         )
         try:
             updated, outcome = operation(engine)
@@ -89,6 +101,15 @@ class TimelineEditTransaction:
                 "deleted_clip_ids": list(outcome.deleted_clip_ids),
                 "consequential_subtitle_cue_ids": list(
                     outcome.consequential_subtitle_cue_ids
+                ),
+                "created_transition_ids": list(
+                    outcome.created_transition_ids
+                ),
+                "modified_transition_ids": list(
+                    outcome.modified_transition_ids
+                ),
+                "deleted_transition_ids": list(
+                    outcome.deleted_transition_ids
                 ),
                 "warnings": list(outcome.warnings),
                 "before_snapshot_id": before.snapshot_id,

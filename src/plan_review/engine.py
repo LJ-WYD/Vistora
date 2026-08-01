@@ -23,6 +23,8 @@ from timeline_edit import (
     ClipConfig,
     ClipTransform,
     TimelineConfig,
+    TimelineTransition,
+    TransitionParameters,
     TimelineEditEngine,
     TimelineEditError,
     TrackConfig,
@@ -53,6 +55,7 @@ from .models import (
     PreviewProjectSettings,
     PreviewSubtitleCueState,
     PreviewSubtitleTrackState,
+    PreviewTransitionState,
     PreviewTrackMixState,
     ProposedEntityReference,
     ProposedExecutionReference,
@@ -247,7 +250,52 @@ def _timeline_from_snapshot(snapshot: TimelineSnapshot) -> TimelineConfig:
         )
         for track in snapshot.subtitle_tracks
     }
+    timeline.transitions = {
+        transition.transition_id: TimelineTransition(
+            transition_id=transition.transition_id,
+            track_id=transition.track_id,
+            from_clip_id=transition.from_clip_id,
+            to_clip_id=transition.to_clip_id,
+            kind=transition.kind,
+            duration_seconds=transition.duration_seconds,
+            alignment=transition.alignment,
+            parameters=TransitionParameters(
+                direction=transition.direction,
+                color=transition.color,
+            ),
+            enabled=transition.enabled,
+            audio_policy=transition.audio_policy,
+            paired_transition_id=transition.paired_transition_id,
+        )
+        for transition in snapshot.transitions
+    }
     return TimelineConfig.model_validate(timeline.model_dump(mode="python"))
+
+
+def _transition_map(
+    timeline: TimelineConfig,
+) -> dict[str, PreviewTransitionState]:
+    return {
+        transition.transition_id: PreviewTransitionState(
+            transition_id=transition.transition_id,
+            track_id=transition.track_id,
+            from_clip_id=transition.from_clip_id,
+            to_clip_id=transition.to_clip_id,
+            media_type=transition.media_type,
+            kind=transition.kind,
+            duration_seconds=transition.duration_seconds,
+            alignment=transition.alignment,
+            direction=transition.parameters.direction,
+            color=transition.parameters.color,
+            enabled=transition.enabled,
+            audio_policy=transition.audio_policy,
+            paired_transition_id=transition.paired_transition_id,
+        )
+        for transition in sorted(
+            timeline.transitions.values(),
+            key=lambda item: item.transition_id,
+        )
+    }
 
 
 def _subtitle_maps(timeline: TimelineConfig) -> tuple[
@@ -391,6 +439,25 @@ class PlanDiffEngine:
             for operation in request.director_plan.operations
         }
         facts = {fact.material_id: fact for fact in request.material_facts}
+        source_aliases: dict[str, PreviewMaterialFact] = {}
+        ambiguous_source_aliases: set[str] = set()
+        for track in snapshot.tracks:
+            for clip in track.clips:
+                fact = facts.get(clip.source.source_id)
+                if fact is not None:
+                    for alias in (
+                        clip.source.value,
+                        clip.source.display_name,
+                    ):
+                        if alias in ambiguous_source_aliases:
+                            continue
+                        current = source_aliases.get(alias)
+                        if current is not None and current != fact:
+                            source_aliases.pop(alias, None)
+                            ambiguous_source_aliases.add(alias)
+                        else:
+                            source_aliases[alias] = fact
+        facts.update(source_aliases)
         video_track = next(
             (
                 track
@@ -421,6 +488,7 @@ class PlanDiffEngine:
         core_timeline = _timeline_from_snapshot(snapshot)
         before_clip_count = snapshot.clip_count
         before_subtitle_cue_count = snapshot.subtitle_cue_count
+        before_transition_count = snapshot.transition_count
         before_duration = snapshot.duration_seconds
         project_settings = PreviewProjectSettings(
             width=snapshot.width,
@@ -449,6 +517,8 @@ class PlanDiffEngine:
             after_subtitle_cue: PreviewSubtitleCueState | None = None,
             before_subtitle_track: PreviewSubtitleTrackState | None = None,
             after_subtitle_track: PreviewSubtitleTrackState | None = None,
+            before_transition: PreviewTransitionState | None = None,
+            after_transition: PreviewTransitionState | None = None,
         ) -> PlanChange:
             sequence = len(changes) + 1
             identity = {
@@ -488,6 +558,8 @@ class PlanDiffEngine:
                 after_subtitle_cue=after_subtitle_cue,
                 before_subtitle_track=before_subtitle_track,
                 after_subtitle_track=after_subtitle_track,
+                before_transition=before_transition,
+                after_transition=after_transition,
                 reason=reason,
                 evidence=evidence_summaries(
                     tuple(
@@ -564,6 +636,10 @@ class PlanDiffEngine:
                 "VideoSetClipTransformSkill",
                 "VideoSetClipColorSkill",
                 "VideoCopyClipVisualSkill",
+                "TimelineAddTransitionSkill",
+                "TimelineUpdateTransitionSkill",
+                "TimelineRemoveTransitionSkill",
+                "TimelineCopyTransitionSkill",
             }:
                 # Synchronize only the legacy primary-video view; every other
                 # stable multi-track declaration remains detached and intact.
@@ -918,11 +994,19 @@ class PlanDiffEngine:
         warnings = sum(change.severity == "warning" for change in changes)
         blockers = sum(change.severity == "blocker" for change in changes)
         additions = sum(
-            change.category in {"clip_addition", "subtitle_cue_addition"}
+            change.category in {
+                "clip_addition",
+                "subtitle_cue_addition",
+                "transition_addition",
+            }
             for change in changes
         )
         removals = sum(
-            change.category in {"clip_removal", "subtitle_cue_removal"}
+            change.category in {
+                "clip_removal",
+                "subtitle_cue_removal",
+                "transition_removal",
+            }
             for change in changes
         )
         consequential = sum(
@@ -944,6 +1028,7 @@ class PlanDiffEngine:
                 "project_settings",
                 "subtitle_track",
                 "subtitle_cue_change",
+                "transition_change",
             }
             for change in changes
         )
@@ -1010,6 +1095,8 @@ class PlanDiffEngine:
                 after_subtitle_cue_count=sum(
                     len(track.cues) for track in core_timeline.subtitle_tracks.values()
                 ),
+                before_transition_count=before_transition_count,
+                after_transition_count=len(core_timeline.transitions),
                 before_duration_seconds=before_duration,
                 after_duration_seconds=max(
                     (
@@ -1123,6 +1210,7 @@ class PlanDiffEngine:
             )
             for track in timeline.tracks.values()
         }
+        before_transitions = _transition_map(timeline)
         def preview_id(prefix: str) -> str:
             return (
                 f"{prefix}_"
@@ -1135,9 +1223,31 @@ class PlanDiffEngine:
                 )[7:23]
             )
         try:
+            def duration_fact(clip: ClipConfig) -> float:
+                source_id = _source_id(clip.source)
+                fact = facts.get(clip.source) or facts.get(source_id)
+                if fact is None:
+                    raise TimelineEditError(
+                        "Transition preview requires exact opaque media facts "
+                        f"for {source_id}"
+                    )
+                return fact.duration_seconds
+
+            def audio_fact(clip: ClipConfig) -> bool:
+                fact = facts.get(clip.source) or facts.get(
+                    _source_id(clip.source)
+                )
+                if fact is None or fact.has_audio is None:
+                    raise TimelineEditError(
+                        "Audio transition preview requires exact audio-stream facts"
+                    )
+                return fact.has_audio
+
             engine = TimelineEditEngine(
                 timeline,
                 id_factory=preview_id,
+                source_duration_resolver=duration_fact,
+                source_audio_resolver=audio_fact,
             )
             name = step.tool_name
             if name == "VideoSplitClipSkill":
@@ -1271,6 +1381,67 @@ class PlanDiffEngine:
                     ),
                     link_group_id=params.link_group_id,
                 )
+            elif name == "TimelineAddTransitionSkill":
+                updated, outcome = engine.add_transition(
+                    params.transition,
+                    paired_transition=params.paired_transition,
+                )
+            elif name == "TimelineUpdateTransitionSkill":
+                updated, outcome = engine.update_transition(
+                    params.transition,
+                    paired_transition=params.paired_transition,
+                )
+            elif name == "TimelineRemoveTransitionSkill":
+                updated, outcome = engine.remove_transition(
+                    params.transition_id,
+                    include_paired=params.include_paired,
+                )
+            elif name == "TimelineCopyTransitionSkill":
+                source = engine.timeline.transitions.get(
+                    params.source_transition_id
+                )
+                if source is None:
+                    raise TimelineEditError(
+                        "Source transition ID is unknown"
+                    )
+                source_pair = (
+                    engine.timeline.transitions.get(
+                        source.paired_transition_id
+                    )
+                    if source.paired_transition_id is not None
+                    else None
+                )
+                copied_pairs = []
+                for target in params.targets:
+                    if source_pair is None and target.paired_transition_id:
+                        raise TimelineEditError(
+                            "Unpaired source cannot create an audio pair"
+                        )
+                    if source_pair is not None and not target.paired_transition_id:
+                        raise TimelineEditError(
+                            "Paired source requires an explicit audio cut"
+                        )
+                    copied = source.model_copy(update={
+                        "transition_id": target.transition_id,
+                        "track_id": target.track_id,
+                        "from_clip_id": target.from_clip_id,
+                        "to_clip_id": target.to_clip_id,
+                        "paired_transition_id": target.paired_transition_id,
+                    })
+                    copied_pair = None
+                    if source_pair is not None:
+                        copied_pair = source_pair.model_copy(update={
+                            "transition_id": target.paired_transition_id,
+                            "track_id": target.paired_track_id,
+                            "from_clip_id": target.paired_from_clip_id,
+                            "to_clip_id": target.paired_to_clip_id,
+                            "paired_transition_id": target.transition_id,
+                        })
+                    copied_pairs.append((copied, copied_pair))
+                updated, outcome = engine.copy_transition(
+                    params.source_transition_id,
+                    tuple(copied_pairs),
+                )
             else:
                 material_id = _source_id(params.source_path)
                 fact = facts.get(material_id)
@@ -1350,6 +1521,7 @@ class PlanDiffEngine:
             raise PlanDiffValidationError(str(exc)) from exc
 
         after = _preview_map(updated)
+        after_transitions = _transition_map(updated)
         direct = set(outcome.direct_clip_ids)
         for key in sorted(before.keys() | after.keys()):
             old, new = before.get(key), after.get(key)
@@ -1418,6 +1590,45 @@ class PlanDiffEngine:
                 before=old,
                 after=new,
                 reason=reason,
+            )
+        direct_transitions = set(outcome.created_transition_ids)
+        direct_transitions.update(outcome.modified_transition_ids)
+        if outcome.operation == "remove_transition":
+            direct_transitions.update(outcome.deleted_transition_ids)
+        for transition_id in sorted(
+            before_transitions.keys() | after_transitions.keys()
+        ):
+            old = before_transitions.get(transition_id)
+            new = after_transitions.get(transition_id)
+            if old == new:
+                continue
+            category = (
+                "transition_addition"
+                if old is None
+                else "transition_removal"
+                if new is None
+                else "transition_change"
+            )
+            append_change(
+                step=step,
+                category=category,
+                effect_kind=(
+                    "direct"
+                    if transition_id in direct_transitions
+                    else "consequential"
+                ),
+                severity="info",
+                entity=ProposedEntityReference(
+                    entity_kind="transition",
+                    entity_id=transition_id,
+                    track_id=(new or old).track_id,
+                ),
+                before_transition=old,
+                after_transition=new,
+                reason=(
+                    "The proposal creates, changes, or removes one exact "
+                    "first-class transition at an adjacent cut."
+                ),
             )
         if outcome.operation == "manage_track":
             append_change(

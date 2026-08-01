@@ -23,6 +23,7 @@ from contracts import (
     ManualVolumeEnvelope,
     ManualSubtitleCue,
     ManualSubtitleTrack,
+    ManualTransitionEdit,
 )
 from core import timeline_manager
 from core.timeline import ClipColorAdjustment, ClipTransform, TimelineConfig
@@ -30,6 +31,7 @@ from timeline_query import TimelineSnapshotService
 from timeline_edit import TimelineEditEngine, TimelineEditTransaction
 from traceability.recording import ManualTraceRecorder
 from subtitles import SubtitleEditCueInput, SubtitleEditEngine, SubtitleManageTrackInput
+from transitions.media import probe_source_duration, probe_source_has_audio
 
 from .base import BaseSkill
 
@@ -180,8 +182,64 @@ class VideoApplyManualEditsSkill(BaseSkill):
                 "Manual edit proposal is stale: timeline content changed"
             )
 
-        engine = TimelineEditEngine(current)
+        engine = TimelineEditEngine(
+            current,
+            source_duration_resolver=probe_source_duration,
+            source_audio_resolver=probe_source_has_audio,
+        )
         for edit in proposal.edits:
+            if isinstance(edit, ManualTransitionEdit):
+                if edit.action == "add":
+                    engine.add_transition(
+                        edit.transition,
+                        paired_transition=edit.paired_transition,
+                    )
+                elif edit.action == "update":
+                    engine.update_transition(
+                        edit.transition,
+                        paired_transition=edit.paired_transition,
+                    )
+                elif edit.action == "remove":
+                    engine.remove_transition(
+                        edit.transition_id,
+                        include_paired=True,
+                    )
+                else:
+                    source = engine.timeline.transitions.get(
+                        edit.source_transition_id
+                    )
+                    if source is None:
+                        raise ValueError("Source transition ID is unknown")
+                    source_pair = (
+                        engine.timeline.transitions.get(
+                            source.paired_transition_id
+                        )
+                        if source.paired_transition_id is not None
+                        else None
+                    )
+                    pairs = []
+                    for target in edit.targets:
+                        copied = source.model_copy(update={
+                            "transition_id": target.transition_id,
+                            "track_id": target.track_id,
+                            "from_clip_id": target.from_clip_id,
+                            "to_clip_id": target.to_clip_id,
+                            "paired_transition_id": target.paired_transition_id,
+                        })
+                        copied_pair = None
+                        if source_pair is not None:
+                            copied_pair = source_pair.model_copy(update={
+                                "transition_id": target.paired_transition_id,
+                                "track_id": target.paired_track_id,
+                                "from_clip_id": target.paired_from_clip_id,
+                                "to_clip_id": target.paired_to_clip_id,
+                                "paired_transition_id": target.transition_id,
+                            })
+                        pairs.append((copied, copied_pair))
+                    engine.copy_transition(
+                        edit.source_transition_id, tuple(pairs)
+                    )
+                continue
             if isinstance(edit, ManualSubtitleTrack):
                 subtitle_engine = SubtitleEditEngine(engine.timeline)
                 updated, _ = subtitle_engine.manage_track(SubtitleManageTrackInput(

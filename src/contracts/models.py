@@ -21,6 +21,7 @@ from core.timeline import (
     SubtitleCue,
     SubtitleStyle,
     TimelineConfig,
+    TimelineTransition,
 )
 
 
@@ -687,6 +688,44 @@ class ManualSubtitleCue(ContractModel):
         return self
 
 
+class ManualTransitionCopyTarget(ContractModel):
+    transition_id: StableId
+    track_id: StableId
+    from_clip_id: StableId
+    to_clip_id: StableId
+    paired_transition_id: StableId | None = None
+    paired_track_id: StableId | None = None
+    paired_from_clip_id: StableId | None = None
+    paired_to_clip_id: StableId | None = None
+
+
+class ManualTransitionEdit(ContractModel):
+    """User-authored transition proposal; execution remains confirmed/atomic."""
+
+    operation_id: StableId
+    kind: Literal["transition"] = "transition"
+    action: Literal["add", "update", "remove", "copy"]
+    transition: TimelineTransition | None = None
+    paired_transition: TimelineTransition | None = None
+    transition_id: StableId | None = None
+    source_transition_id: StableId | None = None
+    targets: tuple[ManualTransitionCopyTarget, ...] = ()
+
+    @model_validator(mode="after")
+    def exact_action_payload(self) -> "ManualTransitionEdit":
+        if self.action in {"add", "update"} and self.transition is None:
+            raise ValueError("Transition add/update requires transition payload")
+        if self.action == "remove" and self.transition_id is None:
+            raise ValueError("Transition remove requires transition_id")
+        if self.action == "copy" and (
+            self.source_transition_id is None or not self.targets
+        ):
+            raise ValueError("Transition copy requires source and targets")
+        if self.action != "copy" and self.targets:
+            raise ValueError("Only transition copy accepts targets")
+        return self
+
+
 ManualEditOperation = Annotated[
     ManualClipUpdate
     | ManualClipRemove
@@ -699,7 +738,8 @@ ManualEditOperation = Annotated[
     | ManualTrackMix
     | ManualVolumeEnvelope
     | ManualSubtitleTrack
-    | ManualSubtitleCue,
+    | ManualSubtitleCue
+    | ManualTransitionEdit,
     Field(discriminator="kind"),
 ]
 
@@ -734,6 +774,31 @@ class ManualEditProposal(ContractModel):
         if len(clip_targets) != len(set(clip_targets)):
             raise ValueError(
                 "A manual proposal may edit each clip at most once"
+            )
+        transition_targets: list[str] = []
+        for edit in self.edits:
+            if not isinstance(edit, ManualTransitionEdit):
+                continue
+            if edit.action in {"add", "update"}:
+                transition_targets.append(edit.transition.transition_id)
+                if edit.paired_transition is not None:
+                    transition_targets.append(
+                        edit.paired_transition.transition_id
+                    )
+            elif edit.action == "remove":
+                transition_targets.append(edit.transition_id)
+            else:
+                transition_targets.extend(
+                    target.transition_id for target in edit.targets
+                )
+                transition_targets.extend(
+                    target.paired_transition_id
+                    for target in edit.targets
+                    if target.paired_transition_id is not None
+                )
+        if len(transition_targets) != len(set(transition_targets)):
+            raise ValueError(
+                "A manual proposal may target each transition at most once"
             )
         return self
 
@@ -808,7 +873,7 @@ class ManualEditChange(ContractModel):
     """Reviewable before/after diff for one manual edit operation."""
 
     operation_id: StableId
-    target_kind: Literal["clip", "track", "subtitle_track", "subtitle_cue"] = "clip"
+    target_kind: Literal["clip", "track", "subtitle_track", "subtitle_cue", "transition"] = "clip"
     track_key: str = Field(min_length=1)
     track_id: StableId | None = None
     clip_id: str = Field(min_length=1)
@@ -884,7 +949,10 @@ class TimelineProjectDocument(ContractModel):
                 "timeline",
                 "migration_source",
             }
-            legacy_keys = {"width", "height", "fps", "tracks", "subtitle_tracks"}
+            legacy_keys = {
+                "width", "height", "fps", "tracks", "subtitle_tracks",
+                "transitions",
+            }
             if {
                 "project_id",
                 "timeline",

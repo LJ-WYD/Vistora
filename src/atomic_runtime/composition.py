@@ -20,6 +20,12 @@ from skills.subtitle_timeline_edits import (
     SubtitleImportSkill,
     SubtitleManageTrackSkill,
 )
+from skills.timeline_transitions import (
+    TimelineAddTransitionSkill,
+    TimelineCopyTransitionSkill,
+    TimelineRemoveTransitionSkill,
+    TimelineUpdateTransitionSkill,
+)
 
 from skills.video_add_clip import VideoAddClipSkill
 from skills.video_apply_manual_edits import VideoApplyManualEditsSkill
@@ -128,6 +134,10 @@ class CoreTimelineEditResult(_Result):
         "set_clip_transform",
         "set_clip_color",
         "copy_clip_visual",
+        "add_transition",
+        "update_transition",
+        "remove_transition",
+        "copy_transition",
     ]
     track_id: str
     track_key: str
@@ -137,6 +147,9 @@ class CoreTimelineEditResult(_Result):
     modified_clip_ids: list[str]
     deleted_clip_ids: list[str]
     consequential_subtitle_cue_ids: list[str] = []
+    created_transition_ids: list[str] = []
+    modified_transition_ids: list[str] = []
+    deleted_transition_ids: list[str] = []
     warnings: list[str]
     before_snapshot_id: str
     after_snapshot_id: str
@@ -227,7 +240,7 @@ def build_production_registry(
     )
     return AtomicSkillRegistry(
         registry_id="registry_atomic_skills",
-        registry_revision=5,
+        registry_revision=6,
         entries=(
             _entry(
                 VideoAddClipSkill(),
@@ -372,6 +385,24 @@ def build_production_registry(
                     VideoSetClipTransformSkill(),
                     VideoSetClipColorSkill(),
                     VideoCopyClipVisualSkill(),
+                )
+            ),
+            *tuple(
+                _entry(
+                    skill,
+                    CoreTimelineEditResult,
+                    side_effects=("files", "timeline"),
+                    transactionality="atomic_project_state",
+                    retry_safety="gateway_replay_only",
+                    preview_supported=True,
+                    rollback_support="checkpoint_restore",
+                    required_capabilities=("ffmpeg", "local_media_read"),
+                )
+                for skill in (
+                    TimelineAddTransitionSkill(),
+                    TimelineUpdateTransitionSkill(),
+                    TimelineRemoveTransitionSkill(),
+                    TimelineCopyTransitionSkill(),
                 )
             ),
             *tuple(

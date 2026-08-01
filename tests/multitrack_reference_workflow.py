@@ -27,10 +27,13 @@ from core.timeline import (  # noqa: E402
     AppliedLoudnessNormalization,
     ClipConfig,
     TimelineConfig,
+    TimelineTransition,
     TrackConfig,
+    TransitionParameters,
 )
 from plan_review import (  # noqa: E402
     PlanDiffRequest,
+    PreviewMaterialFact,
     ProposedEditingExecutionPlan,
     RegistrySchemaReference,
 )
@@ -372,6 +375,52 @@ def run_multitrack_reference_workflow() -> dict:
                     evidence_ids=tuple(item.evidence_id for item in evidence),
                 ),
                 DirectorOperation(
+                    operation_id="operation_transition_source_split",
+                    tool_name="VideoSplitClipSkill",
+                    arguments={
+                        "track_id": "track_video_main",
+                        "clip_id": "clip_video_right",
+                        "split_at_seconds": 2.75,
+                        "right_clip_id": "clip_video_transition_right",
+                        "edit_scope": "current_clip",
+                    },
+                    rationale="Create one exact reviewed cut for transition validation.",
+                    expected_effect="Create two adjacent source-backed picture segments.",
+                    evidence_ids=("evidence_video_main",),
+                ),
+                DirectorOperation(
+                    operation_id="operation_transition_add",
+                    tool_name="TimelineAddTransitionSkill",
+                    arguments={
+                        "transition": TimelineTransition(
+                            transition_id="transition_reference_video",
+                            track_id="track_video_main",
+                            from_clip_id="clip_video_right",
+                            to_clip_id="clip_video_transition_right",
+                            kind="cross_dissolve",
+                            duration_seconds=0.5,
+                            alignment="centered",
+                            parameters=TransitionParameters(),
+                            audio_policy="linked_audio",
+                            paired_transition_id="transition_reference_audio",
+                        ).model_dump(mode="json"),
+                        "paired_transition": TimelineTransition(
+                            transition_id="transition_reference_audio",
+                            track_id="track_video_main",
+                            from_clip_id="clip_video_right",
+                            to_clip_id="clip_video_transition_right",
+                            kind="audio_equal_power",
+                            duration_seconds=0.5,
+                            alignment="centered",
+                            parameters=TransitionParameters(),
+                            paired_transition_id="transition_reference_video",
+                        ).model_dump(mode="json"),
+                    },
+                    rationale="Soften the exact cut with explicitly linked picture and embedded audio.",
+                    expected_effect="Create reciprocal first-class video/audio transitions.",
+                    evidence_ids=("evidence_video_main",),
+                ),
+                DirectorOperation(
                     operation_id="operation_overlay_transform",
                     tool_name="VideoSetClipTransformSkill",
                     arguments={
@@ -599,6 +648,21 @@ def run_multitrack_reference_workflow() -> dict:
                 director_plan=plan,
                 proposed_execution=proposed,
                 registry_ref=RegistrySchemaReference.from_registry(registry),
+                material_facts=tuple(
+                    PreviewMaterialFact(
+                        material_id=clip.source.source_id,
+                        media_kind=track.kind,
+                        duration_seconds=4,
+                        width=320 if track.kind == "video" else None,
+                        height=180 if track.kind == "video" else None,
+                        has_audio=(
+                            track.kind == "audio"
+                            or clip.clip_id == "clip_video_main"
+                        ),
+                    )
+                    for track in snapshot.tracks
+                    for clip in track.clips
+                ),
             )
             workflow = WorkflowApplicationService(
                 store=WorkflowStore.for_project_file(project_file),
@@ -641,6 +705,12 @@ def run_multitrack_reference_workflow() -> dict:
                     "VideoCopyClipVisualSkill",
                 }
             )
+            transition_relations = tuple(
+                relation
+                for confirmed_trace in trace.confirmed_traces
+                for relation in confirmed_trace.relations
+                if relation.entity.entity_kind == "transition"
+            )
             if not any(
                 relation.relation_type == "creates"
                 for relation in subtitle_relations
@@ -672,6 +742,7 @@ def run_multitrack_reference_workflow() -> dict:
                 "trace_count": len(trace.confirmed_traces),
                 "subtitle_trace_count": len(subtitle_relations),
                 "visual_trace_count": len(visual_relations),
+                "transition_trace_count": len(transition_relations),
                 "subtitle_tombstone_count": sum(
                     relation.relation_type == "deletes"
                     for relation in subtitle_relations
@@ -681,6 +752,7 @@ def run_multitrack_reference_workflow() -> dict:
                 "current_audio_clip_count": current.audio_clip_count,
                 "current_subtitle_track_count": current.subtitle_track_count,
                 "current_subtitle_cue_count": current.subtitle_cue_count,
+                "current_transition_count": current.transition_count,
                 "rollback_status": rollback.status,
                 "subtitle_sidecar": subtitle_sidecar.read_text(encoding="utf-8"),
                 "loudness_analysis_id": loudness.analysis_id,

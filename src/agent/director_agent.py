@@ -816,6 +816,7 @@ class DirectorAgent:
                     duration_seconds=material.duration_seconds,
                     width=material.width,
                     height=material.height,
+                    has_audio=material.has_audio,
                 )
             )
         return tuple(facts)

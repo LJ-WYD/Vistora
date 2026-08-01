@@ -266,6 +266,120 @@ class ClipColorAdjustment(BaseModel):
         return self
 
 
+TransitionKind = Literal[
+    "cut",
+    "cross_dissolve",
+    "fade_color",
+    "wipe",
+    "slide",
+    "audio_equal_power",
+    "audio_linear",
+    "audio_fade_out_in",
+]
+
+
+class TransitionParameters(BaseModel):
+    """Whitelisted parameters for deterministic built-in transitions."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    schema_name: Literal["vistora.transition-parameters"] = (
+        "vistora.transition-parameters"
+    )
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    direction: Literal["left", "right", "up", "down"] | None = None
+    color: Literal["#000000", "#FFFFFF"] | None = None
+
+
+class TimelineTransition(BaseModel):
+    """Frozen first-class transition bound to one exact adjacent cut."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    schema_name: Literal["vistora.timeline-transition"] = (
+        "vistora.timeline-transition"
+    )
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    transition_id: str = Field(
+        min_length=3,
+        max_length=160,
+        pattern=r"^[A-Za-z][A-Za-z0-9._:-]*$",
+    )
+    track_id: str = Field(
+        min_length=3,
+        max_length=160,
+        pattern=r"^[A-Za-z][A-Za-z0-9._:-]*$",
+    )
+    from_clip_id: str = Field(
+        min_length=3,
+        max_length=160,
+        pattern=r"^[A-Za-z][A-Za-z0-9._:-]*$",
+    )
+    to_clip_id: str = Field(
+        min_length=3,
+        max_length=160,
+        pattern=r"^[A-Za-z][A-Za-z0-9._:-]*$",
+    )
+    kind: TransitionKind
+    duration_seconds: float = Field(0, ge=0, le=10, allow_inf_nan=False)
+    alignment: Literal["centered", "start_at_cut", "end_at_cut"] = (
+        "centered"
+    )
+    parameters: TransitionParameters = Field(
+        default_factory=TransitionParameters
+    )
+    enabled: bool = True
+    audio_policy: Literal[
+        "none", "linked_audio", "explicit_audio_transition"
+    ] = "none"
+    paired_transition_id: str | None = Field(
+        default=None,
+        min_length=3,
+        max_length=160,
+        pattern=r"^[A-Za-z][A-Za-z0-9._:-]*$",
+    )
+
+    @property
+    def media_type(self) -> Literal["video", "audio"]:
+        return "audio" if self.kind.startswith("audio_") else "video"
+
+    @model_validator(mode="after")
+    def kind_parameters_are_exact(self) -> "TimelineTransition":
+        direction = self.parameters.direction
+        color = self.parameters.color
+        if self.kind == "cut":
+            if self.duration_seconds != 0:
+                raise ValueError("Cut transitions must have zero duration")
+            if direction is not None or color is not None:
+                raise ValueError("Cut transitions accept no parameters")
+            if self.audio_policy != "none" or self.paired_transition_id:
+                raise ValueError("Cut transitions cannot create audio pairing")
+        else:
+            if self.duration_seconds < 0.04:
+                raise ValueError(
+                    "Non-cut transitions require at least 0.04 seconds"
+                )
+        if self.kind in {"wipe", "slide"}:
+            if direction is None or color is not None:
+                raise ValueError(
+                    "Wipe/slide requires one direction and no color"
+                )
+        elif self.kind == "fade_color":
+            if color is None or direction is not None:
+                raise ValueError(
+                    "Fade-through-color requires controlled black/white color"
+                )
+        elif direction is not None or color is not None:
+            raise ValueError("This transition kind accepts no parameters")
+        if self.media_type == "audio":
+            if self.audio_policy != "none":
+                raise ValueError("Audio transitions cannot carry audio policy")
+        elif self.kind != "cut":
+            if self.audio_policy == "none" and self.paired_transition_id:
+                raise ValueError("Unpaired video transitions accept no pair ID")
+            if self.audio_policy != "none" and not self.paired_transition_id:
+                raise ValueError("Audio-linked video transition requires pair ID")
+        return self
+
+
 class ClipConfig(BaseModel):
     """Declarative clip state shared by legacy and v2 timelines."""
 
@@ -334,6 +448,7 @@ class TimelineConfig(BaseModel):
     fps: int = Field(30, gt=0)
     tracks: Dict[str, TrackConfig] = Field(default_factory=dict)
     subtitle_tracks: Dict[str, SubtitleTrackConfig] = Field(default_factory=dict)
+    transitions: Dict[str, TimelineTransition] = Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod
@@ -393,6 +508,7 @@ class TimelineConfig(BaseModel):
             track_data.setdefault("locked", False)
             normalized[track_key] = track_data
         migrated["tracks"] = normalized
+        migrated.setdefault("transitions", {})
         return migrated
 
     @model_validator(mode="after")
@@ -421,6 +537,76 @@ class TimelineConfig(BaseModel):
         ]
         if len(cue_ids) != len(set(cue_ids)):
             raise ValueError("subtitle cue IDs must be unique across all tracks")
+        if any(
+            key != transition.transition_id
+            for key, transition in self.transitions.items()
+        ):
+            raise ValueError("transition mapping keys must equal transition IDs")
+        transition_ids = [
+            transition.transition_id for transition in self.transitions.values()
+        ]
+        if len(transition_ids) != len(set(transition_ids)):
+            raise ValueError("transition IDs must be unique")
+        track_by_id = {track.id: track for track in self.tracks.values()}
+        occupied_cuts: set[tuple[str, str, str, str]] = set()
+        for transition in self.transitions.values():
+            track = track_by_id.get(transition.track_id)
+            if track is None:
+                raise ValueError("transition references an unknown track")
+            clips = sorted(
+                track.clips,
+                key=lambda item: (item.timeline_start, item.id),
+            )
+            from_indices = [
+                index for index, clip in enumerate(clips)
+                if clip.id == transition.from_clip_id
+            ]
+            to_indices = [
+                index for index, clip in enumerate(clips)
+                if clip.id == transition.to_clip_id
+            ]
+            if len(from_indices) != 1 or len(to_indices) != 1:
+                raise ValueError("transition clip references must be exact")
+            if to_indices[0] != from_indices[0] + 1:
+                raise ValueError("transition clips must be same-track adjacent")
+            outgoing = clips[from_indices[0]]
+            incoming = clips[to_indices[0]]
+            outgoing_end = outgoing.timeline_start + (
+                outgoing.trim_out - outgoing.trim_in
+            ) / outgoing.speed_factor
+            if abs(outgoing_end - incoming.timeline_start) > 1e-6:
+                raise ValueError(
+                    "transition clips must meet at one exact cut without gap/overlap"
+                )
+            if transition.media_type == "video" and track.kind != "video":
+                raise ValueError("video transition requires a video track")
+            if transition.media_type == "audio":
+                if track.kind == "video" and not (
+                    outgoing.keep_audio and incoming.keep_audio
+                ):
+                    raise ValueError(
+                        "embedded-audio transition requires active clip audio"
+                    )
+                if track.kind not in {"video", "audio"}:
+                    raise ValueError("audio transition requires media clips")
+            cut_key = (
+                transition.track_id,
+                transition.from_clip_id,
+                transition.to_clip_id,
+                transition.media_type,
+            )
+            if cut_key in occupied_cuts:
+                raise ValueError("one media transition may bind each exact cut")
+            occupied_cuts.add(cut_key)
+        for transition in self.transitions.values():
+            pair_id = transition.paired_transition_id
+            if pair_id is None:
+                continue
+            pair = self.transitions.get(pair_id)
+            if pair is None or pair.paired_transition_id != transition.transition_id:
+                raise ValueError("paired transition linkage must be reciprocal")
+            if pair.media_type == transition.media_type:
+                raise ValueError("transition pair must contain video and audio")
         return self
 
 
@@ -437,6 +623,14 @@ class TimelineRenderer:
         开始渲染时间线，并输出到指定路径
         """
         # --- Fast-Path 极速渲染通道判断 ---
+        if any(
+            transition.enabled and transition.kind != "cut"
+            for transition in self.config.transitions.values()
+        ):
+            from transitions import render_transition_timeline
+
+            return render_transition_timeline(self.config, output_path)
+
         ordered_tracks = sorted(
             self.config.tracks.values(),
             key=lambda track: (track.order, track.id),

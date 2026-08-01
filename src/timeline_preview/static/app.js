@@ -98,6 +98,21 @@ const ui = {
   stageColor: document.querySelector("#stage-color"),
   resetVisual: document.querySelector("#reset-visual"),
   copyVisual: document.querySelector("#copy-visual"),
+  transitionEditPanel: document.querySelector("#transition-edit-panel"),
+  transitionToClip: document.querySelector("#transition-to-clip"),
+  transitionKind: document.querySelector("#transition-kind"),
+  transitionDuration: document.querySelector("#transition-duration"),
+  transitionAlignment: document.querySelector("#transition-alignment"),
+  transitionDirection: document.querySelector("#transition-direction"),
+  transitionColor: document.querySelector("#transition-color"),
+  transitionAudioPolicy: document.querySelector("#transition-audio-policy"),
+  transitionAudioKind: document.querySelector("#transition-audio-kind"),
+  transitionCopyTargets: document.querySelector("#transition-copy-targets"),
+  transitionFormMessage: document.querySelector("#transition-form-message"),
+  previewTransition: document.querySelector("#preview-transition"),
+  stageTransition: document.querySelector("#stage-transition"),
+  removeTransition: document.querySelector("#remove-transition"),
+  copyTransition: document.querySelector("#copy-transition"),
   subtitleEditor: document.querySelector("#subtitle-editor"),
   subtitleTrackSelect: document.querySelector("#subtitle-track-select"),
   subtitleTrackLanguage: document.querySelector("#subtitle-track-language"),
@@ -288,6 +303,11 @@ function safeChangeState(stateValue) {
     return `${stateValue.gain_db} dB · pan ${stateValue.pan} · ` +
       `${stateValue.muted ? "muted" : "active"}`;
   }
+  if ("transition_id" in stateValue) {
+    return `${stateValue.kind.replaceAll("_", " ")} / ` +
+      `${formatSeconds(stateValue.duration_seconds)} / ` +
+      `${stateValue.from_clip_id} -> ${stateValue.to_clip_id}`;
+  }
   return (
     `${formatSeconds(stateValue.timeline_start_seconds)}–` +
     `${formatSeconds(stateValue.timeline_end_seconds)} · ` +
@@ -324,13 +344,15 @@ function showPlanChangeDetails(change) {
     detailRow(
       "Before",
       safeChangeState(
-        change.before || change.before_project || change.before_track_mix,
+        change.before || change.before_project || change.before_track_mix ||
+          change.before_transition,
       ),
     ),
     detailRow(
       "After",
       safeChangeState(
-        change.after || change.after_project || change.after_track_mix,
+        change.after || change.after_project || change.after_track_mix ||
+          change.after_transition,
       ),
     ),
     detailRow("Reason", change.reason),
@@ -1576,6 +1598,90 @@ function showManualEditor(track, clip) {
     : track.kind !== "video"
       ? "Visual properties apply only to video/image clips."
       : `Visual digest ${clip.visual_digest.slice(0, 23)}… · export exact.`;
+  const orderedClips = [...track.clips].sort(
+    (left, right) =>
+      left.timeline_start_seconds - right.timeline_start_seconds ||
+      left.clip_id.localeCompare(right.clip_id),
+  );
+  const selectedIndex = orderedClips.findIndex(
+    (item) => item.clip_id === clip.clip_id,
+  );
+  const nextClip = orderedClips[selectedIndex + 1] || null;
+  const exactCut = Boolean(nextClip) &&
+    Math.abs(clip.timeline_end_seconds - nextClip.timeline_start_seconds) <= 1e-6;
+  const existingTransition = (state.snapshot.transitions || []).find(
+    (item) =>
+      item.media_type === "video" &&
+      item.track_id === track.track_id &&
+      item.from_clip_id === clip.clip_id &&
+      item.to_clip_id === nextClip?.clip_id,
+  ) || null;
+  ui.transitionToClip.replaceChildren();
+  if (nextClip && exactCut) {
+    const option = document.createElement("option");
+    option.value = nextClip.clip_id;
+    option.textContent = nextClip.clip_id;
+    ui.transitionToClip.append(option);
+  }
+  ui.transitionCopyTargets.replaceChildren();
+  for (const candidateTrack of state.snapshot.tracks) {
+    if (candidateTrack.kind !== "video" || candidateTrack.role !== "primary") continue;
+    const candidates = [...candidateTrack.clips].sort(
+      (left, right) => left.timeline_start_seconds - right.timeline_start_seconds || left.clip_id.localeCompare(right.clip_id),
+    );
+    for (let index = 0; index + 1 < candidates.length; index += 1) {
+      const left = candidates[index];
+      const right = candidates[index + 1];
+      if (left.clip_id === clip.clip_id && right.clip_id === nextClip?.clip_id) continue;
+      if (Math.abs(left.timeline_end_seconds - right.timeline_start_seconds) > 1e-6) continue;
+      const option = document.createElement("option");
+      option.value = JSON.stringify({
+        track_id: candidateTrack.track_id,
+        from_clip_id: left.clip_id,
+        to_clip_id: right.clip_id,
+      });
+      option.textContent = `${candidateTrack.track_id} / ${left.clip_id} -> ${right.clip_id}`;
+      option.disabled = candidateTrack.locked;
+      ui.transitionCopyTargets.append(option);
+    }
+  }
+  if (existingTransition) {
+    ui.transitionKind.value = existingTransition.kind;
+    ui.transitionDuration.value = String(existingTransition.duration_seconds);
+    ui.transitionAlignment.value = existingTransition.alignment;
+    ui.transitionDirection.value = existingTransition.direction || "left";
+    ui.transitionColor.value = existingTransition.color || "#000000";
+    ui.transitionAudioPolicy.value = existingTransition.audio_policy;
+    const audioPair = (state.snapshot.transitions || []).find(
+      (item) => item.transition_id === existingTransition.paired_transition_id,
+    );
+    ui.transitionAudioKind.value = audioPair?.kind || "audio_equal_power";
+  } else {
+    ui.transitionKind.value = "cross_dissolve";
+    ui.transitionDuration.value = "0.5";
+    ui.transitionAlignment.value = "centered";
+    ui.transitionDirection.value = "left";
+    ui.transitionColor.value = "#000000";
+    ui.transitionAudioPolicy.value = "none";
+    ui.transitionAudioKind.value = "audio_equal_power";
+  }
+  const transitionDisabled =
+    track.locked || track.kind !== "video" || track.role !== "primary" || !exactCut;
+  ui.stageTransition.disabled = transitionDisabled;
+  ui.previewTransition.disabled = true;
+  ui.removeTransition.disabled = transitionDisabled || !existingTransition;
+  ui.copyTransition.disabled = transitionDisabled || !existingTransition ||
+    ui.transitionCopyTargets.options.length === 0;
+  ui.transitionFormMessage.classList.toggle("error", transitionDisabled);
+  ui.transitionFormMessage.textContent = track.locked
+    ? "Locked tracks reject transition changes."
+    : track.role !== "primary" || track.kind !== "video"
+      ? "First-version video transitions require a primary video track."
+      : !exactCut
+        ? "The selected clip has no exact adjacent cut."
+        : existingTransition
+          ? `${existingTransition.kind.replaceAll("_", " ")} / ${existingTransition.duration_seconds}s / ${existingTransition.alignment}`
+          : "No transition exists at this exact cut.";
   ui.clipEditForm.querySelector('button[type="submit"]').disabled =
     track.locked;
   ui.stageRemove.disabled = track.locked;
@@ -1713,6 +1819,13 @@ function setDraftState(label, kind = "") {
 
 function changedFieldLines(change) {
   if (change.action === "create") {
+    if (change.target_kind === "transition") {
+      return [
+        `Create ${change.after.kind.replaceAll("_", " ")}`,
+        `${formatSeconds(change.after.duration_seconds)} / ${change.after.alignment}`,
+        `${change.after.from_clip_id} -> ${change.after.to_clip_id}`,
+      ];
+    }
     if (change.target_kind === "subtitle_track") {
       return [`Create ${change.after.kind} track`, change.after.language || "und"];
     }
@@ -1730,6 +1843,12 @@ function changedFieldLines(change) {
     ];
   }
   if (change.action === "remove") {
+    if (change.target_kind === "transition") {
+      return [
+        `Remove ${change.before.kind.replaceAll("_", " ")}`,
+        `${change.before.from_clip_id} -> ${change.before.to_clip_id}`,
+      ];
+    }
     if (change.target_kind === "subtitle_track") {
       return [`Delete subtitle track`, `${change.before.cues?.length || 0} cues`];
     }
@@ -1747,6 +1866,11 @@ function changedFieldLines(change) {
     ];
   }
   const labels = {
+    kind: "Transition type",
+    duration_seconds: "Transition duration",
+    alignment: "Transition alignment",
+    parameters: "Transition parameters",
+    audio_policy: "Audio policy",
     trim_in_seconds: "Source in",
     trim_out_seconds: "Source out",
     timeline_start_seconds: "Timeline start",
@@ -1928,6 +2052,9 @@ function stageEdit(edit) {
     if (value.kind === "copy_clip_visual") {
       return `visual_copy:${value.source_track_id}/${value.source_clip_id}`;
     }
+    if (value.kind === "transition") {
+      return `transition:${value.transition?.transition_id || value.transition_id || value.source_transition_id}`;
+    }
     const domain = value.kind === "clip_audio" ? "audio" : "timing";
     return `clip:${domain}:${value.track_id || value.track_key}/${value.clip_id}`;
   };
@@ -1970,7 +2097,8 @@ function renderSummary() {
     [
       "Contents",
       `${snapshot.track_count} media + ${snapshot.subtitle_track_count || 0} text tracks / ` +
-        `${snapshot.clip_count} clips + ${snapshot.subtitle_cue_count || 0} cues`,
+        `${snapshot.clip_count} clips + ${snapshot.subtitle_cue_count || 0} cues + ` +
+        `${snapshot.transition_count || 0} transitions`,
     ],
   ];
   for (const [label, value] of stats) {
@@ -2139,6 +2267,7 @@ function clearPreview(message) {
   ui.previewTitle.textContent = "Preview unavailable";
   ui.previewStatus.textContent = message;
   approximateVisualPreview(null);
+  ui.previewTransition.disabled = true;
 }
 
 function selectClip(track, clip, element) {
@@ -2177,6 +2306,7 @@ function selectClip(track, clip, element) {
   }
   ui.monitor.classList.add("has-media");
   approximateVisualPreview(clip);
+  ui.previewTransition.disabled = ui.stageTransition.disabled;
   ui.previewStatus.textContent =
     "Previewing allowlisted media. Playback updates the local playhead only.";
 
@@ -2453,6 +2583,42 @@ function renderTimeline() {
       });
       lane.append(block);
     });
+    for (const transition of (snapshot.transitions || []).filter(
+      (item) => item.track_id === track.track_id && item.media_type === track.kind,
+    )) {
+      const incoming = track.clips.find(
+        (item) => item.clip_id === transition.to_clip_id,
+      );
+      if (!incoming) continue;
+      const marker = document.createElement("button");
+      marker.type = "button";
+      marker.className = `transition-marker ${transition.media_type}`;
+      marker.style.left =
+        `${incoming.timeline_start_seconds * state.pixelsPerSecond}px`;
+      marker.dataset.transitionId = transition.transition_id;
+      marker.title =
+        `${transition.kind.replaceAll("_", " ")} / ` +
+        `${formatSeconds(transition.duration_seconds)} / ${transition.alignment}`;
+      marker.setAttribute(
+        "aria-label",
+        `${transition.kind} transition from ${transition.from_clip_id} to ${transition.to_clip_id}`,
+      );
+      marker.textContent = transition.kind === "cut" ? "|" : "X";
+      marker.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const outgoing = track.clips.find(
+          (item) => item.clip_id === transition.from_clip_id,
+        );
+        const outgoingElement = lane.querySelector(
+          `[data-clip-id="${CSS.escape(transition.from_clip_id)}"]`,
+        );
+        if (outgoing && outgoingElement) {
+          selectClip(track, outgoing, outgoingElement);
+          ui.transitionFormMessage.textContent = marker.title;
+        }
+      });
+      lane.append(marker);
+    }
     for (const change of planChanges().filter(
       (item) =>
         item.category === "clip_addition" &&
@@ -3502,6 +3668,232 @@ ui.applyLoudness.addEventListener("click", () => {
   });
   ui.audioGain.value = String(evidence.recommended_gain_db);
   ui.audioAnalysisStatus.textContent += " Gain staged; explicit confirmation remains required.";
+});
+
+function selectedTransitionCut() {
+  if (!state.selected) throw new Error("Select an outgoing primary video clip.");
+  const {track, clip} = state.selected;
+  if (track.locked || track.kind !== "video" || track.role !== "primary") {
+    throw new Error("Select an unlocked primary video track.");
+  }
+  const next = track.clips.find(
+    (item) => item.clip_id === ui.transitionToClip.value,
+  );
+  if (!next || Math.abs(clip.timeline_end_seconds - next.timeline_start_seconds) > 1e-6) {
+    throw new Error("Transition target must be the exact adjacent cut.");
+  }
+  return {track, from: clip, to: next};
+}
+
+function currentVideoTransition(cut) {
+  return (state.snapshot.transitions || []).find(
+    (item) => item.media_type === "video" &&
+      item.track_id === cut.track.track_id &&
+      item.from_clip_id === cut.from.clip_id &&
+      item.to_clip_id === cut.to.clip_id,
+  ) || null;
+}
+
+ui.previewTransition.addEventListener("click", () => {
+  try {
+    selectedTransitionCut();
+    if (!ui.previewVideo.getAttribute("src")) {
+      throw new Error("Select an available outgoing source before previewing.");
+    }
+    const kind = ui.transitionKind.value;
+    const direction = ui.transitionDirection.value;
+    const duration = Math.max(120, Math.min(1500, Number(ui.transitionDuration.value) * 1000));
+    let frames = [{opacity: 1}, {opacity: 0.15}, {opacity: 1}];
+    if (kind === "wipe") {
+      const starts = {
+        left: "inset(0 0 0 100%)", right: "inset(0 100% 0 0)",
+        up: "inset(100% 0 0 0)", down: "inset(0 0 100% 0)",
+      };
+      frames = [{clipPath: starts[direction]}, {clipPath: "inset(0 0 0 0)"}];
+    } else if (kind === "slide") {
+      const offsets = {left: "100%", right: "-100%", up: "0, 100%", down: "0, -100%"};
+      const start = direction === "left" || direction === "right"
+        ? `translateX(${offsets[direction]})` : `translate(${offsets[direction]})`;
+      frames = [{transform: start}, {transform: "translate(0, 0)"}];
+    } else if (kind === "cut") {
+      frames = [{opacity: 1}, {opacity: 1}];
+    }
+    ui.previewVideo.animate(frames, {duration, easing: "linear"});
+    ui.transitionFormMessage.classList.remove("error");
+    ui.transitionFormMessage.textContent =
+      "Controlled browser approximation played; final FFmpeg export is authoritative.";
+  } catch (error) {
+    ui.transitionFormMessage.classList.add("error");
+    ui.transitionFormMessage.textContent = error.message || String(error);
+  }
+});
+
+function transitionPayload(identity, cut, pairIdentity = null) {
+  const kind = ui.transitionKind.value;
+  const duration = kind === "cut"
+    ? 0
+    : readFiniteInput(ui.transitionDuration, "Transition duration");
+  if (kind !== "cut" && duration < 0.04) {
+    throw new Error("Non-cut transitions require at least 0.04 seconds.");
+  }
+  const parameters = {
+    schema_name: "vistora.transition-parameters",
+    schema_version: "1.0.0",
+    direction: ["wipe", "slide"].includes(kind)
+      ? ui.transitionDirection.value : null,
+    color: kind === "fade_color" ? ui.transitionColor.value : null,
+  };
+  const audioPolicy = kind === "cut" ? "none" : ui.transitionAudioPolicy.value;
+  return {
+    schema_name: "vistora.timeline-transition",
+    schema_version: "1.0.0",
+    transition_id: identity,
+    track_id: cut.track.track_id,
+    from_clip_id: cut.from.clip_id,
+    to_clip_id: cut.to.clip_id,
+    kind,
+    duration_seconds: duration,
+    alignment: ui.transitionAlignment.value,
+    parameters,
+    enabled: true,
+    audio_policy: audioPolicy,
+    paired_transition_id: audioPolicy === "none" ? null : pairIdentity,
+  };
+}
+
+function pairedAudioPayload(identity, videoIdentity, cut, duration, alignment) {
+  if (!cut.from.keep_audio || !cut.to.keep_audio) {
+    throw new Error("Linked audio transition requires active audio on both clips.");
+  }
+  return {
+    schema_name: "vistora.timeline-transition",
+    schema_version: "1.0.0",
+    transition_id: identity,
+    track_id: cut.track.track_id,
+    from_clip_id: cut.from.clip_id,
+    to_clip_id: cut.to.clip_id,
+    kind: ui.transitionAudioKind.value,
+    duration_seconds: duration,
+    alignment,
+    parameters: {
+      schema_name: "vistora.transition-parameters",
+      schema_version: "1.0.0",
+      direction: null,
+      color: null,
+    },
+    enabled: true,
+    audio_policy: "none",
+    paired_transition_id: videoIdentity,
+  };
+}
+
+ui.stageTransition.addEventListener("click", () => {
+  try {
+    const cut = selectedTransitionCut();
+    const existing = currentVideoTransition(cut);
+    const videoIdentity = existing?.transition_id || newStableId("transition");
+    const existingPair = (state.snapshot.transitions || []).find(
+      (item) => item.transition_id === existing?.paired_transition_id,
+    );
+    const pairIdentity = ui.transitionAudioPolicy.value === "none"
+      ? null : existingPair?.transition_id || newStableId("transition_audio");
+    const transition = transitionPayload(videoIdentity, cut, pairIdentity);
+    const paired = pairIdentity
+      ? pairedAudioPayload(
+          pairIdentity,
+          videoIdentity,
+          cut,
+          transition.duration_seconds,
+          transition.alignment,
+        )
+      : null;
+    stageEdit({
+      schema_version: "1.0.0",
+      operation_id: newStableId("manual_transition"),
+      kind: "transition",
+      action: existing ? "update" : "add",
+      transition,
+      paired_transition: paired,
+      transition_id: null,
+      source_transition_id: null,
+      targets: [],
+    });
+    ui.transitionFormMessage.classList.remove("error");
+    ui.transitionFormMessage.textContent =
+      "Transition staged locally; media handles are validated before confirmation.";
+  } catch (error) {
+    ui.transitionFormMessage.classList.add("error");
+    ui.transitionFormMessage.textContent = error.message || String(error);
+  }
+});
+
+ui.removeTransition.addEventListener("click", () => {
+  try {
+    const cut = selectedTransitionCut();
+    const existing = currentVideoTransition(cut);
+    if (!existing) throw new Error("No transition exists at this cut.");
+    stageEdit({
+      schema_version: "1.0.0",
+      operation_id: newStableId("manual_transition_remove"),
+      kind: "transition",
+      action: "remove",
+      transition: null,
+      paired_transition: null,
+      transition_id: existing.transition_id,
+      source_transition_id: null,
+      targets: [],
+    });
+    ui.transitionFormMessage.textContent =
+      "Transition and its explicit audio pair are staged for removal.";
+  } catch (error) {
+    ui.transitionFormMessage.classList.add("error");
+    ui.transitionFormMessage.textContent = error.message || String(error);
+  }
+});
+
+ui.copyTransition.addEventListener("click", () => {
+  try {
+    const cut = selectedTransitionCut();
+    const existing = currentVideoTransition(cut);
+    if (!existing) throw new Error("Select a cut with an existing transition.");
+    const selectedTargets = Array.from(ui.transitionCopyTargets.selectedOptions)
+      .map((option) => JSON.parse(option.value))
+      .sort((left, right) =>
+        `${left.track_id}/${left.from_clip_id}`.localeCompare(
+          `${right.track_id}/${right.from_clip_id}`,
+        ),
+      );
+    if (!selectedTargets.length) throw new Error("Select explicit target cuts.");
+    const paired = Boolean(existing.paired_transition_id);
+    const targets = selectedTargets.map((target) => {
+      const transitionId = newStableId("transition");
+      return {
+        schema_version: "1.0.0",
+        ...target,
+        transition_id: transitionId,
+        paired_transition_id: paired ? newStableId("transition_audio") : null,
+        paired_track_id: paired ? target.track_id : null,
+        paired_from_clip_id: paired ? target.from_clip_id : null,
+        paired_to_clip_id: paired ? target.to_clip_id : null,
+      };
+    }).sort((left, right) => left.transition_id.localeCompare(right.transition_id));
+    stageEdit({
+      schema_version: "1.0.0",
+      operation_id: newStableId("manual_transition_copy"),
+      kind: "transition",
+      action: "copy",
+      transition: null,
+      paired_transition: null,
+      transition_id: null,
+      source_transition_id: existing.transition_id,
+      targets,
+    });
+    ui.transitionFormMessage.textContent =
+      `${targets.length} explicit transition copy target(s) staged.`;
+  } catch (error) {
+    ui.transitionFormMessage.classList.add("error");
+    ui.transitionFormMessage.textContent = error.message || String(error);
+  }
 });
 
 ui.undoDraft.addEventListener("click", () => {

@@ -297,7 +297,7 @@ The ledger keeps one stable logical identity for the workspace while every revie
 ## Atomic skill registry and execution gateway
 
 `src/atomic_runtime/` is the single production composition root for the
-twenty-six existing atomic skills. A fresh immutable `AtomicSkillRegistry` carries an
+thirty existing atomic skills. A fresh immutable `AtomicSkillRegistry` carries an
 explicit ID, semantic version, revision, deterministic input-schema digest, and
 full descriptor digest. Every frozen `SkillDescriptor` declares the stable
 skill version, exact input and output schemas, timeline/media/file/external
@@ -366,7 +366,7 @@ legacy compatibility surfaces. Property-only edits can use
 reverse behavior is not expanded or promised transactionally reversible.
 Linked A/V and arbitrary video/audio track foundations are implemented.
 Automatic link inference, linked-source ingest as one operation,
-transcription/ASR, transitions, visual keyframes,
+transcription/ASR, visual keyframes,
 masks, denoise/de-reverb/source separation, plugin hosting, AI audio
 providers, complex mastering, and effects remain unimplemented.
 
@@ -395,7 +395,7 @@ track/cue/style contracts use stable IDs, millisecond timing, deterministic
 order, explicit overlap policy, language/speaker metadata, enabled/locked
 state, and a controlled logical-font style. Subtitle cues are never modeled
 as video clips. Legacy projects with no subtitle field load and render as
-before; the read-only snapshot is version `4.0.0` and adds detached subtitle
+before; the read-only snapshot is version `5.0.0` and adds detached subtitle
 track/cue counts and state.
 
 `SubtitleManageTrackSkill`, `SubtitleEditCueSkill`,
@@ -440,15 +440,63 @@ processing, not a color-managed HDR, LUT, or secondary-grade pipeline.
 video clip IDs, reject locked/non-video targets, copy only to explicitly named
 clips, never spread through linked audio, and use the shared atomic timeline
 transaction. Detached review, confirmation/workflow, Editing Agent, trace,
-rollback, snapshot v4, Director context, and the manual draft UI carry the
+rollback, snapshot v5, Director context, and the manual draft UI carry the
 same visual state and digest. Browser video/CSS preview is labeled an
 approximation; final FFmpeg export is authoritative. Thumbnail analysis can
 request original or applied mode, and its cache key binds the complete visual
 digest and canvas settings.
 
-Transitions, general visual keyframes/curves, masks/tracking, LUT import,
+General visual keyframes/curves, masks/tracking, LUT import,
 secondary color, HDR, blend modes, animated titles, and AI effects remain
 unimplemented.
+
+## Deterministic video and audio transitions
+
+Timeline schema `2.0.0` now carries an optional mapping of frozen version
+`1.0.0` `TimelineTransition` entities. Every transition has a stable ID and
+binds an exact track ID plus exact adjacent `from_clip_id`/`to_clip_id`; index,
+path, and fuzzy-time lookup are forbidden. The first video set is cut,
+cross-dissolve, fade-through-controlled black/white, four-direction wipe, and
+four-direction slide/push. Audio supports equal-power, linear, and controlled
+fade-out/in crossfades. Duration, centered/start/end alignment, direction,
+color, enabled state, and an explicit `none`/`linked_audio`/
+`explicit_audio_transition` policy are strict schema fields. Linked audio is
+represented by a reciprocal audio transition entity, never a hidden edit.
+
+`TimelineAddTransitionSkill`, `TimelineUpdateTransitionSkill`,
+`TimelineRemoveTransitionSkill`, and `TimelineCopyTransitionSkill` are
+production-registry tools. They require exact same-track adjacency, reject
+locked tracks, validate speed-adjusted incoming/outgoing source handles from
+read-only media facts, require both sources of an audio transition to expose
+an observed audio stream, and use the shared atomic timeline transaction. Copy
+accepts only an explicit stable target-cut list. Split transfers an outgoing
+transition to the new right clip; trim/move/ripple/remove/overwrite and speed
+changes remove any structurally invalid transition and expose its transition
+ID as a consequential tombstone instead of leaving an orphan.
+
+Detached Director review uses the same engine and registry validation but
+never dispatches a skill. Snapshot v5 exposes path-free stable transition
+state and counts. Confirmed workflow and manual edits record transition
+creates/modifies/deletes in provenance; rollback restores the prior project
+document. The loopback timeline shows compact cut markers and a transition
+panel whose add/update/remove/copy actions remain local draft data until
+structured review and explicit confirmation. Its bounded CSS/video animation
+is labeled an approximation; final export remains authoritative.
+
+Final export uses a fixed, argument-list FFmpeg graph: visual properties and
+basic SDR color are applied to each handled source segment, primary-track
+video transitions are composed with controlled `xfade`, audio pairs use
+controlled `acrossfade`, tracks are layered/mixed in stable order, subtitles
+remain separate, and the existing limiter/final format policy runs last. Old
+timelines with no transitions stay on the prior rendering paths and remain
+output-equivalent. Version-one video transitions intentionally support the
+primary video role only; overlay-track transitions are rejected as
+unsupported rather than rendered incorrectly. Source-handle extension never
+changes canonical clip trim or placement.
+
+General visual/audio keyframes, transition speed curves, masks/tracking,
+3D/plugin/VST/OFX transitions, arbitrary filter strings, and AI effects are
+not implemented.
 
 ## Constrained Editing Agent
 
@@ -486,6 +534,18 @@ confirmation → recorded execution → rollback reference workflow:
 
 ```powershell
 python -m pytest -q tests/test_reference_workflow.py
+```
+
+The multi-track reference also creates an exact cut, reviews and confirms a
+reciprocal dissolve/equal-power pair, exports it through the Editing Agent and
+registry gateway, verifies transition provenance, and restores the original
+timeline checkpoint.
+
+Run the focused deterministic transition contract, review, confirmed manual
+application, render, pixel, audio and ffprobe regression:
+
+```powershell
+python -m pytest -q tests/test_transitions.py
 ```
 
 This reference first confirms Director material requirements and a

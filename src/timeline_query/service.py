@@ -22,6 +22,7 @@ from .models import (
     TimelineSnapshot,
     TimelineSnapshotReference,
     TrackSnapshot,
+    TransitionSnapshot,
     SubtitleCueSnapshot,
     SubtitleStyleSnapshot,
     SubtitleTrackSnapshot,
@@ -299,6 +300,33 @@ class TimelineSnapshotService:
                 )
             )
             timeline_payload = project.timeline.model_dump(mode="json")
+            transition_snapshots = tuple(
+                TransitionSnapshot(
+                    transition_id=transition.transition_id,
+                    track_id=transition.track_id,
+                    from_clip_id=transition.from_clip_id,
+                    to_clip_id=transition.to_clip_id,
+                    media_type=transition.media_type,
+                    kind=transition.kind,
+                    duration_seconds=transition.duration_seconds,
+                    alignment=transition.alignment,
+                    direction=transition.parameters.direction,
+                    color=transition.parameters.color,
+                    enabled=transition.enabled,
+                    audio_policy=transition.audio_policy,
+                    paired_transition_id=transition.paired_transition_id,
+                )
+                for transition in sorted(
+                    project.timeline.transitions.values(),
+                    key=lambda item: (
+                        item.track_id,
+                        item.from_clip_id,
+                        item.to_clip_id,
+                        item.media_type,
+                        item.transition_id,
+                    ),
+                )
+            )
             timeline_hash = _sha256(timeline_payload)
             snapshot_hash = _sha256(
                 {
@@ -320,11 +348,13 @@ class TimelineSnapshotService:
                 fps=project.timeline.fps,
                 tracks=tracks,
                 subtitle_tracks=subtitle_track_snapshots,
+                transitions=transition_snapshots,
                 track_count=len(tracks),
                 subtitle_track_count=len(subtitle_track_snapshots),
                 subtitle_cue_count=sum(
                     track.cue_count for track in subtitle_track_snapshots
                 ),
+                transition_count=len(transition_snapshots),
                 clip_count=clip_count,
                 video_clip_count=sum(
                     track.clip_count

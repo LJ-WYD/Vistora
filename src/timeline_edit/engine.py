@@ -14,6 +14,7 @@ from core.timeline import (
     ClipColorAdjustment,
     ClipTransform,
     TimelineConfig,
+    TimelineTransition,
     TrackConfig,
     TrackMixSettings,
 )
@@ -23,6 +24,8 @@ from .models import TimelineEditOutcome, TimelineSubtitleRipplePolicy
 
 TIME_EPSILON = 1e-6
 IdFactory = Callable[[str], str]
+SourceDurationResolver = Callable[[ClipConfig], float]
+SourceAudioResolver = Callable[[ClipConfig], bool]
 
 
 class TimelineEditError(ValueError):
@@ -49,11 +52,15 @@ class TimelineEditEngine:
         timeline: TimelineConfig,
         *,
         id_factory: IdFactory = _random_id,
+        source_duration_resolver: SourceDurationResolver | None = None,
+        source_audio_resolver: SourceAudioResolver | None = None,
     ) -> None:
         self.timeline = TimelineConfig.model_validate(
             timeline.model_dump(mode="python")
         )
         self.id_factory = id_factory
+        self.source_duration_resolver = source_duration_resolver
+        self.source_audio_resolver = source_audio_resolver
         self._sort_all()
         self.validate(self.timeline)
 
@@ -113,6 +120,12 @@ class TimelineEditEngine:
             raise TimelineEditError("Track order values must be unique")
         if len(all_ids) != len(set(all_ids)):
             raise TimelineEditError("Clip IDs must be unique across tracks")
+        try:
+            TimelineConfig.model_validate(timeline.model_dump(mode="python"))
+        except ValueError as exc:
+            raise TimelineEditError(
+                f"Timeline transition state is invalid: {exc}"
+            ) from exc
 
     def _sort_all(self) -> None:
         for track in self.timeline.tracks.values():
@@ -335,8 +348,12 @@ class TimelineEditEngine:
         deleted: Iterable[str] = (),
         subtitle_cues: Iterable[str] = (),
         warnings: Iterable[str] = (),
+        created_transitions: Iterable[str] = (),
+        modified_transitions: Iterable[str] = (),
+        deleted_transitions: Iterable[str] = (),
     ) -> tuple[TimelineConfig, TimelineEditOutcome]:
         self._sort_all()
+        invalidated = self._remove_invalid_transitions()
         self.validate(self.timeline)
         return self.timeline, TimelineEditOutcome(
             operation=operation,
@@ -348,7 +365,311 @@ class TimelineEditEngine:
             modified_clip_ids=tuple(sorted(set(modified))),
             deleted_clip_ids=tuple(sorted(set(deleted))),
             consequential_subtitle_cue_ids=tuple(sorted(set(subtitle_cues))),
-            warnings=tuple(warnings),
+            created_transition_ids=tuple(dict.fromkeys(created_transitions)),
+            modified_transition_ids=tuple(sorted(set(modified_transitions))),
+            deleted_transition_ids=tuple(
+                sorted(set(deleted_transitions) | invalidated)
+            ),
+            warnings=tuple(warnings) + (
+                (
+                    "Structurally invalid transitions were removed and "
+                    "recorded as tombstones.",
+                )
+                if invalidated
+                else ()
+            ),
+        )
+
+    def _transition_binding_valid(self, transition: TimelineTransition) -> bool:
+        try:
+            _, track = self._resolve_track(
+                transition.track_id, allow_locked=True
+            )
+        except TimelineEditError:
+            return False
+        clips = sorted(track.clips, key=lambda item: (item.timeline_start, item.id))
+        indices = {clip.id: index for index, clip in enumerate(clips)}
+        left_index = indices.get(transition.from_clip_id)
+        right_index = indices.get(transition.to_clip_id)
+        if left_index is None or right_index != left_index + 1:
+            return False
+        left, right = clips[left_index], clips[right_index]
+        if abs(clip_end(left) - right.timeline_start) > TIME_EPSILON:
+            return False
+        if transition.media_type == "video":
+            return track.kind == "video"
+        return track.kind == "audio" or (
+            track.kind == "video" and left.keep_audio and right.keep_audio
+        )
+
+    def _remove_invalid_transitions(self) -> set[str]:
+        invalid = {
+            transition_id
+            for transition_id, transition in self.timeline.transitions.items()
+            if not self._transition_binding_valid(transition)
+        }
+        for transition_id, transition in self.timeline.transitions.items():
+            if (
+                transition.paired_transition_id in invalid
+                or (
+                    transition.paired_transition_id is not None
+                    and transition.paired_transition_id
+                    not in self.timeline.transitions
+                )
+            ):
+                invalid.add(transition_id)
+        for transition_id in invalid:
+            self.timeline.transitions.pop(transition_id, None)
+        return invalid
+
+    @staticmethod
+    def _handle_requirements(
+        transition: TimelineTransition,
+    ) -> tuple[float, float]:
+        duration = transition.duration_seconds
+        if transition.kind == "cut":
+            return 0.0, 0.0
+        if transition.alignment == "start_at_cut":
+            return duration, 0.0
+        if transition.alignment == "end_at_cut":
+            return 0.0, duration
+        return duration / 2.0, duration / 2.0
+
+    def _validate_transition_handles(
+        self,
+        transition: TimelineTransition,
+    ) -> None:
+        if transition.kind == "cut":
+            return
+        if self.source_duration_resolver is None:
+            raise TimelineEditError(
+                "Transition handle validation requires exact media duration facts"
+            )
+        _, track = self._resolve_track(
+            transition.track_id, allow_locked=True
+        )
+        clips = {clip.id: clip for clip in track.clips}
+        outgoing = clips[transition.from_clip_id]
+        incoming = clips[transition.to_clip_id]
+        if outgoing.reverse or incoming.reverse:
+            raise TimelineEditError(
+                "Transitions over reversed clips are currently unsupported"
+            )
+        outgoing_seconds, incoming_seconds = self._handle_requirements(
+            transition
+        )
+        outgoing_required = outgoing_seconds * outgoing.speed_factor
+        incoming_required = incoming_seconds * incoming.speed_factor
+        outgoing_source_duration = float(
+            self.source_duration_resolver(outgoing)
+        )
+        incoming_source_duration = float(
+            self.source_duration_resolver(incoming)
+        )
+        outgoing_available = max(
+            0.0, outgoing_source_duration - outgoing.trim_out
+        )
+        incoming_available = max(0.0, incoming.trim_in)
+        if outgoing_available + TIME_EPSILON < outgoing_required:
+            share = outgoing_seconds / transition.duration_seconds
+            maximum = outgoing_available / outgoing.speed_factor / share
+            raise TimelineEditError(
+                "Outgoing clip has insufficient source handle for transition; "
+                f"maximum safe duration is {maximum:.6g} seconds"
+            )
+        if incoming_available + TIME_EPSILON < incoming_required:
+            share = incoming_seconds / transition.duration_seconds
+            maximum = incoming_available / incoming.speed_factor / share
+            raise TimelineEditError(
+                "Incoming clip has insufficient source handle for transition; "
+                f"maximum safe duration is {maximum:.6g} seconds"
+            )
+
+    def _validate_transition_candidate(
+        self, transition: TimelineTransition
+    ) -> None:
+        if transition.transition_id in self.timeline.transitions:
+            raise TimelineEditError("Transition ID already exists")
+        if not self._transition_binding_valid(transition):
+            raise TimelineEditError(
+                "Transition must bind one exact adjacent same-track cut"
+            )
+        _, track = self._resolve_track(transition.track_id)
+        if track.kind == "video" and transition.media_type == "video":
+            if track.role != "primary":
+                raise TimelineEditError(
+                    "First-version video transitions require a primary video track"
+                )
+        if transition.media_type == "audio":
+            clips = {clip.id: clip for clip in track.clips}
+            if track.muted or track.mix.muted or any(
+                clips[clip_id].audio.muted
+                for clip_id in (
+                    transition.from_clip_id,
+                    transition.to_clip_id,
+                )
+            ):
+                raise TimelineEditError(
+                    "Audio transitions require two active unmuted audio components"
+                )
+            if self.source_audio_resolver is not None and any(
+                not self.source_audio_resolver(clips[clip_id])
+                for clip_id in (
+                    transition.from_clip_id,
+                    transition.to_clip_id,
+                )
+            ):
+                raise TimelineEditError(
+                    "Audio transition requires an audio stream on both sources"
+                )
+        cut = (
+            transition.track_id,
+            transition.from_clip_id,
+            transition.to_clip_id,
+            transition.media_type,
+        )
+        for current in self.timeline.transitions.values():
+            current_cut = (
+                current.track_id,
+                current.from_clip_id,
+                current.to_clip_id,
+                current.media_type,
+            )
+            if current_cut == cut:
+                raise TimelineEditError(
+                    "An exact cut already has this media transition"
+                )
+        self._validate_transition_handles(transition)
+
+    def add_transition(
+        self,
+        transition: TimelineTransition,
+        *,
+        paired_transition: TimelineTransition | None = None,
+    ) -> tuple[TimelineConfig, TimelineEditOutcome]:
+        candidates = (transition,) + (
+            (paired_transition,) if paired_transition is not None else ()
+        )
+        for candidate in candidates:
+            self._validate_transition_candidate(candidate)
+        for candidate in candidates:
+            self.timeline.transitions[candidate.transition_id] = candidate
+        key, track = self._resolve_track(transition.track_id, allow_locked=True)
+        return self._finish(
+            operation="add_transition",
+            primary_key=key,
+            primary_track=track,
+            direct=(transition.from_clip_id, transition.to_clip_id),
+            created_transitions=(item.transition_id for item in candidates),
+        )
+
+    def update_transition(
+        self,
+        transition: TimelineTransition,
+        *,
+        paired_transition: TimelineTransition | None = None,
+    ) -> tuple[TimelineConfig, TimelineEditOutcome]:
+        current = self.timeline.transitions.get(transition.transition_id)
+        if current is None:
+            raise TimelineEditError("Transition ID is unknown")
+        remove_ids = {current.transition_id}
+        if current.paired_transition_id is not None:
+            remove_ids.add(current.paired_transition_id)
+        previous = {
+            identity: self.timeline.transitions.pop(identity)
+            for identity in remove_ids
+            if identity in self.timeline.transitions
+        }
+        try:
+            candidates = (transition,) + (
+                (paired_transition,) if paired_transition is not None else ()
+            )
+            for candidate in candidates:
+                self._validate_transition_candidate(candidate)
+            for candidate in candidates:
+                self.timeline.transitions[candidate.transition_id] = candidate
+        except Exception:
+            self.timeline.transitions.update(previous)
+            raise
+        key, track = self._resolve_track(transition.track_id, allow_locked=True)
+        new_ids = {candidate.transition_id for candidate in candidates}
+        return self._finish(
+            operation="update_transition",
+            primary_key=key,
+            primary_track=track,
+            direct=(transition.from_clip_id, transition.to_clip_id),
+            modified_transitions=tuple(sorted(new_ids & set(previous))),
+            created_transitions=tuple(sorted(new_ids - set(previous))),
+            deleted_transitions=tuple(sorted(set(previous) - new_ids)),
+        )
+
+    def remove_transition(
+        self,
+        transition_id: str,
+        *,
+        include_paired: bool = True,
+    ) -> tuple[TimelineConfig, TimelineEditOutcome]:
+        transition = self.timeline.transitions.get(transition_id)
+        if transition is None:
+            raise TimelineEditError("Transition ID is unknown")
+        self._resolve_track(transition.track_id)
+        remove_ids = {transition_id}
+        if transition.paired_transition_id is not None:
+            if not include_paired:
+                raise TimelineEditError(
+                    "Paired transition must be removed atomically"
+                )
+            remove_ids.add(transition.paired_transition_id)
+        for identity in remove_ids:
+            self.timeline.transitions.pop(identity, None)
+        key, track = self._resolve_track(
+            transition.track_id, allow_locked=True
+        )
+        return self._finish(
+            operation="remove_transition",
+            primary_key=key,
+            primary_track=track,
+            direct=(transition.from_clip_id, transition.to_clip_id),
+            deleted_transitions=tuple(sorted(remove_ids)),
+        )
+
+    def copy_transition(
+        self,
+        source_transition_id: str,
+        targets: Iterable[tuple[TimelineTransition, TimelineTransition | None]],
+    ) -> tuple[TimelineConfig, TimelineEditOutcome]:
+        source = self.timeline.transitions.get(source_transition_id)
+        if source is None:
+            raise TimelineEditError("Source transition ID is unknown")
+        target_pairs = tuple(targets)
+        if not target_pairs:
+            raise TimelineEditError("At least one copy target is required")
+        candidates = tuple(
+            candidate
+            for pair in target_pairs
+            for candidate in pair
+            if candidate is not None
+        )
+        for candidate in candidates:
+            self._validate_transition_candidate(candidate)
+        for candidate in candidates:
+            self.timeline.transitions[candidate.transition_id] = candidate
+        key, track = self._resolve_track(source.track_id, allow_locked=True)
+        return self._finish(
+            operation="copy_transition",
+            primary_key=key,
+            primary_track=track,
+            direct=tuple(
+                clip_id
+                for candidate in candidates
+                for clip_id in (
+                    candidate.from_clip_id,
+                    candidate.to_clip_id,
+                )
+            ),
+            created_transitions=tuple(
+                candidate.transition_id for candidate in candidates
+            ),
         )
 
     def _apply_subtitle_ripple(
@@ -452,6 +773,18 @@ class TimelineEditEngine:
             right.audio = right_audio
             right.link_group_id = right_group_id
             track.clips.append(right)
+            for transition_id, transition in tuple(
+                self.timeline.transitions.items()
+            ):
+                if (
+                    transition.track_id == track.id
+                    and transition.from_clip_id == clip.id
+                ):
+                    self.timeline.transitions[transition_id] = (
+                        transition.model_copy(
+                            update={"from_clip_id": right.id}
+                        )
+                    )
             created.append(new_id)
             modified.append(clip.id)
             if clip.id == clip_id:

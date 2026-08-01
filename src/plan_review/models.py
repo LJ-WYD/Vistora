@@ -236,6 +236,7 @@ class PreviewMaterialFact(ReviewModel):
     ]
     media_kind: Literal["video", "audio"]
     duration_seconds: FiniteFloat = Field(gt=0)
+    has_audio: bool | None = None
     width: int | None = Field(default=None, gt=0)
     height: int | None = Field(default=None, gt=0)
 
@@ -355,9 +356,27 @@ class PreviewSubtitleTrackState(ReviewModel):
     cue_count: int = Field(ge=0)
 
 
+class PreviewTransitionState(ReviewModel):
+    transition_id: StableId
+    track_id: StableId
+    from_clip_id: StableId
+    to_clip_id: StableId
+    media_type: Literal["video", "audio"]
+    kind: str = Field(min_length=1)
+    duration_seconds: FiniteFloat = Field(ge=0, le=10)
+    alignment: Literal["centered", "start_at_cut", "end_at_cut"]
+    direction: Literal["left", "right", "up", "down"] | None = None
+    color: str | None = None
+    enabled: bool
+    audio_policy: Literal[
+        "none", "linked_audio", "explicit_audio_transition"
+    ]
+    paired_transition_id: StableId | None = None
+
+
 class ProposedEntityReference(ReviewModel):
     entity_kind: Literal[
-        "clip", "track", "subtitle_track", "subtitle_cue", "project", "media_output", "none"
+        "clip", "track", "subtitle_track", "subtitle_cue", "transition", "project", "media_output", "none"
     ]
     entity_id: str = Field(min_length=1)
     track_key: str | None = None
@@ -390,6 +409,9 @@ class PlanChange(ReviewModel):
         "subtitle_cue_change",
         "subtitle_import",
         "subtitle_export",
+        "transition_addition",
+        "transition_removal",
+        "transition_change",
         "project_settings",
         "export_only",
         "media_output",
@@ -413,6 +435,8 @@ class PlanChange(ReviewModel):
     after_subtitle_cue: PreviewSubtitleCueState | None = None
     before_subtitle_track: PreviewSubtitleTrackState | None = None
     after_subtitle_track: PreviewSubtitleTrackState | None = None
+    before_transition: PreviewTransitionState | None = None
+    after_transition: PreviewTransitionState | None = None
     reason: str = Field(min_length=1)
     evidence: tuple[EvidenceSummary, ...] = ()
     current_provenance: ClipProvenanceSummary | None = None
@@ -485,6 +509,24 @@ class PlanChange(ReviewModel):
             or self.after_subtitle_cue is None
         ):
             raise ValueError("Subtitle cue change requires before and after states")
+        if self.category == "transition_addition" and (
+            self.entity.entity_kind != "transition"
+            or self.before_transition is not None
+            or self.after_transition is None
+        ):
+            raise ValueError("Transition addition requires only an after state")
+        if self.category == "transition_removal" and (
+            self.entity.entity_kind != "transition"
+            or self.before_transition is None
+            or self.after_transition is not None
+        ):
+            raise ValueError("Transition removal requires only a before state")
+        if self.category == "transition_change" and (
+            self.entity.entity_kind != "transition"
+            or self.before_transition is None
+            or self.after_transition is None
+        ):
+            raise ValueError("Transition change requires before and after states")
         return self
 
 
@@ -509,6 +551,8 @@ class PlanDiffSummary(ReviewModel):
     after_clip_count: int = Field(ge=0)
     before_subtitle_cue_count: int = Field(default=0, ge=0)
     after_subtitle_cue_count: int = Field(default=0, ge=0)
+    before_transition_count: int = Field(default=0, ge=0)
+    after_transition_count: int = Field(default=0, ge=0)
     before_duration_seconds: FiniteFloat = Field(ge=0)
     after_duration_seconds: FiniteFloat = Field(ge=0)
     before_project: PreviewProjectSettings

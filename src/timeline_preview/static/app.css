@@ -1611,3 +1611,39 @@ button.track-label-row:focus-visible {
     overflow-wrap: anywhere;
   }
 }
+.transition-marker {
+  position: absolute;
+  z-index: 7;
+  top: 50%;
+  width: 24px;
+  height: 32px;
+  transform: translate(-50%, -50%);
+  border: 1px solid rgba(251, 191, 36, 0.9);
+  border-radius: 7px;
+  background: rgba(43, 31, 9, 0.94);
+  color: #fde68a;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.transition-marker.audio {
+  top: 72%;
+  border-color: rgba(45, 212, 191, 0.9);
+  color: #99f6e4;
+}
+
+.transition-edit-panel select[multiple] {
+  min-height: 70px;
+}
+
+@media (max-width: 420px) {
+  .transition-edit-panel .field-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .transition-marker {
+    width: 22px;
+    height: 28px;
+  }
+}

@@ -289,6 +289,30 @@
                   <button id="copy-visual" class="button" type="button">Copy to selected clips</button>
                 </div>
               </fieldset>
+              <fieldset id="transition-edit-panel" class="audio-edit-panel transition-edit-panel">
+                <legend>Cut transition</legend>
+                <p class="form-message">
+                  Select the outgoing primary clip. The exact adjacent incoming clip is resolved by stable ID; preview is approximate and export is exact.
+                </p>
+                <div class="field-grid">
+                  <label><span>Adjacent incoming clip</span><select id="transition-to-clip"></select></label>
+                  <label><span>Type</span><select id="transition-kind"><option value="cross_dissolve">Cross dissolve</option><option value="fade_color">Fade through color</option><option value="wipe">Wipe</option><option value="slide">Slide / push</option><option value="cut">Cut marker</option></select></label>
+                  <label><span>Duration</span><input id="transition-duration" type="number" min="0" max="10" step="0.01" value="0.5"></label>
+                  <label><span>Alignment</span><select id="transition-alignment"><option value="centered">Centered</option><option value="start_at_cut">Starts at cut</option><option value="end_at_cut">Ends at cut</option></select></label>
+                  <label><span>Direction</span><select id="transition-direction"><option value="left">Left</option><option value="right">Right</option><option value="up">Up</option><option value="down">Down</option></select></label>
+                  <label><span>Fade color</span><select id="transition-color"><option value="#000000">Black</option><option value="#FFFFFF">White</option></select></label>
+                  <label><span>Audio policy</span><select id="transition-audio-policy"><option value="none">No audio transition</option><option value="linked_audio">Linked embedded audio</option></select></label>
+                  <label><span>Audio curve</span><select id="transition-audio-kind"><option value="audio_equal_power">Equal power</option><option value="audio_linear">Linear</option><option value="audio_fade_out_in">Fade out / in</option></select></label>
+                  <label><span>Copy to explicit cuts</span><select id="transition-copy-targets" multiple></select></label>
+                </div>
+                <p id="transition-form-message" class="form-message" aria-live="polite">No transition draft staged.</p>
+                <div class="editor-actions">
+                  <button id="preview-transition" class="button" type="button">Approximate preview</button>
+                  <button id="stage-transition" class="button" type="button">Stage add / update</button>
+                  <button id="remove-transition" class="button danger" type="button">Stage remove</button>
+                  <button id="copy-transition" class="button" type="button">Copy to selected cuts</button>
+                </div>
+              </fieldset>
             </form>
           </section>
           <section id="subtitle-editor" class="manual-editor subtitle-editor" hidden>

@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from core.timeline import AppliedLoudnessNormalization
+from core.timeline import AppliedLoudnessNormalization, TimelineTransition
 
 
 EditScope = Literal["current_clip", "linked_group"]
@@ -296,6 +296,78 @@ class SetClipLinkInput(TimelineEditModel):
         return self
 
 
+class AddTransitionInput(TimelineEditModel):
+    """Add one exact transition and, optionally, its explicit audio pair."""
+
+    transition: TimelineTransition
+    paired_transition: TimelineTransition | None = None
+
+    @model_validator(mode="after")
+    def exact_pair(self) -> "AddTransitionInput":
+        expected = self.transition.paired_transition_id
+        if expected is None and self.paired_transition is not None:
+            raise ValueError("Unpaired transition cannot include a pair")
+        if expected is not None:
+            if self.paired_transition is None:
+                raise ValueError("Paired transition payload is required")
+            if self.paired_transition.transition_id != expected:
+                raise ValueError("Paired transition ID does not match")
+            if (
+                self.paired_transition.paired_transition_id
+                != self.transition.transition_id
+            ):
+                raise ValueError("Transition pairing must be reciprocal")
+        return self
+
+
+class UpdateTransitionInput(AddTransitionInput):
+    """Replace one transition using the same stable identity."""
+
+
+class RemoveTransitionInput(TimelineEditModel):
+    transition_id: StableClipId
+    include_paired: bool = True
+
+
+class TransitionCopyTarget(TimelineEditModel):
+    transition_id: StableClipId
+    track_id: StableTrackId
+    from_clip_id: StableClipId
+    to_clip_id: StableClipId
+    paired_transition_id: StableClipId | None = None
+    paired_track_id: StableTrackId | None = None
+    paired_from_clip_id: StableClipId | None = None
+    paired_to_clip_id: StableClipId | None = None
+
+    @model_validator(mode="after")
+    def complete_pair(self) -> "TransitionCopyTarget":
+        values = (
+            self.paired_transition_id,
+            self.paired_track_id,
+            self.paired_from_clip_id,
+            self.paired_to_clip_id,
+        )
+        if any(value is not None for value in values) and not all(
+            value is not None for value in values
+        ):
+            raise ValueError("Copied audio pair references must be complete")
+        return self
+
+
+class CopyTransitionInput(TimelineEditModel):
+    source_transition_id: StableClipId
+    targets: tuple[TransitionCopyTarget, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def stable_unique_targets(self) -> "CopyTransitionInput":
+        identities = tuple(target.transition_id for target in self.targets)
+        if len(identities) != len(set(identities)):
+            raise ValueError("Copied transition IDs must be unique")
+        if identities != tuple(sorted(identities)):
+            raise ValueError("Copy targets must use stable transition-ID order")
+        return self
+
+
 class TimelineEditOutcome(TimelineEditModel):
     operation: Literal[
         "split",
@@ -313,6 +385,10 @@ class TimelineEditOutcome(TimelineEditModel):
         "set_clip_transform",
         "set_clip_color",
         "copy_clip_visual",
+        "add_transition",
+        "update_transition",
+        "remove_transition",
+        "copy_transition",
     ]
     track_id: StableTrackId
     track_key: str
@@ -322,4 +398,7 @@ class TimelineEditOutcome(TimelineEditModel):
     modified_clip_ids: tuple[str, ...] = ()
     deleted_clip_ids: tuple[str, ...] = ()
     consequential_subtitle_cue_ids: tuple[str, ...] = ()
+    created_transition_ids: tuple[str, ...] = ()
+    modified_transition_ids: tuple[str, ...] = ()
+    deleted_transition_ids: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()

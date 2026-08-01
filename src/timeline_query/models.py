@@ -7,8 +7,8 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-TIMELINE_SNAPSHOT_VERSION = "4.0.0"
-SnapshotVersion = Literal["2.0.0", "3.0.0", "4.0.0"]
+TIMELINE_SNAPSHOT_VERSION = "5.0.0"
+SnapshotVersion = Literal["2.0.0", "3.0.0", "4.0.0", "5.0.0"]
 SnapshotId = Annotated[
     str,
     Field(
@@ -244,6 +244,39 @@ class SubtitleTrackSnapshot(ReadModel):
     duration_seconds: FiniteFloat = Field(ge=0)
 
 
+class TransitionSnapshot(ReadModel):
+    """Detached browser-safe state for one exact timeline transition."""
+
+    schema_name: Literal["vistora.transition-snapshot"] = (
+        "vistora.transition-snapshot"
+    )
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    transition_id: SnapshotId
+    track_id: SnapshotId
+    from_clip_id: SnapshotId
+    to_clip_id: SnapshotId
+    media_type: Literal["video", "audio"]
+    kind: Literal[
+        "cut",
+        "cross_dissolve",
+        "fade_color",
+        "wipe",
+        "slide",
+        "audio_equal_power",
+        "audio_linear",
+        "audio_fade_out_in",
+    ]
+    duration_seconds: FiniteFloat = Field(ge=0, le=10)
+    alignment: Literal["centered", "start_at_cut", "end_at_cut"]
+    direction: Literal["left", "right", "up", "down"] | None = None
+    color: Literal["#000000", "#FFFFFF"] | None = None
+    enabled: bool
+    audio_policy: Literal[
+        "none", "linked_audio", "explicit_audio_transition"
+    ]
+    paired_transition_id: SnapshotId | None = None
+
+
 class TimelineSnapshotReference(ReadModel):
     """Optimistic read guard for a specific project revision."""
 
@@ -286,9 +319,11 @@ class TimelineSnapshot(ReadModel):
     fps: int = Field(gt=0)
     tracks: tuple[TrackSnapshot, ...] = ()
     subtitle_tracks: tuple[SubtitleTrackSnapshot, ...] = ()
+    transitions: tuple[TransitionSnapshot, ...] = ()
     track_count: int = Field(ge=0)
     subtitle_track_count: int = Field(ge=0)
     subtitle_cue_count: int = Field(ge=0)
+    transition_count: int = Field(ge=0)
     clip_count: int = Field(ge=0)
     video_clip_count: int = Field(ge=0)
     audio_clip_count: int = Field(ge=0)

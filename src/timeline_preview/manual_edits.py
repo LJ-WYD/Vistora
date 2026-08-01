@@ -33,6 +33,7 @@ from contracts import (
     ManualVolumeEnvelope,
     ManualSubtitleCue,
     ManualSubtitleTrack,
+    ManualTransitionEdit,
     PlanReference,
 )
 from core.timeline import (
@@ -42,6 +43,8 @@ from core.timeline import (
     ClipConfig,
     ClipTransform,
     TimelineConfig,
+    TimelineTransition,
+    TransitionParameters,
     TrackConfig,
     TrackMixSettings,
     SubtitleCue,
@@ -51,6 +54,7 @@ from core.timeline import (
 from subtitles import SubtitleEditCueInput, SubtitleEditEngine, SubtitleEditError, SubtitleManageTrackInput
 from timeline_edit import TimelineEditEngine, TimelineEditError
 from timeline_query import TimelineSnapshot, TimelineSnapshotService
+from transitions.media import probe_source_duration, probe_source_has_audio
 
 
 MANUAL_EDIT_TOOL_NAME = "VideoApplyManualEditsSkill"
@@ -411,6 +415,25 @@ def _timeline_from_snapshot(snapshot: TimelineSnapshot) -> TimelineConfig:
         )
         for track in snapshot.subtitle_tracks
     }
+    timeline.transitions = {
+        transition.transition_id: TimelineTransition(
+            transition_id=transition.transition_id,
+            track_id=transition.track_id,
+            from_clip_id=transition.from_clip_id,
+            to_clip_id=transition.to_clip_id,
+            kind=transition.kind,
+            duration_seconds=transition.duration_seconds,
+            alignment=transition.alignment,
+            parameters=TransitionParameters(
+                direction=transition.direction,
+                color=transition.color,
+            ),
+            enabled=transition.enabled,
+            audio_policy=transition.audio_policy,
+            paired_transition_id=transition.paired_transition_id,
+        )
+        for transition in snapshot.transitions
+    }
     return TimelineConfig.model_validate(timeline.model_dump(mode="python"))
 
 
@@ -425,6 +448,13 @@ def _subtitle_states(timeline: TimelineConfig) -> tuple[dict[str, dict[str, Any]
         for cue in track.cues
     }
     return tracks, cues
+
+
+def _transition_states(timeline: TimelineConfig) -> dict[str, dict[str, Any]]:
+    return {
+        transition.transition_id: transition.model_dump(mode="json")
+        for transition in timeline.transitions.values()
+    }
 
 
 def _state_map(
@@ -455,12 +485,105 @@ def review_manual_edit_proposal(
         raise ManualEditValidationError(
             "Manual proposal is stale or crosses project identity"
         )
-    engine = TimelineEditEngine(_timeline_from_snapshot(snapshot))
+    engine = TimelineEditEngine(
+        _timeline_from_snapshot(snapshot),
+        source_duration_resolver=probe_source_duration,
+        source_audio_resolver=probe_source_has_audio,
+    )
     changes: list[ManualEditChange] = []
     for edit in proposal.edits:
         before = _state_map(engine.timeline)
+        before_transition_states = _transition_states(engine.timeline)
         try:
             outcomes = []
+            if isinstance(edit, ManualTransitionEdit):
+                before_transitions = _transition_states(engine.timeline)
+                if edit.action == "add":
+                    updated, outcome = engine.add_transition(
+                        edit.transition,
+                        paired_transition=edit.paired_transition,
+                    )
+                elif edit.action == "update":
+                    updated, outcome = engine.update_transition(
+                        edit.transition,
+                        paired_transition=edit.paired_transition,
+                    )
+                elif edit.action == "remove":
+                    updated, outcome = engine.remove_transition(
+                        edit.transition_id,
+                        include_paired=True,
+                    )
+                else:
+                    source = engine.timeline.transitions.get(
+                        edit.source_transition_id
+                    )
+                    if source is None:
+                        raise TimelineEditError(
+                            "Source transition ID is unknown"
+                        )
+                    source_pair = (
+                        engine.timeline.transitions.get(
+                            source.paired_transition_id
+                        )
+                        if source.paired_transition_id is not None
+                        else None
+                    )
+                    pairs = []
+                    for target in edit.targets:
+                        copied = source.model_copy(update={
+                            "transition_id": target.transition_id,
+                            "track_id": target.track_id,
+                            "from_clip_id": target.from_clip_id,
+                            "to_clip_id": target.to_clip_id,
+                            "paired_transition_id": target.paired_transition_id,
+                        })
+                        copied_pair = None
+                        if source_pair is not None:
+                            copied_pair = source_pair.model_copy(update={
+                                "transition_id": target.paired_transition_id,
+                                "track_id": target.paired_track_id,
+                                "from_clip_id": target.paired_from_clip_id,
+                                "to_clip_id": target.paired_to_clip_id,
+                                "paired_transition_id": target.transition_id,
+                            })
+                        pairs.append((copied, copied_pair))
+                    updated, outcome = engine.copy_transition(
+                        edit.source_transition_id, tuple(pairs)
+                    )
+                after_transitions = _transition_states(updated)
+                direct = set(outcome.created_transition_ids)
+                direct.update(outcome.modified_transition_ids)
+                direct.update(outcome.deleted_transition_ids)
+                for transition_id in sorted(
+                    before_transitions.keys() | after_transitions.keys()
+                ):
+                    old = before_transitions.get(transition_id)
+                    new = after_transitions.get(transition_id)
+                    if old == new:
+                        continue
+                    state_value = new or old
+                    track_id = state_value["track_id"]
+                    track_key, _ = engine._resolve_track(
+                        track_id, allow_locked=True
+                    )
+                    changes.append(ManualEditChange(
+                        operation_id=edit.operation_id,
+                        target_kind="transition",
+                        track_key=track_key,
+                        track_id=track_id,
+                        clip_id=transition_id,
+                        action=(
+                            "create" if old is None else
+                            "remove" if new is None else "update"
+                        ),
+                        effect_kind=(
+                            "direct" if transition_id in direct
+                            else "consequential"
+                        ),
+                        before=old,
+                        after=new,
+                    ))
+                continue
             if isinstance(edit, ManualSubtitleTrack):
                 before_tracks, _ = _subtitle_states(engine.timeline)
                 subtitle_engine = SubtitleEditEngine(engine.timeline)
@@ -821,6 +944,39 @@ def review_manual_edit_proposal(
                     ),
                     before=None if old is None else old[1],
                     after=None if new is None else new[1],
+                )
+            )
+        after_transition_states = _transition_states(updated)
+        for transition_id in sorted(
+            before_transition_states.keys()
+            | after_transition_states.keys()
+        ):
+            old_transition = before_transition_states.get(transition_id)
+            new_transition = after_transition_states.get(transition_id)
+            if old_transition == new_transition:
+                continue
+            state_value = new_transition or old_transition
+            track_id = state_value["track_id"]
+            track_key, _ = engine._resolve_track(
+                track_id, allow_locked=True
+            )
+            changes.append(
+                ManualEditChange(
+                    operation_id=edit.operation_id,
+                    target_kind="transition",
+                    track_key=track_key,
+                    track_id=track_id,
+                    clip_id=transition_id,
+                    action=(
+                        "create"
+                        if old_transition is None
+                        else "remove"
+                        if new_transition is None
+                        else "update"
+                    ),
+                    effect_kind="consequential",
+                    before=old_transition,
+                    after=new_transition,
                 )
             )
     if not changes:

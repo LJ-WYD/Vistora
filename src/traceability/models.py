@@ -19,6 +19,7 @@ from contracts import (
     ManualTrackMix,
     ManualSubtitleCue,
     ManualSubtitleTrack,
+    ManualTransitionEdit,
     PlanReference,
 )
 
@@ -69,7 +70,7 @@ class TraceEntityReference(TraceModel):
     """Opaque timeline or generated-media entity identity."""
 
     entity_kind: Literal[
-        "clip", "track", "subtitle_track", "subtitle_cue", "media_output"
+        "clip", "track", "subtitle_track", "subtitle_cue", "transition", "media_output"
     ]
     entity_id: str = Field(min_length=1, max_length=160)
     track_key: str | None = Field(default=None, min_length=1)
@@ -262,7 +263,7 @@ class ManualEntityRelation(TraceModel):
     @model_validator(mode="after")
     def entity_is_a_clip(self) -> ManualEntityRelation:
         if self.entity.entity_kind not in {
-            "clip", "track", "subtitle_track", "subtitle_cue"
+            "clip", "track", "subtitle_track", "subtitle_cue", "transition"
         }:
             raise ValueError(
                 "Manual edit traces may reference clips or tracks only"
@@ -357,6 +358,15 @@ class ManualEditTrace(TraceModel):
                 ):
                     raise ValueError("Manual subtitle cue trace differs from proposal")
                 continue
+            if isinstance(edit, ManualTransitionEdit):
+                if not direct or any(
+                    relation.entity.entity_kind != "transition"
+                    for relation in direct
+                ):
+                    raise ValueError(
+                        "Manual transition trace differs from proposal"
+                    )
+                continue
             if isinstance(edit, ManualClipLink):
                 expected = {
                     (member.track_key, member.clip_id)
@@ -439,13 +449,18 @@ class ManualEditTrace(TraceModel):
                         "Manual trace starts from a stale proposal snapshot"
                     )
                 if effect.effect_kind == "consequential":
-                    if (
+                    transition_consequence = (
+                        effect.entity.entity_kind == "transition"
+                        and effect.relation_type in {"modifies", "deletes"}
+                    )
+                    if not transition_consequence and (
                         effect.relation_type != "modifies"
                         or effect.entity == relation.entity
                     ):
                         raise ValueError(
                             "Consequential manual effects must modify a "
-                            "different displaced clip"
+                            "different displaced clip or truthfully update/"
+                            "tombstone a bound transition"
                         )
         return self
 
