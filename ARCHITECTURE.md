@@ -178,6 +178,13 @@ It constructs a fresh immutable `AtomicSkillRegistry` containing:
 - `AudioSetClipPropertiesSkill`
 - `AudioSetTrackMixSkill`
 - `AudioSetVolumeEnvelopeSkill`
+- `SubtitleManageTrackSkill`
+- `SubtitleEditCueSkill`
+- `SubtitleImportSkill`
+- `SubtitleExportSidecarSkill`
+- `VideoSetClipTransformSkill`
+- `VideoSetClipColorSkill`
+- `VideoCopyClipVisualSkill`
 
 The registry has stable ID/version/revision, deterministic input-schema and
 full-descriptor digests, and frozen per-skill metadata for exact input/output
@@ -449,7 +456,7 @@ Rollback is a second workflow, never an automatic failure handler. The service r
 `src/core/timeline.py` defines the compatible media timeline models plus a
 separate first-class subtitle domain:
 
-- `ClipConfig`: stable clip ID, source, trim, timeline placement, optional explicit link-group ID, legacy audio flags/volume, frozen versioned clip-audio settings, speed, reverse, and rotation properties.
+- `ClipConfig`: stable clip ID, source, trim, timeline placement, optional explicit link-group ID, legacy audio flags/volume, frozen versioned clip-audio settings, speed, reverse, legacy rotation, and neutral-by-default frozen visual transform/color properties.
 - `TrackConfig`: stable track ID, video/audio kind, role, unique order, enabled/muted/locked state, frozen versioned mix settings, and an ordered list of clips.
 - `SubtitleTrackConfig` / `SubtitleCue` / `SubtitleStyle`: frozen versioned text lanes, stable timed cues, and safe logical-font styling, separate from media clips.
 - `TimelineConfig`: schema version `2.0.0`, output dimensions, frame rate, an arbitrary mapping of video/audio tracks, and an optional mapping of subtitle/text tracks.
@@ -462,12 +469,12 @@ separate first-class subtitle domain:
 
 `src/timeline_query/` is the stable library boundary for future timeline/player visualization. `TimelineSnapshotService.snapshot` accepts a `TimelineConfig`, legacy timeline dictionary, or `TimelineProjectDocument`; `snapshot_current` delegates only to `TimelineManager.get_current_timeline`. Neither method saves, resets, renders, executes a skill, probes media, or writes files.
 
-The returned `vistora.timeline-snapshot` schema is version `3.0.0`. Its frozen, recursively detached read models expose:
+The returned `vistora.timeline-snapshot` schema is version `4.0.0`. Its frozen, recursively detached read models expose:
 
 - snapshot, project, revision, source-schema, migration, and timeline-digest identity;
 - output width, height, and frame rate;
 - every configured track with its mapping key, stable ID, video/audio kind, role, unique order, enabled/muted/locked state, gain/mix mute/pan, clips, count, and derived duration;
-- every clip with its configured ID, optional explicit link-group ID, source reference, trim, placement, speed-adjusted duration, legacy audio flags/volume, dB gain, mute, pan, fades, stable linear envelope, applied loudness evidence ID, reversal, and rotation;
+- every clip with its configured ID, optional explicit link-group ID, source reference, trim, placement, speed-adjusted duration, legacy audio flags/volume, dB gain, mute, pan, fades, stable linear envelope, applied loudness evidence ID, reversal/legacy rotation, frozen transform/color state, and a deterministic visual digest;
 - every subtitle/text track and cue with stable IDs, language/speaker metadata, timing, enable/lock/overlap state, safe style data, counts, and derived duration;
 - a detached `vistora.clip-provenance-summary` for each clip, reporting recorded origin, latest change origin, mapping health, confirmed plan/operation/step/request/result identity, execution status, and browser-safe evidence locators;
 - aggregate media/subtitle track, clip/cue, video/audio counts, timeline duration, and empty state.
@@ -508,7 +515,7 @@ This boundary is suitable for Director read context or a future UI, but it is no
 
 `src/media_analysis/` is separate from timeline persistence, rendering, agents, skills, and the browser. It accepts an immutable `vistora.media-analysis-request` for one snapshot clip range plus a server-resolved source. It returns a frozen `vistora.media-analysis-result`; timeline batches use `vistora.media-analysis-collection`. All schemas are version `1.0.0`.
 
-For a video-track range, the service selects a bounded number of evenly spaced source times and extracts fixed-width PNG frames through an argument-list FFmpeg subprocess. For an audio-track range, it decodes a fixed-rate mono float stream and returns bounded normalized min/max peak bins whose intervals exactly cover the clip's visible timeline start/end. IDs, sample times, intervals, settings, and result ordering are deterministic for the same unchanged source/range/settings.
+For a video-track range, the service selects a bounded number of evenly spaced source times and extracts fixed-width PNG frames through an argument-list FFmpeg subprocess. The request explicitly selects `original` or `applied`; applied mode requires an exact clip visual digest and canvas dimensions, uses the same safe visual filter builder as export, and includes those bindings in the bounded cache key. For an audio-track range, it decodes a fixed-rate mono float stream and returns bounded normalized min/max peak bins whose intervals exactly cover the clip's visible timeline start/end. IDs, sample times, intervals, settings, and result ordering are deterministic for the same unchanged source/range/settings.
 
 The service reads source bytes through FFmpeg but never edits the source, imports `TimelineManager`, saves timeline state, dispatches a skill, renders an output timeline, or writes analysis files. A bounded in-memory LRU retains results and thumbnail bytes for refresh/reuse; eviction removes their opaque artifact IDs. Decode errors become structured `missing`, `unsupported`, or `error` results rather than server failures.
 
@@ -630,6 +637,9 @@ The implemented mutation ownership is:
 | `SubtitleEditCueSkill` | Atomically adds/batches/updates/splits/merges/moves/trims/ripple-shifts/deletes/styles exact cues on one unlocked track. | None. |
 | `SubtitleImportSkill` | Atomically imports validated UTF-8 SRT/WebVTT cue data; the source file is read-only. | Reads a configured subtitle file or exact inline content; never rewrites it. |
 | `SubtitleExportSidecarSkill` | None. | Atomically writes deterministic UTF-8 SRT/WebVTT sidecar output. |
+| `VideoSetClipTransformSkill` | Atomically sets or resets bounded normalized-canvas transform state on one exact unlocked video clip. | None. |
+| `VideoSetClipColorSkill` | Atomically sets or resets bounded deterministic SDR color state on one exact unlocked video clip. | None. |
+| `VideoCopyClipVisualSkill` | Atomically copies transform, color, or both from one exact video clip to an explicit stable target list; linked audio is never implicit. | None. |
 
 These are the only registered atomic mutation entry points. Tests may reset state directly as test-fixture setup. The CLI `render` command remains a documented nonconforming compatibility exception.
 
@@ -806,7 +816,7 @@ Mutation-capable utilities and core objects are implementation details behind to
 | G-03 | Operator combines incompatible roles | `OperatorAgent` owns dialogue, planning, and execution. | Separate/retire the hybrid behind Director and Editing contracts. |
 | G-06 | Direct CLI render bypass | `render` instantiates `TimelineRenderer` directly. | Route mutations through an explicit atomic tool or clearly isolated maintenance interface. |
 | G-07 | Canonical timeline persistence remains legacy | Workflow checkpoints and confirmed restore add guarded history/recovery, but the canonical timeline is still one legacy JSON file with content-derived snapshot identity. | Introduce a first-class versioned project store only in a separately approved migration. |
-| G-11 | Professional controls remain intentionally bounded | The loopback UI provides arbitrary video/audio lanes, first-class subtitle/text lanes, track/link state, thumbnails/waveforms/subtitle overlay, confirmed exact-ID edits, bounded audio mixing, SRT/WebVTT import/export, and deterministic subtitle burn-in. Insert/overwrite remains available through structured Director plans. | Add ASR/transcription, translation, color, transitions, visual keyframes, masks, denoise/de-reverb/separation, plugin hosting, animated titles, and later professional controls only through separately approved contracts and atomic tools. |
+| G-11 | Professional controls remain intentionally bounded | The loopback UI provides arbitrary video/audio lanes, first-class subtitle/text lanes, track/link state, thumbnails/waveforms/subtitle overlay, confirmed exact-ID edits, bounded audio mixing, SRT/WebVTT import/export/burn-in, and bounded clip transform/basic SDR color controls. Insert/overwrite remains available through structured Director plans. | Add ASR/transcription, translation, transitions, visual keyframes, masks/tracking, LUT/secondary/HDR color, denoise/de-reverb/separation, plugin hosting, animated titles, and later professional controls only through separately approved contracts and atomic tools. |
 
 This gap register is descriptive. Closing any gap requires a separate approved implementation task.
 
@@ -859,7 +869,7 @@ keyframes, masks, and effects remain out of scope.
 STEP 20 adds four production registry entries (twenty-three total) for
 subtitle track management, exact cue editing, deterministic SRT/WebVTT
 import, and atomic sidecar export. Optional frozen subtitle tracks/cues/styles
-extend compatible timeline-v2 JSON; snapshot v3 exposes detached subtitle
+extend compatible timeline-v2 JSON; snapshot v4 exposes detached subtitle
 state. The detached review engine and manual proposal service simulate cue
 and track changes before confirmation, and confirmed workflow/EditingAgent
 dispatch records subtitle entity relations and tombstones through the same
@@ -875,3 +885,26 @@ approximate current-time overlay, cue/style inspection, and detached draft
 controls; final FFmpeg burn-in remains authoritative. This step does not add
 ASR, translation, AI wording, karaoke, animated templates, or general visual
 effects.
+
+STEP 21 adds three production registry entries (twenty-six total) for exact
+clip transform, exact clip SDR color adjustment, and explicit-target visual
+property copy. Frozen version `1.0.0` transform/color attachments remain
+neutral by default, so old timeline-v2 JSON and neutral legacy rendering stay
+equivalent. Position and anchor use normalized output-canvas coordinates;
+scale, rotation, opacity, source-edge fractional crop, fit mode, and flips are
+bounded and finite. Visual properties apply only to the named video clip and
+never propagate to linked audio.
+
+The renderer builds filters from validated fields only: crop/flip, legacy and
+new rotation, fit/scale, bounded SDR tone/color balance/detail, opacity, then
+deterministic track-order overlay. No caller filter/script/path is accepted.
+The browser's CSS/video treatment is explicitly approximate; authoritative
+export uses FFmpeg. Media-analysis thumbnails select original/applied mode and
+bind the visual digest plus canvas to the cache key. Snapshot v4, Director
+read context, detached plan/manual review, workflow/EditingAgent dispatch,
+trace relations, checkpoint rollback, and the inspector expose the same
+detached visual state.
+
+This step does not add transitions, general visual keyframes or animation
+curves, masks/tracking, LUT import, secondary grading, HDR, complex blend
+modes, animated titles, or AI effects.

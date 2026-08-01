@@ -205,6 +205,67 @@ class SubtitleTrackConfig(BaseModel):
         return self
 
 
+class ClipTransform(BaseModel):
+    """Frozen canvas-relative visual transform for one video/image clip.
+
+    Position and anchor are normalized to the output canvas and transformed
+    clip respectively. Crop values are normalized fractions of source edges.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    schema_name: Literal["vistora.clip-transform"] = "vistora.clip-transform"
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    position_x: float = Field(0.5, ge=-2, le=3, allow_inf_nan=False)
+    position_y: float = Field(0.5, ge=-2, le=3, allow_inf_nan=False)
+    scale_x: float = Field(1, ge=0.05, le=8, allow_inf_nan=False)
+    scale_y: float = Field(1, ge=0.05, le=8, allow_inf_nan=False)
+    rotation_degrees: float = Field(0, ge=-360, le=360, allow_inf_nan=False)
+    opacity: float = Field(1, ge=0, le=1, allow_inf_nan=False)
+    anchor_x: float = Field(0.5, ge=0, le=1, allow_inf_nan=False)
+    anchor_y: float = Field(0.5, ge=0, le=1, allow_inf_nan=False)
+    crop_left: float = Field(0, ge=0, le=0.95, allow_inf_nan=False)
+    crop_right: float = Field(0, ge=0, le=0.95, allow_inf_nan=False)
+    crop_top: float = Field(0, ge=0, le=0.95, allow_inf_nan=False)
+    crop_bottom: float = Field(0, ge=0, le=0.95, allow_inf_nan=False)
+    fit: Literal["contain", "fill", "stretch"] = "contain"
+    flip_horizontal: bool = False
+    flip_vertical: bool = False
+
+    @model_validator(mode="after")
+    def crop_keeps_pixels(self) -> "ClipTransform":
+        if self.crop_left + self.crop_right >= 0.99:
+            raise ValueError("Horizontal crop must retain at least 1%")
+        if self.crop_top + self.crop_bottom >= 0.99:
+            raise ValueError("Vertical crop must retain at least 1%")
+        return self
+
+
+class ClipColorAdjustment(BaseModel):
+    """Bounded deterministic SDR color adjustment in documented order."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    schema_name: Literal["vistora.clip-color-adjustment"] = (
+        "vistora.clip-color-adjustment"
+    )
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    exposure: float = Field(0, ge=-2, le=2, allow_inf_nan=False)
+    contrast: float = Field(0, ge=-0.75, le=1, allow_inf_nan=False)
+    saturation: float = Field(0, ge=-1, le=2, allow_inf_nan=False)
+    temperature: float = Field(0, ge=-1, le=1, allow_inf_nan=False)
+    tint: float = Field(0, ge=-1, le=1, allow_inf_nan=False)
+    highlights: float = Field(0, ge=-1, le=1, allow_inf_nan=False)
+    shadows: float = Field(0, ge=-1, le=1, allow_inf_nan=False)
+    gamma: float = Field(1, ge=0.5, le=2, allow_inf_nan=False)
+    sharpen: float = Field(0, ge=0, le=1, allow_inf_nan=False)
+    blur: float = Field(0, ge=0, le=8, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def one_detail_filter(self) -> "ClipColorAdjustment":
+        if self.sharpen > 0 and self.blur > 0:
+            raise ValueError("Sharpen and blur cannot be active together")
+        return self
+
+
 class ClipConfig(BaseModel):
     """Declarative clip state shared by legacy and v2 timelines."""
 
@@ -226,6 +287,8 @@ class ClipConfig(BaseModel):
         description="Explicit linked-clip group; never inferred.",
     )
     audio: ClipAudioSettings = Field(default_factory=ClipAudioSettings)
+    transform: ClipTransform = Field(default_factory=ClipTransform)
+    color: ClipColorAdjustment = Field(default_factory=ClipColorAdjustment)
 
     @model_validator(mode="after")
     def audio_timing_is_bounded(self) -> "ClipConfig":
@@ -428,6 +491,11 @@ class TimelineRenderer:
             len(video_tracks) == 1
             and canonical_video is video_tracks[0]
             and video_track.clips
+            and all(
+                clip.transform == ClipTransform()
+                and clip.color == ClipColorAdjustment()
+                for clip in video_track.clips
+            )
         ):
             if not audio_track or len(audio_track.clips) == 0:
                 if len(video_track.clips) == 1:
@@ -462,6 +530,12 @@ class TimelineRenderer:
                 and track.enabled
                 and track.clips
                 for key, track in self.config.tracks.items()
+            )
+            or any(
+                clip.transform != ClipTransform()
+                or clip.color != ClipColorAdjustment()
+                for track in video_tracks
+                for clip in track.clips
             )
         )
         if requires_multitrack:
@@ -772,10 +846,12 @@ class TimelineRenderer:
             f"r={self.config.fps}:d={duration:.12g}[base]"
         ]
         audio_labels: list[str] = []
-        video_labels: list[str] = []
+        video_labels: list[tuple[str, str]] = []
         for index, (kind, track, clip) in enumerate(all_items):
             delay_ms = max(0, round(clip.timeline_start * 1000))
             if kind == "video":
+                from visuals.render import clip_visual_filter_chain
+
                 chain = [
                     f"[{index}:v]trim=start={clip.trim_in:.12g}:"
                     f"end={clip.trim_out:.12g}",
@@ -783,24 +859,19 @@ class TimelineRenderer:
                 ]
                 if clip.reverse:
                     chain.append("reverse")
-                if clip.rotate == 90:
-                    chain.append("transpose=1")
-                elif clip.rotate == 180:
-                    chain.extend(("transpose=1", "transpose=1"))
-                elif clip.rotate == 270:
-                    chain.append("transpose=2")
+                visual_chain, overlay_expression = clip_visual_filter_chain(
+                    clip,
+                    self.config.width,
+                    self.config.height,
+                )
                 chain.extend((
-                    f"scale={self.config.width}:{self.config.height}:"
-                    "force_original_aspect_ratio=decrease",
-                    f"pad={self.config.width}:{self.config.height}:"
-                    "(ow-iw)/2:(oh-ih)/2:color=black@0",
+                    *visual_chain,
                     f"fps={self.config.fps}",
-                    "format=rgba",
                     f"setpts=PTS+{clip.timeline_start:.12g}/TB"
                     f"[video_{index}]",
                 ))
                 filters.append(",".join(chain))
-                video_labels.append(f"[video_{index}]")
+                video_labels.append((f"[video_{index}]", overlay_expression))
                 if (
                     clip.keep_audio
                     and not track.muted
@@ -846,10 +917,11 @@ class TimelineRenderer:
                 audio_labels.append(f"[audio_{index}]")
 
         current = "[base]"
-        for layer_index, label in enumerate(video_labels):
+        for layer_index, (label, overlay_expression) in enumerate(video_labels):
             output = f"[layer_{layer_index}]"
             filters.append(
-                f"{current}{label}overlay=eof_action=pass:shortest=0"
+                f"{current}{label}overlay={overlay_expression}:"
+                "eof_action=pass:shortest=0"
                 f"{output}"
             )
             current = output

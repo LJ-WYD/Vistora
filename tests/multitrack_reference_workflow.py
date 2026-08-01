@@ -372,6 +372,85 @@ def run_multitrack_reference_workflow() -> dict:
                     evidence_ids=tuple(item.evidence_id for item in evidence),
                 ),
                 DirectorOperation(
+                    operation_id="operation_overlay_transform",
+                    tool_name="VideoSetClipTransformSkill",
+                    arguments={
+                        "track_id": "track_video_overlay",
+                        "clip_id": "clip_video_overlay",
+                        "action": "set",
+                        "transform": {
+                            "position_x": 0.72,
+                            "position_y": 0.28,
+                            "scale_x": 0.62,
+                            "scale_y": 0.72,
+                            "rotation_degrees": 8,
+                            "opacity": 0.82,
+                            "anchor_x": 0.5,
+                            "anchor_y": 0.5,
+                            "crop_left": 0.04,
+                            "crop_right": 0.03,
+                            "crop_top": 0.05,
+                            "crop_bottom": 0.02,
+                            "fit": "contain",
+                            "flip_horizontal": True,
+                            "flip_vertical": False,
+                        },
+                    },
+                    rationale="Reframe the verified overlay within the SDR canvas.",
+                    expected_effect="Apply exact canvas-relative geometry and opacity.",
+                ),
+                DirectorOperation(
+                    operation_id="operation_overlay_color",
+                    tool_name="VideoSetClipColorSkill",
+                    arguments={
+                        "track_id": "track_video_overlay",
+                        "clip_id": "clip_video_overlay",
+                        "action": "set",
+                        "color": {
+                            "exposure": 0.2,
+                            "contrast": 0.15,
+                            "saturation": 0.25,
+                            "temperature": 0.12,
+                            "tint": -0.08,
+                            "highlights": 0.1,
+                            "shadows": -0.06,
+                            "gamma": 1.05,
+                            "sharpen": 0.15,
+                            "blur": 0,
+                        },
+                    },
+                    rationale="Apply a bounded deterministic overlay treatment.",
+                    expected_effect="Adjust SDR tone and color without raw filter input.",
+                ),
+                DirectorOperation(
+                    operation_id="operation_copy_overlay_visual",
+                    tool_name="VideoCopyClipVisualSkill",
+                    arguments={
+                        "source_track_id": "track_video_overlay",
+                        "source_clip_id": "clip_video_overlay",
+                        "targets": [
+                            {
+                                "track_id": "track_video_main",
+                                "clip_id": "clip_video_right",
+                            }
+                        ],
+                        "components": "both",
+                    },
+                    rationale="Exercise an exact, explicit visual-property copy.",
+                    expected_effect="Copy only to the named picture clip, never linked audio.",
+                ),
+                DirectorOperation(
+                    operation_id="operation_reset_copied_visual",
+                    tool_name="VideoSetClipTransformSkill",
+                    arguments={
+                        "track_id": "track_video_main",
+                        "clip_id": "clip_video_right",
+                        "action": "reset",
+                    },
+                    rationale="Restore neutral geometry on the explicit copy target.",
+                    expected_effect="Reset transform while retaining its copied color treatment.",
+                ),
+                DirectorOperation(
                     operation_id="operation_subtitle_track",
                     tool_name="SubtitleManageTrackSkill",
                     arguments={
@@ -552,6 +631,16 @@ def run_multitrack_reference_workflow() -> dict:
                 if relation.entity.entity_kind
                 in {"subtitle_track", "subtitle_cue"}
             )
+            visual_relations = tuple(
+                relation
+                for confirmed_trace in trace.confirmed_traces
+                for relation in confirmed_trace.relations
+                if confirmed_trace.request.tool_name in {
+                    "VideoSetClipTransformSkill",
+                    "VideoSetClipColorSkill",
+                    "VideoCopyClipVisualSkill",
+                }
+            )
             if not any(
                 relation.relation_type == "creates"
                 for relation in subtitle_relations
@@ -582,6 +671,7 @@ def run_multitrack_reference_workflow() -> dict:
                 "step_count": len(report.steps),
                 "trace_count": len(trace.confirmed_traces),
                 "subtitle_trace_count": len(subtitle_relations),
+                "visual_trace_count": len(visual_relations),
                 "subtitle_tombstone_count": sum(
                     relation.relation_type == "deletes"
                     for relation in subtitle_relations

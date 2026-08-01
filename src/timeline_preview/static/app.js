@@ -65,6 +65,39 @@ const ui = {
   clearEnvelope: document.querySelector("#clear-envelope"),
   analyzeLoudness: document.querySelector("#analyze-loudness"),
   applyLoudness: document.querySelector("#apply-loudness"),
+  visualPositionX: document.querySelector("#visual-position-x"),
+  visualPositionY: document.querySelector("#visual-position-y"),
+  visualScaleX: document.querySelector("#visual-scale-x"),
+  visualScaleY: document.querySelector("#visual-scale-y"),
+  visualRotation: document.querySelector("#visual-rotation"),
+  visualOpacity: document.querySelector("#visual-opacity"),
+  visualAnchorX: document.querySelector("#visual-anchor-x"),
+  visualAnchorY: document.querySelector("#visual-anchor-y"),
+  visualCropLeft: document.querySelector("#visual-crop-left"),
+  visualCropRight: document.querySelector("#visual-crop-right"),
+  visualCropTop: document.querySelector("#visual-crop-top"),
+  visualCropBottom: document.querySelector("#visual-crop-bottom"),
+  visualFit: document.querySelector("#visual-fit"),
+  visualFlipH: document.querySelector("#visual-flip-h"),
+  visualFlipV: document.querySelector("#visual-flip-v"),
+  colorExposure: document.querySelector("#color-exposure"),
+  colorContrast: document.querySelector("#color-contrast"),
+  colorSaturation: document.querySelector("#color-saturation"),
+  colorTemperature: document.querySelector("#color-temperature"),
+  colorTint: document.querySelector("#color-tint"),
+  colorHighlights: document.querySelector("#color-highlights"),
+  colorShadows: document.querySelector("#color-shadows"),
+  colorGamma: document.querySelector("#color-gamma"),
+  colorSharpen: document.querySelector("#color-sharpen"),
+  colorBlur: document.querySelector("#color-blur"),
+  visualCopyComponents: document.querySelector("#visual-copy-components"),
+  visualCopyTargets: document.querySelector("#visual-copy-targets"),
+  visualPreviewMode: document.querySelector("#visual-preview-mode"),
+  visualFormMessage: document.querySelector("#visual-form-message"),
+  stageTransform: document.querySelector("#stage-transform"),
+  stageColor: document.querySelector("#stage-color"),
+  resetVisual: document.querySelector("#reset-visual"),
+  copyVisual: document.querySelector("#copy-visual"),
   subtitleEditor: document.querySelector("#subtitle-editor"),
   subtitleTrackSelect: document.querySelector("#subtitle-track-select"),
   subtitleTrackLanguage: document.querySelector("#subtitle-track-language"),
@@ -160,6 +193,7 @@ const state = {
   review: null,
   applying: false,
   loudnessEvidence: null,
+  visualPreviewMode: "applied",
   planReview: null,
   selectedPlanChange: null,
   director: null,
@@ -1484,6 +1518,64 @@ function showManualEditor(track, clip) {
   ui.deleteEnvelope.disabled = track.locked || !hasAudioComponent;
   ui.clearEnvelope.disabled = track.locked || !hasAudioComponent;
   ui.analyzeLoudness.disabled = track.locked || !hasAudioComponent;
+  const visualDraft = existingDraftForClip(clip.clip_id, ["clip_visual"]);
+  const transform = visualDraft?.transform || clip.transform;
+  const color = visualDraft?.color || clip.color;
+  for (const [control, value] of [
+    [ui.visualPositionX, transform.position_x],
+    [ui.visualPositionY, transform.position_y],
+    [ui.visualScaleX, transform.scale_x],
+    [ui.visualScaleY, transform.scale_y],
+    [ui.visualRotation, transform.rotation_degrees],
+    [ui.visualOpacity, transform.opacity],
+    [ui.visualAnchorX, transform.anchor_x],
+    [ui.visualAnchorY, transform.anchor_y],
+    [ui.visualCropLeft, transform.crop_left],
+    [ui.visualCropRight, transform.crop_right],
+    [ui.visualCropTop, transform.crop_top],
+    [ui.visualCropBottom, transform.crop_bottom],
+    [ui.colorExposure, color.exposure],
+    [ui.colorContrast, color.contrast],
+    [ui.colorSaturation, color.saturation],
+    [ui.colorTemperature, color.temperature],
+    [ui.colorTint, color.tint],
+    [ui.colorHighlights, color.highlights],
+    [ui.colorShadows, color.shadows],
+    [ui.colorGamma, color.gamma],
+    [ui.colorSharpen, color.sharpen],
+    [ui.colorBlur, color.blur],
+  ]) control.value = String(value);
+  ui.visualFit.value = transform.fit;
+  ui.visualFlipH.checked = transform.flip_horizontal;
+  ui.visualFlipV.checked = transform.flip_vertical;
+  ui.visualPreviewMode.value = state.visualPreviewMode;
+  ui.visualCopyTargets.replaceChildren();
+  for (const candidateTrack of state.snapshot.tracks) {
+    if (candidateTrack.kind !== "video") continue;
+    for (const candidateClip of candidateTrack.clips) {
+      if (candidateClip.clip_id === clip.clip_id) continue;
+      const option = document.createElement("option");
+      option.value = JSON.stringify({
+        track_key: candidateTrack.track_key,
+        track_id: candidateTrack.track_id,
+        clip_id: candidateClip.clip_id,
+      });
+      option.textContent = `${candidateTrack.track_id} / ${candidateClip.clip_id}`;
+      option.disabled = candidateTrack.locked;
+      ui.visualCopyTargets.append(option);
+    }
+  }
+  const visualDisabled = track.locked || track.kind !== "video";
+  for (const control of [
+    ui.stageTransform, ui.stageColor, ui.resetVisual, ui.copyVisual,
+  ]) control.disabled = visualDisabled;
+  ui.copyVisual.disabled = visualDisabled || ui.visualCopyTargets.options.length === 0;
+  ui.visualFormMessage.classList.remove("error");
+  ui.visualFormMessage.textContent = track.locked
+    ? "Locked tracks reject visual changes."
+    : track.kind !== "video"
+      ? "Visual properties apply only to video/image clips."
+      : `Visual digest ${clip.visual_digest.slice(0, 23)}… · export exact.`;
   ui.clipEditForm.querySelector('button[type="submit"]').disabled =
     track.locked;
   ui.stageRemove.disabled = track.locked;
@@ -1512,6 +1604,89 @@ function subtitleRipplePayload() {
     selected_track_ids:
       mode === "selected_subtitle_tracks" ? selectedSubtitleTrackIds() : [],
   };
+}
+
+function visualTransformFromUi() {
+  const transform = {
+    schema_name: "vistora.clip-transform",
+    schema_version: "1.0.0",
+    position_x: readFiniteInput(ui.visualPositionX, "Position X"),
+    position_y: readFiniteInput(ui.visualPositionY, "Position Y"),
+    scale_x: readFiniteInput(ui.visualScaleX, "Scale X"),
+    scale_y: readFiniteInput(ui.visualScaleY, "Scale Y"),
+    rotation_degrees: readFiniteInput(ui.visualRotation, "Rotation"),
+    opacity: readFiniteInput(ui.visualOpacity, "Opacity"),
+    anchor_x: readFiniteInput(ui.visualAnchorX, "Anchor X"),
+    anchor_y: readFiniteInput(ui.visualAnchorY, "Anchor Y"),
+    crop_left: readFiniteInput(ui.visualCropLeft, "Crop left"),
+    crop_right: readFiniteInput(ui.visualCropRight, "Crop right"),
+    crop_top: readFiniteInput(ui.visualCropTop, "Crop top"),
+    crop_bottom: readFiniteInput(ui.visualCropBottom, "Crop bottom"),
+    fit: ui.visualFit.value,
+    flip_horizontal: ui.visualFlipH.checked,
+    flip_vertical: ui.visualFlipV.checked,
+  };
+  if (transform.crop_left + transform.crop_right >= 0.99) {
+    throw new Error("Horizontal crop must retain at least 1%.");
+  }
+  if (transform.crop_top + transform.crop_bottom >= 0.99) {
+    throw new Error("Vertical crop must retain at least 1%.");
+  }
+  return transform;
+}
+
+function visualColorFromUi() {
+  const color = {
+    schema_name: "vistora.clip-color-adjustment",
+    schema_version: "1.0.0",
+    exposure: readFiniteInput(ui.colorExposure, "Exposure"),
+    contrast: readFiniteInput(ui.colorContrast, "Contrast"),
+    saturation: readFiniteInput(ui.colorSaturation, "Saturation"),
+    temperature: readFiniteInput(ui.colorTemperature, "Temperature"),
+    tint: readFiniteInput(ui.colorTint, "Tint"),
+    highlights: readFiniteInput(ui.colorHighlights, "Highlights"),
+    shadows: readFiniteInput(ui.colorShadows, "Shadows"),
+    gamma: readFiniteInput(ui.colorGamma, "Gamma"),
+    sharpen: readFiniteInput(ui.colorSharpen, "Sharpen"),
+    blur: readFiniteInput(ui.colorBlur, "Blur"),
+  };
+  if (color.sharpen > 0 && color.blur > 0) {
+    throw new Error("Sharpen and blur cannot be active together.");
+  }
+  return color;
+}
+
+function approximateVisualPreview(clip, transform = clip?.transform, color = clip?.color) {
+  if (!clip || !transform || !color || state.visualPreviewMode === "original") {
+    ui.previewVideo.style.transform = "";
+    ui.previewVideo.style.transformOrigin = "";
+    ui.previewVideo.style.opacity = "";
+    ui.previewVideo.style.clipPath = "";
+    ui.previewVideo.style.objectFit = "contain";
+    ui.previewVideo.style.filter = "";
+    return;
+  }
+  const flipX = transform.flip_horizontal ? -1 : 1;
+  const flipY = transform.flip_vertical ? -1 : 1;
+  ui.previewVideo.style.transformOrigin =
+    `${transform.anchor_x * 100}% ${transform.anchor_y * 100}%`;
+  ui.previewVideo.style.transform =
+    `translate(${(transform.position_x - 0.5) * 100}%, ` +
+    `${(transform.position_y - 0.5) * 100}%) ` +
+    `scale(${transform.scale_x * flipX}, ${transform.scale_y * flipY}) ` +
+    `rotate(${transform.rotation_degrees}deg)`;
+  ui.previewVideo.style.opacity = String(transform.opacity);
+  ui.previewVideo.style.objectFit =
+    transform.fit === "stretch" ? "fill" : transform.fit === "fill" ? "cover" : "contain";
+  ui.previewVideo.style.clipPath =
+    `inset(${transform.crop_top * 100}% ${transform.crop_right * 100}% ` +
+    `${transform.crop_bottom * 100}% ${transform.crop_left * 100}%)`;
+  ui.previewVideo.style.filter = [
+    `brightness(${Math.pow(2, color.exposure)})`,
+    `contrast(${1 + color.contrast})`,
+    `saturate(${1 + color.saturation})`,
+    `blur(${color.blur}px)`,
+  ].join(" ");
 }
 
 function proposalPayload() {
@@ -1630,6 +1805,18 @@ function changedFieldLines(change) {
       `${after.muted ? "muted" : "active"}`,
     );
   }
+  for (const [field, label] of [["transform", "Picture transform"], ["color", "Color adjustment"]]) {
+    if (
+      change.before[field] && change.after[field] &&
+      JSON.stringify(change.before[field]) !== JSON.stringify(change.after[field])
+    ) {
+      const changed = Object.keys(change.after[field]).filter(
+        (key) => change.before[field][key] !== change.after[field][key] &&
+          !["schema_name", "schema_version"].includes(key),
+      );
+      lines.push(`${label}: ${changed.join(", ") || "reset"}`);
+    }
+  }
   return lines;
 }
 
@@ -1734,6 +1921,12 @@ function stageEdit(edit) {
     if (value.kind === "subtitle_cue") {
       const target = value.cue_id || value.merged_cue_id || value.operation_id;
       return `subtitle_cue:${value.track_id}/${value.action}/${target}`;
+    }
+    if (value.kind === "clip_visual") {
+      return `visual:${value.track_id}/${value.clip_id}`;
+    }
+    if (value.kind === "copy_clip_visual") {
+      return `visual_copy:${value.source_track_id}/${value.source_clip_id}`;
     }
     const domain = value.kind === "clip_audio" ? "audio" : "timing";
     return `clip:${domain}:${value.track_id || value.track_key}/${value.clip_id}`;
@@ -1890,6 +2083,20 @@ function showDetails(track, clip) {
       clip.loudness_analysis_id || "Not applied",
     ),
     detailRow(
+      "Picture transform",
+      `pos ${clip.transform.position_x},${clip.transform.position_y} · ` +
+      `scale ${clip.transform.scale_x}×${clip.transform.scale_y} · ` +
+      `${clip.transform.rotation_degrees}° · opacity ${clip.transform.opacity} · ` +
+      clip.transform.fit,
+    ),
+    detailRow(
+      "Color adjustment",
+      `exp ${clip.color.exposure} · con ${clip.color.contrast} · ` +
+      `sat ${clip.color.saturation} · temp ${clip.color.temperature} · ` +
+      `tint ${clip.color.tint} · gamma ${clip.color.gamma}`,
+    ),
+    detailRow("Visual digest", clip.visual_digest),
+    detailRow(
       "Media access",
       availability?.available
         ? `Allowlisted · ${availability.content_type}`
@@ -1931,6 +2138,7 @@ function clearPreview(message) {
   ui.monitor.classList.remove("has-media");
   ui.previewTitle.textContent = "Preview unavailable";
   ui.previewStatus.textContent = message;
+  approximateVisualPreview(null);
 }
 
 function selectClip(track, clip, element) {
@@ -1968,6 +2176,7 @@ function selectClip(track, clip, element) {
     ui.previewVideo.load();
   }
   ui.monitor.classList.add("has-media");
+  approximateVisualPreview(clip);
   ui.previewStatus.textContent =
     "Previewing allowlisted media. Playback updates the local playhead only.";
 
@@ -2365,10 +2574,13 @@ async function loadAnalysis() {
   state.analysisState = "loading";
   renderTimeline();
   try {
-    const response = await fetch("/api/analysis", {
+    const response = await fetch(
+      `/api/analysis?mode=${encodeURIComponent(state.visualPreviewMode)}`,
+      {
       headers: { Accept: "application/json" },
       cache: "no-store",
-    });
+      },
+    );
     const payload = await response.json();
     if (
       !response.ok ||
@@ -2827,6 +3039,119 @@ function downloadSubtitles(format) {
 
 ui.subtitleDownloadSrt.addEventListener("click", () => downloadSubtitles("srt"));
 ui.subtitleDownloadVtt.addEventListener("click", () => downloadSubtitles("vtt"));
+
+function stageVisualEdit(components) {
+  if (!state.selected || state.selected.track.locked || state.selected.track.kind !== "video") {
+    throw new Error("Select an unlocked video clip.");
+  }
+  const existing = existingDraftForClip(state.selected.clip.clip_id, ["clip_visual"]);
+  const edit = {
+    schema_version: "1.0.0",
+    operation_id: existing?.operation_id || newStableId("manual_visual"),
+    kind: "clip_visual",
+    action: "set",
+    track_key: state.selected.track.track_key,
+    track_id: state.selected.track.track_id,
+    clip_id: state.selected.clip.clip_id,
+    // The draft represents the complete visual state.  Keeping both halves in
+    // one proposal prevents a later color click from discarding a staged
+    // transform (or vice versa) before confirmation.
+    components: "both",
+    transform: visualTransformFromUi(),
+    color: visualColorFromUi(),
+  };
+  stageEdit(edit);
+  ui.visualFormMessage.classList.remove("error");
+  ui.visualFormMessage.textContent = `${components} staged locally for review.`;
+}
+
+ui.stageTransform.addEventListener("click", () => {
+  try { stageVisualEdit("transform"); }
+  catch (error) {
+    ui.visualFormMessage.classList.add("error");
+    ui.visualFormMessage.textContent = error.message || String(error);
+  }
+});
+
+ui.stageColor.addEventListener("click", () => {
+  try { stageVisualEdit("color"); }
+  catch (error) {
+    ui.visualFormMessage.classList.add("error");
+    ui.visualFormMessage.textContent = error.message || String(error);
+  }
+});
+
+ui.resetVisual.addEventListener("click", () => {
+  if (!state.selected || state.selected.track.locked || state.selected.track.kind !== "video") return;
+  stageEdit({
+    schema_version: "1.0.0",
+    operation_id: newStableId("manual_visual_reset"),
+    kind: "clip_visual",
+    action: "reset",
+    track_key: state.selected.track.track_key,
+    track_id: state.selected.track.track_id,
+    clip_id: state.selected.clip.clip_id,
+    components: "both",
+  });
+  ui.visualFormMessage.textContent = "Neutral transform and color reset staged.";
+});
+
+ui.copyVisual.addEventListener("click", () => {
+  try {
+    if (!state.selected || state.selected.track.locked) throw new Error("Select an unlocked source clip.");
+    const targets = Array.from(ui.visualCopyTargets.selectedOptions)
+      .map((option) => JSON.parse(option.value))
+      .sort((left, right) =>
+        `${left.track_id}/${left.clip_id}`.localeCompare(`${right.track_id}/${right.clip_id}`),
+      );
+    if (!targets.length) throw new Error("Select at least one explicit target clip.");
+    stageEdit({
+      schema_version: "1.0.0",
+      operation_id: newStableId("manual_visual_copy"),
+      kind: "copy_clip_visual",
+      source_track_id: state.selected.track.track_id,
+      source_clip_id: state.selected.clip.clip_id,
+      targets,
+      components: ui.visualCopyComponents.value,
+    });
+    ui.visualFormMessage.textContent = `Visual copy staged for ${targets.length} explicit target(s).`;
+  } catch (error) {
+    ui.visualFormMessage.classList.add("error");
+    ui.visualFormMessage.textContent = error.message || String(error);
+  }
+});
+
+ui.visualPreviewMode.addEventListener("change", () => {
+  state.visualPreviewMode = ui.visualPreviewMode.value;
+  if (state.selected) approximateVisualPreview(state.selected.clip);
+  loadAnalysis();
+});
+
+for (const control of [
+  ui.visualPositionX, ui.visualPositionY, ui.visualScaleX, ui.visualScaleY,
+  ui.visualRotation, ui.visualOpacity, ui.visualAnchorX, ui.visualAnchorY,
+  ui.visualCropLeft, ui.visualCropRight, ui.visualCropTop, ui.visualCropBottom,
+  ui.visualFit, ui.visualFlipH, ui.visualFlipV, ui.colorExposure,
+  ui.colorContrast, ui.colorSaturation, ui.colorTemperature, ui.colorTint,
+  ui.colorHighlights, ui.colorShadows, ui.colorGamma, ui.colorSharpen,
+  ui.colorBlur,
+]) {
+  control.addEventListener("input", () => {
+    if (!state.selected) return;
+    try {
+      approximateVisualPreview(
+        state.selected.clip,
+        visualTransformFromUi(),
+        visualColorFromUi(),
+      );
+      ui.visualFormMessage.classList.remove("error");
+      ui.visualFormMessage.textContent = "Approximate local preview only; not staged or written.";
+    } catch (error) {
+      ui.visualFormMessage.classList.add("error");
+      ui.visualFormMessage.textContent = error.message || String(error);
+    }
+  });
+}
 
 ui.clipEditForm.addEventListener("submit", (event) => {
   event.preventDefault();

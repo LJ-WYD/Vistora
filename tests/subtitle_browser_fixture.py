@@ -15,7 +15,9 @@ sys.path.insert(0, str(ROOT / "src"))
 from atomic_runtime import build_production_registry  # noqa: E402
 from core import timeline_manager  # noqa: E402
 from core.timeline import (  # noqa: E402
+    ClipColorAdjustment,
     ClipConfig,
+    ClipTransform,
     SubtitleCue,
     SubtitleTrackConfig,
     TimelineConfig,
@@ -62,13 +64,38 @@ def _timeline(root: Path, mode: str) -> tuple[TimelineConfig, Path]:
                     source=str(source),
                     trim_out=4,
                     keep_audio=False,
+                    transform=ClipTransform(
+                        position_x=0.42,
+                        position_y=0.54,
+                        scale_x=0.86,
+                        scale_y=0.9,
+                    ),
+                    color=ClipColorAdjustment(
+                        exposure=0.15,
+                        contrast=0.12,
+                        saturation=0.18,
+                    ),
+                )],
+            ),
+            "video_locked": TrackConfig(
+                id="video_locked",
+                kind="video",
+                role="locked-reference",
+                order=1,
+                locked=True,
+                clips=[ClipConfig(
+                    id="clip_locked",
+                    source=str(source),
+                    trim_out=1.5,
+                    timeline_start=2.2,
+                    keep_audio=False,
                 )],
             ),
             "video_missing": TrackConfig(
                 id="video_missing",
                 kind="video",
                 role="missing-reference",
-                order=1,
+                order=2,
                 clips=[ClipConfig(
                     id="clip_missing",
                     source=str(media / "missing.mp4"),
@@ -77,7 +104,7 @@ def _timeline(root: Path, mode: str) -> tuple[TimelineConfig, Path]:
                     keep_audio=False,
                 )],
             ),
-            "audio": TrackConfig(id="audio_main", kind="audio", order=2),
+            "audio": TrackConfig(id="audio_main", kind="audio", order=3),
         },
         subtitle_tracks={
             "captions": SubtitleTrackConfig(

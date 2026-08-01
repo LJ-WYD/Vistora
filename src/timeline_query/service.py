@@ -15,7 +15,9 @@ from core.timeline import ClipConfig, TimelineConfig
 from core.timeline_manager import TimelineManager as _TimelineManager
 
 from .models import (
+    ClipColorSnapshot,
     ClipSnapshot,
+    ClipTransformSnapshot,
     MediaSourceReference,
     TimelineSnapshot,
     TimelineSnapshotReference,
@@ -144,6 +146,25 @@ def _clip_snapshot(clip: ClipConfig, order_index: int) -> ClipSnapshot:
             clip.audio.normalization.analysis_id
             if clip.audio.normalization is not None
             else None
+        ),
+        transform=ClipTransformSnapshot.model_validate(
+            clip.transform.model_dump(
+                mode="python", exclude={"schema_name", "schema_version"}
+            )
+        ),
+        color=ClipColorSnapshot.model_validate(
+            clip.color.model_dump(
+                mode="python", exclude={"schema_name", "schema_version"}
+            )
+        ),
+        visual_digest=(
+            "sha256:"
+            + _sha256(
+                {
+                    "transform": clip.transform.model_dump(mode="json"),
+                    "color": clip.color.model_dump(mode="json"),
+                }
+            )
         ),
     )
 

@@ -11,6 +11,8 @@ from core.timeline import (
     AudioEnvelopePoint,
     ClipAudioSettings,
     ClipConfig,
+    ClipColorAdjustment,
+    ClipTransform,
     TimelineConfig,
     TrackConfig,
     TrackMixSettings,
@@ -881,6 +883,95 @@ class TimelineEditEngine:
             consequential=consequential,
             modified=modified,
         )
+
+    def set_clip_transform(
+        self,
+        track_reference: str,
+        clip_id: str,
+        *,
+        transform: ClipTransform,
+    ):
+        key, track, clip = self._clip(track_reference, clip_id)
+        if track.kind != "video":
+            raise TimelineEditError("Visual transforms require a video track")
+        if clip.transform == transform:
+            raise TimelineEditError("Transform edit does not change the clip")
+        clip.transform = transform
+        return self._finish(
+            operation="set_clip_transform",
+            primary_key=key,
+            primary_track=track,
+            direct=(clip_id,),
+            modified=(clip_id,),
+        )
+
+    def set_clip_color(
+        self,
+        track_reference: str,
+        clip_id: str,
+        *,
+        color: ClipColorAdjustment,
+    ):
+        key, track, clip = self._clip(track_reference, clip_id)
+        if track.kind != "video":
+            raise TimelineEditError("Color adjustment requires a video track")
+        if clip.color == color:
+            raise TimelineEditError("Color edit does not change the clip")
+        clip.color = color
+        return self._finish(
+            operation="set_clip_color",
+            primary_key=key,
+            primary_track=track,
+            direct=(clip_id,),
+            modified=(clip_id,),
+        )
+
+    def copy_clip_visual(
+        self,
+        source_track_id: str,
+        source_clip_id: str,
+        targets: Iterable[tuple[str, str]],
+        *,
+        components: str,
+    ):
+        source_key, source_track, source = self._clip(
+            source_track_id, source_clip_id
+        )
+        if source_track.kind != "video":
+            raise TimelineEditError("Visual copy source must be a video clip")
+        resolved: list[tuple[str, TrackConfig, ClipConfig]] = []
+        for track_id, clip_id in targets:
+            key, track, clip = self._clip(track_id, clip_id)
+            if track.kind != "video":
+                raise TimelineEditError("Visual copy targets must be video clips")
+            resolved.append((key, track, clip))
+        prior = self.timeline.model_copy(deep=True)
+        modified: list[str] = []
+        try:
+            for _, _, clip in resolved:
+                before = clip.model_copy(deep=True)
+                if components in {"transform", "both"}:
+                    clip.transform = source.transform
+                if components in {"color", "both"}:
+                    clip.color = source.color
+                if clip != before:
+                    modified.append(clip.id)
+            if not modified:
+                raise TimelineEditError("Visual copy changes no target clip")
+            primary_key, primary_track, _ = resolved[0]
+            return self._finish(
+                operation="copy_clip_visual",
+                primary_key=primary_key,
+                primary_track=primary_track,
+                direct=tuple(modified),
+                modified=tuple(modified),
+                warnings=(
+                    "Visual attributes copy only to the explicit clip IDs; linked audio is unchanged.",
+                ),
+            )
+        except Exception:
+            self.timeline = prior
+            raise
 
     def set_clip_audio(
         self,

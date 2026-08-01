@@ -40,6 +40,11 @@ from skills.video_timeline_edits import (
     VideoSplitClipSkill,
     VideoTrimClipSkill,
 )
+from skills.video_visual_edits import (
+    VideoCopyClipVisualSkill,
+    VideoSetClipColorSkill,
+    VideoSetClipTransformSkill,
+)
 
 from .models import SkillDescriptor, digest_json
 from .registry import AtomicSkillRegistry
@@ -120,6 +125,9 @@ class CoreTimelineEditResult(_Result):
         "set_clip_audio",
         "set_track_mix",
         "set_volume_envelope",
+        "set_clip_transform",
+        "set_clip_color",
+        "copy_clip_visual",
     ]
     track_id: str
     track_key: str
@@ -219,7 +227,7 @@ def build_production_registry(
     )
     return AtomicSkillRegistry(
         registry_id="registry_atomic_skills",
-        registry_revision=4,
+        registry_revision=5,
         entries=(
             _entry(
                 VideoAddClipSkill(),
@@ -348,6 +356,23 @@ def build_production_registry(
                 preview_supported=True,
                 rollback_support="none",
                 required_capabilities=(),
+            ),
+            *tuple(
+                _entry(
+                    skill,
+                    CoreTimelineEditResult,
+                    side_effects=("files", "timeline"),
+                    transactionality="atomic_project_state",
+                    retry_safety="gateway_replay_only",
+                    preview_supported=True,
+                    rollback_support="checkpoint_restore",
+                    required_capabilities=(),
+                )
+                for skill in (
+                    VideoSetClipTransformSkill(),
+                    VideoSetClipColorSkill(),
+                    VideoCopyClipVisualSkill(),
+                )
             ),
             *tuple(
                 _entry(

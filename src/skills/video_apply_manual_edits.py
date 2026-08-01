@@ -14,6 +14,8 @@ from contracts import (
     ManualClipSplit,
     ManualClipUpdate,
     ManualClipAudio,
+    ManualClipVisual,
+    ManualCopyClipVisual,
     ManualEditConfirmationRecord,
     ManualEditProposal,
     ManualTrackManage,
@@ -23,7 +25,7 @@ from contracts import (
     ManualSubtitleTrack,
 )
 from core import timeline_manager
-from core.timeline import TimelineConfig
+from core.timeline import ClipColorAdjustment, ClipTransform, TimelineConfig
 from timeline_query import TimelineSnapshotService
 from timeline_edit import TimelineEditEngine, TimelineEditTransaction
 from traceability.recording import ManualTraceRecorder
@@ -258,6 +260,17 @@ class VideoApplyManualEditsSkill(BaseSkill):
                     link_group_id=edit.link_group_id,
                 )
                 continue
+            if isinstance(edit, ManualCopyClipVisual):
+                engine.copy_clip_visual(
+                    edit.source_track_id,
+                    edit.source_clip_id,
+                    (
+                        (member.track_id, member.clip_id)
+                        for member in edit.targets
+                    ),
+                    components=edit.components,
+                )
+                continue
             track_reference = edit.track_id or edit.track_key
             if isinstance(edit, ManualClipAudio):
                 if edit.normalization_evidence is not None:
@@ -286,6 +299,42 @@ class VideoApplyManualEditsSkill(BaseSkill):
                     playback_rate=edit.playback_rate,
                     normalization=edit.normalization_evidence,
                 )
+            elif isinstance(edit, ManualClipVisual):
+                _, _, visual_target = engine._clip(
+                    track_reference, edit.clip_id
+                )
+                changed = False
+                if edit.components in {"transform", "both"}:
+                    next_transform = (
+                        ClipTransform()
+                        if edit.action == "reset"
+                        else edit.transform
+                    )
+                    if visual_target.transform != next_transform:
+                        engine.set_clip_transform(
+                            track_reference,
+                            edit.clip_id,
+                            transform=next_transform,
+                        )
+                        changed = True
+                        _, _, visual_target = engine._clip(
+                            track_reference, edit.clip_id
+                        )
+                if edit.components in {"color", "both"}:
+                    next_color = (
+                        ClipColorAdjustment()
+                        if edit.action == "reset"
+                        else edit.color
+                    )
+                    if visual_target.color != next_color:
+                        engine.set_clip_color(
+                            track_reference,
+                            edit.clip_id,
+                            color=next_color,
+                        )
+                        changed = True
+                if not changed:
+                    raise ValueError("Manual visual edit changes no fields")
             elif isinstance(edit, ManualVolumeEnvelope):
                 engine.set_volume_envelope(
                     track_reference,

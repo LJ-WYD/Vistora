@@ -15,7 +15,9 @@ from contracts import (
     SourceEvidenceReference,
 )
 from timeline_query import (
+    ClipColorSnapshot,
     ClipProvenanceSummary,
+    ClipTransformSnapshot,
     EvidenceSummary,
     TimelineSnapshotReference,
 )
@@ -310,6 +312,8 @@ class PreviewClipState(ReviewModel):
     audio_fade_out_seconds: FiniteFloat = 0
     audio_envelope: tuple[tuple[str, FiniteFloat, FiniteFloat], ...] = ()
     loudness_analysis_id: StableId | None = None
+    transform: ClipTransformSnapshot = Field(default_factory=ClipTransformSnapshot)
+    color: ClipColorSnapshot = Field(default_factory=ClipColorSnapshot)
     provisional: bool = False
 
 
@@ -372,6 +376,8 @@ class PlanChange(ReviewModel):
         "clip_reorder",
         "clip_speed",
         "clip_properties",
+        "clip_transform",
+        "clip_color",
         "clip_linkage",
         "clip_audio",
         "audio_envelope",

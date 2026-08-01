@@ -167,8 +167,9 @@ def test_multitrack_reference_is_confirmed_rendered_and_repeatable() -> None:
     second = run_multitrack_reference_workflow()
     assert first == second
     assert first["execution_status"] == "succeeded"
-    assert first["step_count"] == 16
-    assert first["trace_count"] == 16
+    assert first["step_count"] == 20
+    assert first["trace_count"] == 20
+    assert first["visual_trace_count"] >= 4
     assert first["current_track_count"] == 4
     assert first["current_video_clip_count"] >= 2
     assert first["current_audio_clip_count"] >= 2

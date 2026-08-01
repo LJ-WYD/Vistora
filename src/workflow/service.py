@@ -104,6 +104,8 @@ def _clip_state(
         reverse=clip.reverse,
         rotate_degrees=clip.rotate_degrees,
         link_group_id=clip.link_group_id,
+        transform=clip.transform,
+        color=clip.color,
     )
 
 

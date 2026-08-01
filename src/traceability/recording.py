@@ -13,6 +13,8 @@ from contracts import (
     ManualClipLink,
     ManualClipSplit,
     ManualClipAudio,
+    ManualClipVisual,
+    ManualCopyClipVisual,
     ManualEditConfirmationRecord,
     ManualEditProposal,
     ManualTrackManage,
@@ -355,6 +357,18 @@ class ManualTraceRecorder:
                             "Manual link member was not modified"
                         )
                 continue
+            if isinstance(edit, ManualCopyClipVisual):
+                for member in edit.targets:
+                    key = (member.track_key, member.clip_id)
+                    if (
+                        key not in before_clips
+                        or key not in after_clips
+                        or before_clips[key] == after_clips[key]
+                    ):
+                        raise ValueError(
+                            "Manual visual copy target was not modified"
+                        )
+                continue
             key = (edit.track_key, edit.clip_id)
             if key not in before_clips:
                 raise ValueError(
@@ -388,7 +402,10 @@ class ManualTraceRecorder:
                 raise ValueError(
                     "Manual update trace target is absent after application"
                 )
-            if isinstance(edit, (ManualClipAudio, ManualVolumeEnvelope)):
+            if isinstance(
+                edit,
+                (ManualClipAudio, ManualVolumeEnvelope, ManualClipVisual),
+            ):
                 if before_clips[key] == after_clips[key]:
                     raise ValueError(
                         "Manual audio trace has no exact state change"
@@ -450,6 +467,18 @@ class ManualTraceRecorder:
                 continue
             if isinstance(edit, ManualClipLink):
                 for member in edit.members:
+                    effect_rows.append(
+                        (
+                            edit,
+                            "modifies",
+                            member.track_key,
+                            member.clip_id,
+                            "direct",
+                        )
+                    )
+                continue
+            if isinstance(edit, ManualCopyClipVisual):
+                for member in edit.targets:
                     effect_rows.append(
                         (
                             edit,
@@ -613,7 +642,14 @@ class ManualTraceRecorder:
                         ),
                         None,
                     )
-                    if not isinstance(edit, (ManualSubtitleTrack, ManualSubtitleCue))
+                    if not isinstance(
+                        edit,
+                        (
+                            ManualSubtitleTrack,
+                            ManualSubtitleCue,
+                            ManualCopyClipVisual,
+                        ),
+                    )
                     else None
                 ),
                 before_snapshot=before_ref,

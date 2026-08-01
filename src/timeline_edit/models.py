@@ -310,6 +310,9 @@ class TimelineEditOutcome(TimelineEditModel):
         "set_clip_audio",
         "set_track_mix",
         "set_volume_envelope",
+        "set_clip_transform",
+        "set_clip_color",
+        "copy_clip_visual",
     ]
     track_id: StableTrackId
     track_key: str

@@ -7,6 +7,7 @@ import json
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from core.timeline import ClipColorAdjustment, ClipTransform
 
 
 MEDIA_ANALYSIS_VERSION = "1.0.0"
@@ -61,6 +62,12 @@ class MediaAnalysisRequest(AnalysisModel):
     timeline_end_seconds: FiniteFloat = Field(gt=0)
     reverse: bool = False
     rotate_degrees: int = 0
+    preview_mode: Literal["original", "applied"] = "original"
+    visual_digest: Sha256Digest | None = None
+    canvas_width: int | None = Field(default=None, gt=0)
+    canvas_height: int | None = Field(default=None, gt=0)
+    transform: ClipTransform = Field(default_factory=ClipTransform)
+    color: ClipColorAdjustment = Field(default_factory=ClipColorAdjustment)
     settings: MediaAnalysisSettings = Field(
         default_factory=MediaAnalysisSettings
     )
@@ -71,6 +78,24 @@ class MediaAnalysisRequest(AnalysisModel):
             raise ValueError("Analysis source range must be forward")
         if self.timeline_end_seconds <= self.timeline_start_seconds:
             raise ValueError("Analysis timeline range must be forward")
+        if self.preview_mode == "applied" and (
+            self.media_kind != "video"
+            or self.visual_digest is None
+            or self.canvas_width is None
+            or self.canvas_height is None
+        ):
+            raise ValueError(
+                "Applied video preview requires visual digest and canvas"
+            )
+        if self.preview_mode == "original" and any(
+            value is not None
+            for value in (
+                self.visual_digest,
+                self.canvas_width,
+                self.canvas_height,
+            )
+        ):
+            raise ValueError("Original preview cannot claim applied visual data")
         return self
 
     def digest(self) -> str:

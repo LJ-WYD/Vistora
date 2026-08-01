@@ -7,8 +7,8 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-TIMELINE_SNAPSHOT_VERSION = "3.0.0"
-SnapshotVersion = Literal["2.0.0", "3.0.0"]
+TIMELINE_SNAPSHOT_VERSION = "4.0.0"
+SnapshotVersion = Literal["2.0.0", "3.0.0", "4.0.0"]
 SnapshotId = Annotated[
     str,
     Field(
@@ -108,6 +108,37 @@ class ClipTraceQueryResult(ReadModel):
     provenance: ClipProvenanceSummary
 
 
+class ClipTransformSnapshot(ReadModel):
+    position_x: FiniteFloat = 0.5
+    position_y: FiniteFloat = 0.5
+    scale_x: FiniteFloat = 1
+    scale_y: FiniteFloat = 1
+    rotation_degrees: FiniteFloat = 0
+    opacity: FiniteFloat = 1
+    anchor_x: FiniteFloat = 0.5
+    anchor_y: FiniteFloat = 0.5
+    crop_left: FiniteFloat = 0
+    crop_right: FiniteFloat = 0
+    crop_top: FiniteFloat = 0
+    crop_bottom: FiniteFloat = 0
+    fit: Literal["contain", "fill", "stretch"] = "contain"
+    flip_horizontal: bool = False
+    flip_vertical: bool = False
+
+
+class ClipColorSnapshot(ReadModel):
+    exposure: FiniteFloat = 0
+    contrast: FiniteFloat = 0
+    saturation: FiniteFloat = 0
+    temperature: FiniteFloat = 0
+    tint: FiniteFloat = 0
+    highlights: FiniteFloat = 0
+    shadows: FiniteFloat = 0
+    gamma: FiniteFloat = 1
+    sharpen: FiniteFloat = 0
+    blur: FiniteFloat = 0
+
+
 class ClipSnapshot(ReadModel):
     """Detached view of one clip and its declared timing."""
 
@@ -133,6 +164,9 @@ class ClipSnapshot(ReadModel):
     audio_fade_out_seconds: FiniteFloat = 0
     audio_envelope: tuple[tuple[str, FiniteFloat, FiniteFloat], ...] = ()
     loudness_analysis_id: SnapshotId | None = None
+    transform: ClipTransformSnapshot
+    color: ClipColorSnapshot
+    visual_digest: Sha256Digest
     provenance: ClipProvenanceSummary | None = None
 
 

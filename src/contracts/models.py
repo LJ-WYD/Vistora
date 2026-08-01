@@ -16,6 +16,8 @@ from pydantic import (
 
 from core.timeline import (
     AppliedLoudnessNormalization,
+    ClipColorAdjustment,
+    ClipTransform,
     SubtitleCue,
     SubtitleStyle,
     TimelineConfig,
@@ -514,6 +516,58 @@ class ManualClipAudio(ContractModel):
         return self
 
 
+class ManualClipVisual(ContractModel):
+    """Detached visual edit for one exact video clip only."""
+
+    operation_id: StableId
+    kind: Literal["clip_visual"] = "clip_visual"
+    track_key: str = Field(min_length=1)
+    track_id: StableId
+    clip_id: StableId
+    action: Literal["set", "reset"] = "set"
+    transform: ClipTransform | None = None
+    color: ClipColorAdjustment | None = None
+    components: Literal["transform", "color", "both"] = "both"
+
+    @model_validator(mode="after")
+    def exact_visual_payload(self) -> "ManualClipVisual":
+        if self.action == "reset":
+            if self.transform is not None or self.color is not None:
+                raise ValueError("Visual reset accepts no property payload")
+            return self
+        if self.components in {"transform", "both"} and self.transform is None:
+            raise ValueError("Visual set requires transform values")
+        if self.components in {"color", "both"} and self.color is None:
+            raise ValueError("Visual set requires color values")
+        if self.components == "transform" and self.color is not None:
+            raise ValueError("Transform-only edit cannot include color")
+        if self.components == "color" and self.transform is not None:
+            raise ValueError("Color-only edit cannot include transform")
+        return self
+
+
+class ManualCopyClipVisual(ContractModel):
+    """Explicit user-authored visual copy with no link-group expansion."""
+
+    operation_id: StableId
+    kind: Literal["copy_clip_visual"] = "copy_clip_visual"
+    source_track_id: StableId
+    source_clip_id: StableId
+    targets: tuple[ManualClipReference, ...] = Field(min_length=1, max_length=32)
+    components: Literal["transform", "color", "both"] = "both"
+
+    @model_validator(mode="after")
+    def stable_targets(self) -> "ManualCopyClipVisual":
+        identities = tuple((item.track_id, item.clip_id) for item in self.targets)
+        if len(identities) != len(set(identities)):
+            raise ValueError("Visual copy targets must be unique")
+        if identities != tuple(sorted(identities)):
+            raise ValueError("Visual copy targets must use stable ordering")
+        if (self.source_track_id, self.source_clip_id) in identities:
+            raise ValueError("Visual copy source cannot be a target")
+        return self
+
+
 class ManualTrackMix(ContractModel):
     operation_id: StableId
     kind: Literal["track_mix"] = "track_mix"
@@ -640,6 +694,8 @@ ManualEditOperation = Annotated[
     | ManualClipLink
     | ManualTrackManage
     | ManualClipAudio
+    | ManualClipVisual
+    | ManualCopyClipVisual
     | ManualTrackMix
     | ManualVolumeEnvelope
     | ManualSubtitleTrack

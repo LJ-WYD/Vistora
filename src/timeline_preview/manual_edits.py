@@ -21,6 +21,8 @@ from contracts import (
     ManualClipSplit,
     ManualClipUpdate,
     ManualClipAudio,
+    ManualClipVisual,
+    ManualCopyClipVisual,
     ManualEditChange,
     ManualEditConfirmationRecord,
     ManualEditProposal,
@@ -36,7 +38,9 @@ from contracts import (
 from core.timeline import (
     AudioEnvelopePoint,
     ClipAudioSettings,
+    ClipColorAdjustment,
     ClipConfig,
+    ClipTransform,
     TimelineConfig,
     TrackConfig,
     TrackMixSettings,
@@ -88,6 +92,9 @@ def _clip_state(clip: Any, order_index: int) -> dict[str, Any]:
         "audio_fade_out_seconds": clip.audio_fade_out_seconds,
         "audio_envelope": clip.audio_envelope,
         "loudness_analysis_id": clip.loudness_analysis_id,
+        "transform": clip.transform.model_dump(mode="json"),
+        "color": clip.color.model_dump(mode="json"),
+        "visual_digest": clip.visual_digest,
     }
 
 
@@ -363,6 +370,12 @@ def _timeline_from_snapshot(snapshot: TimelineSnapshot) -> TimelineConfig:
                                 for point in clip.audio_envelope
                             ),
                         ),
+                        transform=ClipTransform.model_validate(
+                            clip.transform.model_dump(mode="python")
+                        ),
+                        color=ClipColorAdjustment.model_validate(
+                            clip.color.model_dump(mode="python")
+                        ),
                     )
                     for clip in track.clips
                 ],
@@ -593,7 +606,18 @@ def review_manual_edit_proposal(
                     )
                 )
                 continue
-            if isinstance(edit, ManualClipLink):
+            if isinstance(edit, ManualCopyClipVisual):
+                updated, outcome = engine.copy_clip_visual(
+                    edit.source_track_id,
+                    edit.source_clip_id,
+                    (
+                        (member.track_id, member.clip_id)
+                        for member in edit.targets
+                    ),
+                    components=edit.components,
+                )
+                outcomes.append(outcome)
+            elif isinstance(edit, ManualClipLink):
                 updated, outcome = engine.set_clip_link(
                     action=edit.action,
                     members=(
@@ -618,6 +642,43 @@ def review_manual_edit_proposal(
                     normalization=edit.normalization_evidence,
                 )
                 outcomes.append(outcome)
+            elif isinstance(edit, ManualClipVisual):
+                _, _, visual_target = engine._clip(
+                    track_reference, edit.clip_id
+                )
+                if edit.components in {"transform", "both"}:
+                    next_transform = (
+                        ClipTransform()
+                        if edit.action == "reset"
+                        else edit.transform
+                    )
+                    if visual_target.transform != next_transform:
+                        updated, outcome = engine.set_clip_transform(
+                            track_reference,
+                            edit.clip_id,
+                            transform=next_transform,
+                        )
+                        outcomes.append(outcome)
+                        _, _, visual_target = engine._clip(
+                            track_reference, edit.clip_id
+                        )
+                if edit.components in {"color", "both"}:
+                    next_color = (
+                        ClipColorAdjustment()
+                        if edit.action == "reset"
+                        else edit.color
+                    )
+                    if visual_target.color != next_color:
+                        updated, outcome = engine.set_clip_color(
+                            track_reference,
+                            edit.clip_id,
+                            color=next_color,
+                        )
+                        outcomes.append(outcome)
+                if not outcomes:
+                    raise ManualEditValidationError(
+                        "Visual edit changes no selected component"
+                    )
             elif isinstance(edit, ManualVolumeEnvelope):
                 updated, outcome = engine.set_volume_envelope(
                     track_reference,

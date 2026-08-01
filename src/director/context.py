@@ -111,6 +111,21 @@ class DirectorContextService:
                     ),
                     "mix_policy": "deterministic_linear_envelope_limiter_v1",
                 },
+                "visual_editing": {
+                    "clips": [
+                        {
+                            "track_id": track.track_id,
+                            "clip_id": clip.clip_id,
+                            "visual_digest": clip.visual_digest,
+                            "transform": clip.transform.model_dump(mode="json"),
+                            "color": clip.color.model_dump(mode="json"),
+                        }
+                        for track in snapshot.tracks
+                        if track.kind == "video"
+                        for clip in track.clips
+                    ],
+                    "preview_policy": "browser_approximate_export_exact_sdr_v1",
+                },
                 "empty": snapshot.empty,
             },
             materials=tuple(sorted(materials, key=lambda item: item.material_id)),

@@ -1373,6 +1373,16 @@ button.track-label-row:focus-visible {
   }
 }
 
+.visual-edit-panel {
+  border-color: rgb(118 101 244 / 45%);
+  background: linear-gradient(180deg, rgb(118 101 244 / 8%), transparent);
+}
+
+.monitor video {
+  will-change: transform, filter, opacity, clip-path;
+  transition: transform 120ms ease, filter 120ms ease, opacity 120ms ease;
+}
+
 @media (max-width: 620px) {
   :root {
     --label-width: 132px;

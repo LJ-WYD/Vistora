@@ -245,6 +245,50 @@
                   <button id="apply-loudness" class="button confirm" type="button" disabled>Stage analyzed gain</button>
                 </div>
               </fieldset>
+              <fieldset id="visual-edit-panel" class="audio-edit-panel visual-edit-panel">
+                <legend>Picture &amp; color</legend>
+                <p class="form-message">
+                  Browser preview is approximate. Confirmed FFmpeg export is authoritative.
+                  Visual edits affect only the selected video clip.
+                </p>
+                <div class="field-grid">
+                  <label><span>Position X</span><input id="visual-position-x" type="number" min="-2" max="3" step="0.01"></label>
+                  <label><span>Position Y</span><input id="visual-position-y" type="number" min="-2" max="3" step="0.01"></label>
+                  <label><span>Scale X</span><input id="visual-scale-x" type="number" min="0.05" max="8" step="0.01"></label>
+                  <label><span>Scale Y</span><input id="visual-scale-y" type="number" min="0.05" max="8" step="0.01"></label>
+                  <label><span>Rotation (degrees)</span><input id="visual-rotation" type="number" min="-360" max="360" step="0.1"></label>
+                  <label><span>Opacity</span><input id="visual-opacity" type="number" min="0" max="1" step="0.01"></label>
+                  <label><span>Anchor X</span><input id="visual-anchor-x" type="number" min="0" max="1" step="0.01"></label>
+                  <label><span>Anchor Y</span><input id="visual-anchor-y" type="number" min="0" max="1" step="0.01"></label>
+                  <label><span>Crop left</span><input id="visual-crop-left" type="number" min="0" max="0.95" step="0.01"></label>
+                  <label><span>Crop right</span><input id="visual-crop-right" type="number" min="0" max="0.95" step="0.01"></label>
+                  <label><span>Crop top</span><input id="visual-crop-top" type="number" min="0" max="0.95" step="0.01"></label>
+                  <label><span>Crop bottom</span><input id="visual-crop-bottom" type="number" min="0" max="0.95" step="0.01"></label>
+                  <label><span>Fit</span><select id="visual-fit"><option value="contain">Contain</option><option value="fill">Fill</option><option value="stretch">Stretch</option></select></label>
+                  <label class="editor-check"><input id="visual-flip-h" type="checkbox"> Flip horizontal</label>
+                  <label class="editor-check"><input id="visual-flip-v" type="checkbox"> Flip vertical</label>
+                  <label><span>Exposure</span><input id="color-exposure" type="number" min="-2" max="2" step="0.05"></label>
+                  <label><span>Contrast</span><input id="color-contrast" type="number" min="-0.75" max="1" step="0.05"></label>
+                  <label><span>Saturation</span><input id="color-saturation" type="number" min="-1" max="2" step="0.05"></label>
+                  <label><span>Temperature</span><input id="color-temperature" type="number" min="-1" max="1" step="0.05"></label>
+                  <label><span>Tint</span><input id="color-tint" type="number" min="-1" max="1" step="0.05"></label>
+                  <label><span>Highlights</span><input id="color-highlights" type="number" min="-1" max="1" step="0.05"></label>
+                  <label><span>Shadows</span><input id="color-shadows" type="number" min="-1" max="1" step="0.05"></label>
+                  <label><span>Gamma</span><input id="color-gamma" type="number" min="0.5" max="2" step="0.05"></label>
+                  <label><span>Sharpen</span><input id="color-sharpen" type="number" min="0" max="1" step="0.05"></label>
+                  <label><span>Blur</span><input id="color-blur" type="number" min="0" max="8" step="0.1"></label>
+                  <label><span>Copy components</span><select id="visual-copy-components"><option value="both">Transform + color</option><option value="transform">Transform only</option><option value="color">Color only</option></select></label>
+                  <label><span>Explicit copy targets</span><select id="visual-copy-targets" multiple></select></label>
+                  <label><span>Thumbnail mode</span><select id="visual-preview-mode"><option value="applied">Applied visual</option><option value="original">Original source</option></select></label>
+                </div>
+                <p id="visual-form-message" class="form-message" aria-live="polite">No visual draft staged.</p>
+                <div class="editor-actions">
+                  <button id="stage-transform" class="button" type="button">Stage transform</button>
+                  <button id="stage-color" class="button" type="button">Stage color</button>
+                  <button id="reset-visual" class="button" type="button">Reset visual</button>
+                  <button id="copy-visual" class="button" type="button">Copy to selected clips</button>
+                </div>
+              </fieldset>
             </form>
           </section>
           <section id="subtitle-editor" class="manual-editor subtitle-editor" hidden>

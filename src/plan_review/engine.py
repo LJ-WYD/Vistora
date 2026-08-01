@@ -19,7 +19,9 @@ from contracts import PlanReference
 from timeline_edit import (
     AudioEnvelopePoint,
     ClipAudioSettings,
+    ClipColorAdjustment,
     ClipConfig,
+    ClipTransform,
     TimelineConfig,
     TimelineEditEngine,
     TimelineEditError,
@@ -120,6 +122,8 @@ def _clip_state(
         audio_fade_out_seconds=clip.audio_fade_out_seconds,
         audio_envelope=clip.audio_envelope,
         loudness_analysis_id=clip.loudness_analysis_id,
+        transform=clip.transform.model_dump(mode="python"),
+        color=clip.color.model_dump(mode="python"),
     )
 
 
@@ -200,6 +204,12 @@ def _timeline_from_snapshot(snapshot: TimelineSnapshot) -> TimelineConfig:
                             )
                             for point in clip.audio_envelope
                         ),
+                    ),
+                    transform=ClipTransform.model_validate(
+                        clip.transform.model_dump(mode="python")
+                    ),
+                    color=ClipColorAdjustment.model_validate(
+                        clip.color.model_dump(mode="python")
                     ),
                 )
                 for clip in track.clips
@@ -310,6 +320,12 @@ def _preview_state(
             clip.audio.normalization.analysis_id
             if clip.audio.normalization is not None
             else None
+        ),
+        transform=clip.transform.model_dump(
+            mode="python", exclude={"schema_name", "schema_version"}
+        ),
+        color=clip.color.model_dump(
+            mode="python", exclude={"schema_name", "schema_version"}
         ),
     )
 
@@ -545,6 +561,9 @@ class PlanDiffEngine:
                 "AudioSetClipPropertiesSkill",
                 "AudioSetTrackMixSkill",
                 "AudioSetVolumeEnvelopeSkill",
+                "VideoSetClipTransformSkill",
+                "VideoSetClipColorSkill",
+                "VideoCopyClipVisualSkill",
             }:
                 # Synchronize only the legacy primary-video view; every other
                 # stable multi-track declaration remains detached and intact.
@@ -578,6 +597,12 @@ class PlanDiffEngine:
                                     for point in clip.audio_envelope
                                 ),
                             ),
+                            transform=ClipTransform.model_validate(
+                                clip.transform.model_dump(mode="python")
+                            ),
+                            color=ClipColorAdjustment.model_validate(
+                                clip.color.model_dump(mode="python")
+                            ),
                         )
                         for clip in clips
                     ]
@@ -596,17 +621,13 @@ class PlanDiffEngine:
                     height=core_timeline.height,
                     fps=core_timeline.fps,
                 )
-                primary_video_keys = {
-                    key
-                    for key, track in core_timeline.tracks.items()
-                    if track.kind == "video" and track.role == "primary"
-                }
                 clips = [
                     state
                     for (track_key, _), state in sorted(
                         _preview_map(core_timeline).items()
                     )
-                    if track_key in primary_video_keys
+                    if video_track is not None
+                    and track_key == video_track.track_key
                 ]
             elif step.tool_name == "AudioAnalyzeLoudnessSkill":
                 target = next(
@@ -915,6 +936,8 @@ class PlanDiffEngine:
                 "clip_reorder",
                 "clip_speed",
                 "clip_properties",
+                "clip_transform",
+                "clip_color",
                 "clip_audio",
                 "audio_envelope",
                 "track_mix",
@@ -950,6 +973,12 @@ class PlanDiffEngine:
                     speed_factor=clip.speed_factor,
                     reverse=clip.reverse,
                     rotate=clip.rotate_degrees,
+                    transform=ClipTransform.model_validate(
+                        clip.transform.model_dump(mode="python")
+                    ),
+                    color=ClipColorAdjustment.model_validate(
+                        clip.color.model_dump(mode="python")
+                    ),
                 )
                 for clip in clips
             ],
@@ -1184,6 +1213,28 @@ class PlanDiffEngine:
                     playback_rate=params.playback_rate,
                     normalization=params.normalization_evidence,
                 )
+            elif name == "VideoSetClipTransformSkill":
+                updated, outcome = engine.set_clip_transform(
+                    params.track_reference,
+                    params.clip_id,
+                    transform=params.transform or ClipTransform(),
+                )
+            elif name == "VideoSetClipColorSkill":
+                updated, outcome = engine.set_clip_color(
+                    params.track_reference,
+                    params.clip_id,
+                    color=params.color or ClipColorAdjustment(),
+                )
+            elif name == "VideoCopyClipVisualSkill":
+                updated, outcome = engine.copy_clip_visual(
+                    params.source_track_id,
+                    params.source_clip_id,
+                    (
+                        (target.track_id, target.clip_id)
+                        for target in params.targets
+                    ),
+                    components=params.components,
+                )
             elif name == "AudioSetTrackMixSkill":
                 updated, outcome = engine.set_track_mix(
                     params.track_id,
@@ -1326,6 +1377,14 @@ class PlanDiffEngine:
             elif old.speed_factor != new.speed_factor:
                 category = "clip_speed"
                 reason = "The edit changes speed and effective duration."
+            elif old.transform != new.transform:
+                category = "clip_transform"
+                reason = (
+                    "The edit changes bounded canvas-relative transform values."
+                )
+            elif old.color != new.color:
+                category = "clip_color"
+                reason = "The edit changes bounded deterministic SDR color values."
             elif old.audio_envelope != new.audio_envelope:
                 category = "audio_envelope"
                 reason = "The edit changes the linear clip gain envelope."

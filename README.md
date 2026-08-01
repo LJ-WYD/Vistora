@@ -297,7 +297,7 @@ The ledger keeps one stable logical identity for the workspace while every revie
 ## Atomic skill registry and execution gateway
 
 `src/atomic_runtime/` is the single production composition root for the
-twenty-three existing atomic skills. A fresh immutable `AtomicSkillRegistry` carries an
+twenty-six existing atomic skills. A fresh immutable `AtomicSkillRegistry` carries an
 explicit ID, semantic version, revision, deterministic input-schema digest, and
 full descriptor digest. Every frozen `SkillDescriptor` declares the stable
 skill version, exact input and output schemas, timeline/media/file/external
@@ -365,7 +365,7 @@ legacy compatibility surfaces. Property-only edits can use
 `VideoSetClipPropertiesSkill` without generating a reverse proxy. Existing
 reverse behavior is not expanded or promised transactionally reversible.
 Linked A/V and arbitrary video/audio track foundations are implemented.
-Automatic link inference, linked-source ingest as one operation, color,
+Automatic link inference, linked-source ingest as one operation,
 transcription/ASR, transitions, visual keyframes,
 masks, denoise/de-reverb/source separation, plugin hosting, AI audio
 providers, complex mastering, and effects remain unimplemented.
@@ -395,7 +395,7 @@ track/cue/style contracts use stable IDs, millisecond timing, deterministic
 order, explicit overlap policy, language/speaker metadata, enabled/locked
 state, and a controlled logical-font style. Subtitle cues are never modeled
 as video clips. Legacy projects with no subtitle field load and render as
-before; the read-only snapshot is version `3.0.0` and adds detached subtitle
+before; the read-only snapshot is version `4.0.0` and adds detached subtitle
 track/cue counts and state.
 
 `SubtitleManageTrackSkill`, `SubtitleEditCueSkill`,
@@ -418,6 +418,37 @@ font path, filter, or script is accepted.
 
 ASR/automatic timing, translation, AI copy editing, karaoke highlighting,
 animated title templates, and general motion graphics remain out of scope.
+
+## Picture transform and basic SDR color
+
+Every video clip now has optional frozen version `1.0.0` `ClipTransform` and
+`ClipColorAdjustment` state. Neutral defaults preserve legacy timeline-v2 JSON
+and its render result. Transform coordinates are normalized to the output
+canvas: position is the anchor's canvas location, scale is relative to the
+selected contain/fill/stretch fit, rotation is clockwise degrees, crop values
+are source-edge fractions, and opacity is composited bottom-to-top by track
+order. Crop and flip precede fit/scale; rotation and opacity precede overlay.
+
+The bounded SDR color pipeline applies exposure/gamma/contrast/saturation,
+then temperature/tint/highlights/shadows balance, then either a small sharpen
+or blur. Inputs reject NaN, infinity, unsafe ranges, simultaneous sharpen and
+blur, raw filters, scripts, and paths. This is deterministic local SDR
+processing, not a color-managed HDR, LUT, or secondary-grade pipeline.
+
+`VideoSetClipTransformSkill`, `VideoSetClipColorSkill`, and
+`VideoCopyClipVisualSkill` are production-registry tools. They target exact
+video clip IDs, reject locked/non-video targets, copy only to explicitly named
+clips, never spread through linked audio, and use the shared atomic timeline
+transaction. Detached review, confirmation/workflow, Editing Agent, trace,
+rollback, snapshot v4, Director context, and the manual draft UI carry the
+same visual state and digest. Browser video/CSS preview is labeled an
+approximation; final FFmpeg export is authoritative. Thumbnail analysis can
+request original or applied mode, and its cache key binds the complete visual
+digest and canvas settings.
+
+Transitions, general visual keyframes/curves, masks/tracking, LUT import,
+secondary color, HDR, blend modes, animated titles, and AI effects remain
+unimplemented.
 
 ## Constrained Editing Agent
 

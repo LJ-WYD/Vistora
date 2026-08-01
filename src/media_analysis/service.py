@@ -298,15 +298,15 @@ class MediaAnalysisService:
             )
             artifact_id = f"thumbnail_{artifact_digest[:24]}"
             filters = []
-            if request.rotate_degrees == 90:
-                filters.append("transpose=1")
-            elif request.rotate_degrees == 180:
-                filters.extend(["hflip", "vflip"])
-            elif request.rotate_degrees == 270:
-                filters.append("transpose=2")
+            if request.preview_mode == "original":
+                if request.rotate_degrees == 90:
+                    filters.append("transpose=1")
+                elif request.rotate_degrees == 180:
+                    filters.extend(("hflip", "vflip"))
+                elif request.rotate_degrees == 270:
+                    filters.append("transpose=2")
             filters.append(
-                f"scale={request.settings.thumbnail_width}:-2:"
-                "flags=lanczos"
+                f"scale={request.settings.thumbnail_width}:-2:flags=lanczos"
             )
             command = [
                 "ffmpeg",
@@ -319,8 +319,35 @@ class MediaAnalysisService:
                 str(path),
                 "-frames:v",
                 "1",
-                "-vf",
-                ",".join(filters),
+            ]
+            if request.preview_mode == "applied":
+                from core.timeline import ClipConfig
+                from visuals.render import clip_visual_filter_chain
+
+                dummy = ClipConfig(
+                    id=request.clip_id,
+                    source="opaque",
+                    trim_out=1,
+                    rotate=request.rotate_degrees,
+                    transform=request.transform,
+                    color=request.color,
+                )
+                visual, overlay = clip_visual_filter_chain(
+                    dummy,
+                    request.canvas_width,
+                    request.canvas_height,
+                )
+                graph = (
+                    f"color=c=black:s={request.canvas_width}x"
+                    f"{request.canvas_height}:d=1[base];"
+                    f"[0:v]{','.join(visual)}[visual];"
+                    f"[base][visual]overlay={overlay},"
+                    f"{filters[-1]}[thumbnail]"
+                )
+                command.extend(("-filter_complex", graph, "-map", "[thumbnail]"))
+            else:
+                command.extend(("-vf", ",".join(filters)))
+            command.extend((
                 "-f",
                 "image2pipe",
                 "-vcodec",
@@ -328,7 +355,7 @@ class MediaAnalysisService:
                 "-threads",
                 "1",
                 "pipe:1",
-            ]
+            ))
             content = self._runner(command, self._timeout)
             if not content.startswith(b"\x89PNG\r\n\x1a\n"):
                 raise MediaAnalysisError("Thumbnail extraction was invalid")

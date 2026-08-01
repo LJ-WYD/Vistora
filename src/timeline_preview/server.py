@@ -566,8 +566,14 @@ class PreviewApplication:
                 source["value"] = f"media:{source['source_id']}"
         return payload
 
-    def analysis_payload(self) -> dict[str, Any]:
+    def analysis_payload(
+        self,
+        preview_mode: str = "applied",
+    ) -> dict[str, Any]:
         """Analyze visible video/audio clip ranges without mutating sources."""
+
+        if preview_mode not in {"original", "applied"}:
+            raise ValueError("Unknown visual preview mode")
 
         snapshot = self.snapshot()
         references = self._source_references(snapshot)
@@ -588,6 +594,26 @@ class PreviewApplication:
                     timeline_end_seconds=clip.timeline_end_seconds,
                     reverse=clip.reverse,
                     rotate_degrees=clip.rotate_degrees,
+                    preview_mode=(
+                        preview_mode if track.kind == "video" else "original"
+                    ),
+                    visual_digest=(
+                        clip.visual_digest
+                        if track.kind == "video" and preview_mode == "applied"
+                        else None
+                    ),
+                    canvas_width=(
+                        snapshot.width
+                        if track.kind == "video" and preview_mode == "applied"
+                        else None
+                    ),
+                    canvas_height=(
+                        snapshot.height
+                        if track.kind == "video" and preview_mode == "applied"
+                        else None
+                    ),
+                    transform=clip.transform.model_dump(mode="python"),
+                    color=clip.color.model_dump(mode="python"),
                 )
                 source = references.get(clip.source.source_id)
                 if source is None:
@@ -804,7 +830,9 @@ def _handler_class(
 
         def _serve_analysis(self, head_only: bool) -> None:
             try:
-                payload = application.analysis_payload()
+                query = parse_qs(urlsplit(self.path).query)
+                mode = query.get("mode", ["applied"])[0]
+                payload = application.analysis_payload(mode)
             except Exception:
                 self._send_error_json(
                     HTTPStatus.SERVICE_UNAVAILABLE,
