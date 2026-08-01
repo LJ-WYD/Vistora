@@ -160,12 +160,13 @@ def test_multitrack_reference_is_confirmed_rendered_and_repeatable() -> None:
     second = run_multitrack_reference_workflow()
     assert first == second
     assert first["execution_status"] == "succeeded"
-    assert first["step_count"] == 5
-    assert first["trace_count"] == 5
+    assert first["step_count"] == 9
+    assert first["trace_count"] == 9
     assert first["current_track_count"] == 4
     assert first["current_video_clip_count"] >= 2
     assert first["current_audio_clip_count"] >= 2
     assert first["rollback_status"] == "succeeded"
+    assert first["loudness_analysis_id"].startswith("loud_")
     streams = first["output"]["streams"]
     assert any(stream["codec_type"] == "video" for stream in streams)
     assert any(stream["codec_type"] == "audio" for stream in streams)

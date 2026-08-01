@@ -17,12 +17,16 @@ from pydantic import BaseModel, ValidationError
 
 from contracts import PlanReference
 from timeline_edit import (
+    AudioEnvelopePoint,
+    ClipAudioSettings,
     ClipConfig,
     TimelineConfig,
     TimelineEditEngine,
     TimelineEditError,
     TrackConfig,
+    TrackMixSettings,
 )
+from audio_analysis import clip_audio_state_digest
 from timeline_query import TimelineSnapshot, TimelineSnapshotReference
 
 from .models import (
@@ -34,6 +38,7 @@ from .models import (
     PreviewClipState,
     PreviewMaterialFact,
     PreviewProjectSettings,
+    PreviewTrackMixState,
     ProposedEntityReference,
     ProposedExecutionReference,
     RegistrySchemaReference,
@@ -95,6 +100,13 @@ def _clip_state(
         reverse=clip.reverse,
         rotate_degrees=clip.rotate_degrees,
         link_group_id=clip.link_group_id,
+        audio_gain_db=clip.audio_gain_db,
+        audio_muted=clip.audio_muted,
+        audio_pan=clip.audio_pan,
+        audio_fade_in_seconds=clip.audio_fade_in_seconds,
+        audio_fade_out_seconds=clip.audio_fade_out_seconds,
+        audio_envelope=clip.audio_envelope,
+        loudness_analysis_id=clip.loudness_analysis_id,
     )
 
 
@@ -143,6 +155,11 @@ def _timeline_from_snapshot(snapshot: TimelineSnapshot) -> TimelineConfig:
             enabled=track.enabled,
             muted=track.muted,
             locked=track.locked,
+            mix=TrackMixSettings(
+                gain_db=track.mix_gain_db,
+                muted=track.mix_muted,
+                pan=track.mix_pan,
+            ),
             clips=[
                 ClipConfig(
                     id=clip.clip_id,
@@ -156,6 +173,21 @@ def _timeline_from_snapshot(snapshot: TimelineSnapshot) -> TimelineConfig:
                     reverse=clip.reverse,
                     rotate=clip.rotate_degrees,
                     link_group_id=clip.link_group_id,
+                    audio=ClipAudioSettings(
+                        gain_db=clip.audio_gain_db,
+                        muted=clip.audio_muted,
+                        pan=clip.audio_pan,
+                        fade_in_seconds=clip.audio_fade_in_seconds,
+                        fade_out_seconds=clip.audio_fade_out_seconds,
+                        envelope=tuple(
+                            AudioEnvelopePoint(
+                                point_id=point[0],
+                                offset_seconds=point[1],
+                                gain_db=point[2],
+                            )
+                            for point in clip.audio_envelope
+                        ),
+                    ),
                 )
                 for clip in track.clips
             ],
@@ -187,6 +219,20 @@ def _preview_state(
         reverse=clip.reverse,
         rotate_degrees=clip.rotate,
         link_group_id=clip.link_group_id,
+        audio_gain_db=clip.audio.gain_db,
+        audio_muted=clip.audio.muted,
+        audio_pan=clip.audio.pan,
+        audio_fade_in_seconds=clip.audio.fade_in_seconds,
+        audio_fade_out_seconds=clip.audio.fade_out_seconds,
+        audio_envelope=tuple(
+            (point.point_id, point.offset_seconds, point.gain_db)
+            for point in clip.audio.envelope
+        ),
+        loudness_analysis_id=(
+            clip.audio.normalization.analysis_id
+            if clip.audio.normalization is not None
+            else None
+        ),
     )
 
 
@@ -302,6 +348,8 @@ class PlanDiffEngine:
             after: PreviewClipState | None = None,
             before_project: PreviewProjectSettings | None = None,
             after_project: PreviewProjectSettings | None = None,
+            before_track_mix: PreviewTrackMixState | None = None,
+            after_track_mix: PreviewTrackMixState | None = None,
         ) -> PlanChange:
             sequence = len(changes) + 1
             identity = {
@@ -335,6 +383,8 @@ class PlanDiffEngine:
                 after=after,
                 before_project=before_project,
                 after_project=after_project,
+                before_track_mix=before_track_mix,
+                after_track_mix=after_track_mix,
                 reason=reason,
                 evidence=evidence_summaries(
                     tuple(
@@ -405,6 +455,9 @@ class PlanDiffEngine:
                 "VideoSetClipPropertiesSkill",
                 "TimelineManageTrackSkill",
                 "TimelineSetClipLinkSkill",
+                "AudioSetClipPropertiesSkill",
+                "AudioSetTrackMixSkill",
+                "AudioSetVolumeEnvelopeSkill",
             }:
                 # Synchronize only the legacy primary-video view; every other
                 # stable multi-track declaration remains detached and intact.
@@ -423,6 +476,21 @@ class PlanDiffEngine:
                             reverse=clip.reverse,
                             rotate=clip.rotate_degrees,
                             link_group_id=clip.link_group_id,
+                            audio=ClipAudioSettings(
+                                gain_db=clip.audio_gain_db,
+                                muted=clip.audio_muted,
+                                pan=clip.audio_pan,
+                                fade_in_seconds=clip.audio_fade_in_seconds,
+                                fade_out_seconds=clip.audio_fade_out_seconds,
+                                envelope=tuple(
+                                    AudioEnvelopePoint(
+                                        point_id=point[0],
+                                        offset_seconds=point[1],
+                                        gain_db=point[2],
+                                    )
+                                    for point in clip.audio_envelope
+                                ),
+                            ),
                         )
                         for clip in clips
                     ]
@@ -453,6 +521,49 @@ class PlanDiffEngine:
                     )
                     if track_key in primary_video_keys
                 ]
+            elif step.tool_name == "AudioAnalyzeLoudnessSkill":
+                target = next(
+                    (
+                        clip
+                        for track in snapshot.tracks
+                        if track.track_id == params.track_id
+                        for clip in track.clips
+                        if clip.clip_id == params.clip_id
+                    ),
+                    None,
+                )
+                if target is None:
+                    raise PlanDiffValidationError(
+                        "Loudness analysis target is absent from the snapshot"
+                    )
+                state = _clip_state(
+                    target,
+                    next(
+                        track.track_key
+                        for track in snapshot.tracks
+                        if track.track_id == params.track_id
+                    ),
+                    params.track_id,
+                )
+                append_change(
+                    step=step,
+                    category="audio_analysis",
+                    effect_kind="informational",
+                    severity="info",
+                    entity=ProposedEntityReference(
+                        entity_kind="clip",
+                        entity_id=params.clip_id,
+                        track_id=params.track_id,
+                        track_key=state.track_key,
+                    ),
+                    before=state,
+                    after=state,
+                    reason=(
+                        "This read-only step measures exact clip loudness; it "
+                        "does not apply gain or change project state."
+                    ),
+                )
+                message = "Read-only loudness analysis is safely previewable."
             elif step.tool_name == "VideoClearTimelineSkill":
                 removed = list(clips)
                 clips.clear()
@@ -649,6 +760,9 @@ class PlanDiffEngine:
                 "clip_reorder",
                 "clip_speed",
                 "clip_properties",
+                "clip_audio",
+                "audio_envelope",
+                "track_mix",
                 "project_settings",
             }
             for change in changes
@@ -730,6 +844,15 @@ class PlanDiffEngine:
         request: PlanDiffRequest,
     ) -> tuple[str, str, TimelineConfig]:
         before = _preview_map(timeline)
+        before_track_mix = {
+            track.id: PreviewTrackMixState(
+                track_id=track.id,
+                gain_db=track.mix.gain_db,
+                muted=track.mix.muted,
+                pan=track.mix.pan,
+            )
+            for track in timeline.tracks.values()
+        }
         def preview_id(prefix: str) -> str:
             return (
                 f"{prefix}_"
@@ -789,6 +912,49 @@ class PlanDiffEngine:
                     mute=params.mute,
                     rotate=params.rotate,
                     edit_scope=params.edit_scope,
+                )
+            elif name == "AudioSetClipPropertiesSkill":
+                if params.normalization_evidence is not None:
+                    _, evidence_track, evidence_clip = engine.clip_state(
+                        params.track_reference, params.clip_id
+                    )
+                    if (
+                        params.gain_db
+                        != params.normalization_evidence.applied_gain_db
+                        or params.normalization_evidence.analyzed_clip_digest
+                        != clip_audio_state_digest(
+                            evidence_track.id, evidence_clip
+                        )
+                    ):
+                        raise PlanDiffValidationError(
+                            "Loudness application evidence is stale or mismatched"
+                        )
+                updated, outcome = engine.set_clip_audio(
+                    params.track_reference,
+                    params.clip_id,
+                    gain_db=params.gain_db,
+                    muted=params.muted,
+                    pan=params.pan,
+                    fade_in_seconds=params.fade_in_seconds,
+                    fade_out_seconds=params.fade_out_seconds,
+                    playback_rate=params.playback_rate,
+                    normalization=params.normalization_evidence,
+                )
+            elif name == "AudioSetTrackMixSkill":
+                updated, outcome = engine.set_track_mix(
+                    params.track_id,
+                    gain_db=params.gain_db,
+                    muted=params.muted,
+                    pan=params.pan,
+                )
+            elif name == "AudioSetVolumeEnvelopeSkill":
+                updated, outcome = engine.set_volume_envelope(
+                    params.track_reference,
+                    params.clip_id,
+                    action=params.action,
+                    point_id=params.point_id,
+                    offset_seconds=params.offset_seconds,
+                    gain_db=params.gain_db,
                 )
             elif name == "TimelineManageTrackSkill":
                 updated, outcome = engine.manage_track(
@@ -915,6 +1081,22 @@ class PlanDiffEngine:
             elif old.speed_factor != new.speed_factor:
                 category = "clip_speed"
                 reason = "The edit changes speed and effective duration."
+            elif old.audio_envelope != new.audio_envelope:
+                category = "audio_envelope"
+                reason = "The edit changes the linear clip gain envelope."
+            elif any(
+                getattr(old, field) != getattr(new, field)
+                for field in (
+                    "audio_gain_db",
+                    "audio_muted",
+                    "audio_pan",
+                    "audio_fade_in_seconds",
+                    "audio_fade_out_seconds",
+                    "loudness_analysis_id",
+                )
+            ):
+                category = "clip_audio"
+                reason = "The edit changes bounded clip audio properties."
             else:
                 category = "clip_properties"
                 reason = "The edit changes playback properties."
@@ -946,6 +1128,32 @@ class PlanDiffEngine:
                     track_id=outcome.track_id,
                 ),
                 reason="The proposal changes a stable timeline track.",
+            )
+        if outcome.operation == "set_track_mix":
+            changed_track = next(
+                track
+                for track in updated.tracks.values()
+                if track.id == outcome.track_id
+            )
+            append_change(
+                step=step,
+                category="track_mix",
+                effect_kind="direct",
+                severity="info",
+                entity=ProposedEntityReference(
+                    entity_kind="track",
+                    entity_id=outcome.track_id,
+                    track_key=outcome.track_key,
+                    track_id=outcome.track_id,
+                ),
+                before_track_mix=before_track_mix[outcome.track_id],
+                after_track_mix=PreviewTrackMixState(
+                    track_id=changed_track.id,
+                    gain_db=changed_track.mix.gain_db,
+                    muted=changed_track.mix.muted,
+                    pan=changed_track.mix.pan,
+                ),
+                reason="The proposal changes deterministic audio-track mix settings.",
             )
         for warning_index, warning in enumerate(outcome.warnings, start=1):
             append_change(

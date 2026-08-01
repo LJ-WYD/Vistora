@@ -202,6 +202,36 @@
                   Stage track settings
                 </button>
               </div>
+              <fieldset id="audio-edit-panel" class="audio-edit-panel">
+                <legend>Audio mix</legend>
+                <p class="form-message">
+                  Clip controls affect only this audio component. Linked clips
+                  are never changed implicitly.
+                </p>
+                <div class="field-grid">
+                  <label><span>Clip gain (dB)</span><input id="audio-gain" type="number" min="-60" max="24" step="0.1"></label>
+                  <label><span>Pan (-1 to 1)</span><input id="audio-pan" type="number" min="-1" max="1" step="0.01"></label>
+                  <label><span>Fade in</span><input id="audio-fade-in" type="number" min="0" step="0.01"></label>
+                  <label><span>Fade out</span><input id="audio-fade-out" type="number" min="0" step="0.01"></label>
+                  <label class="editor-check"><input id="audio-muted" type="checkbox"> Clip muted</label>
+                  <label><span>Track gain (dB)</span><input id="audio-track-gain" type="number" min="-60" max="24" step="0.1"></label>
+                  <label><span>Track pan (-1 to 1)</span><input id="audio-track-pan" type="number" min="-1" max="1" step="0.01"></label>
+                  <label class="editor-check"><input id="audio-track-muted" type="checkbox"> Mix track muted</label>
+                  <label><span>Envelope point ID</span><input id="audio-point-id" type="text" maxlength="160"></label>
+                  <label><span>Point time (clip-local)</span><input id="audio-point-time" type="number" min="0" step="0.01"></label>
+                  <label><span>Point gain (dB)</span><input id="audio-point-gain" type="number" min="-60" max="24" step="0.1"></label>
+                </div>
+                <p id="audio-analysis-status" class="form-message" aria-live="polite">No loudness analysis has been run.</p>
+                <div class="editor-actions">
+                  <button id="stage-audio" class="button" type="button">Stage clip audio</button>
+                  <button id="stage-track-mix" class="button" type="button">Stage track mix</button>
+                  <button id="stage-envelope" class="button" type="button">Stage envelope point</button>
+                  <button id="delete-envelope" class="button" type="button">Delete point</button>
+                  <button id="clear-envelope" class="button" type="button">Clear envelope</button>
+                  <button id="analyze-loudness" class="button" type="button">Analyze loudness</button>
+                  <button id="apply-loudness" class="button confirm" type="button" disabled>Stage analyzed gain</button>
+                </div>
+              </fieldset>
             </form>
           </section>
           <p id="manual-edit-disabled" class="manual-edit-disabled" hidden>

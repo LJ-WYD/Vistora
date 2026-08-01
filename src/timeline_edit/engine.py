@@ -6,7 +6,15 @@ import math
 import uuid
 from collections.abc import Callable, Iterable
 
-from core.timeline import ClipConfig, TimelineConfig, TrackConfig
+from core.timeline import (
+    AppliedLoudnessNormalization,
+    AudioEnvelopePoint,
+    ClipAudioSettings,
+    ClipConfig,
+    TimelineConfig,
+    TrackConfig,
+    TrackMixSettings,
+)
 
 from .models import TimelineEditOutcome
 
@@ -62,6 +70,12 @@ class TimelineEditEngine:
             track_ids.append(track.id)
             orders.append(track.order)
             for clip in track.clips:
+                try:
+                    ClipConfig.model_validate(clip.model_dump(mode="python"))
+                except ValueError as exc:
+                    raise TimelineEditError(
+                        f"Clip {clip.id} violates its versioned model: {exc}"
+                    ) from exc
                 all_ids.append(clip.id)
                 values = (
                     clip.trim_in,
@@ -104,6 +118,117 @@ class TimelineEditEngine:
                 key=lambda item: (item.timeline_start, item.id)
             )
 
+    @staticmethod
+    def _gain_at(
+        points: tuple[AudioEnvelopePoint, ...], offset: float
+    ) -> float:
+        if not points:
+            return 0.0
+        if offset <= points[0].offset_seconds:
+            return points[0].gain_db
+        for left, right in zip(points, points[1:]):
+            if offset <= right.offset_seconds:
+                ratio = (
+                    (offset - left.offset_seconds)
+                    / (right.offset_seconds - left.offset_seconds)
+                )
+                return left.gain_db + ratio * (right.gain_db - left.gain_db)
+        return points[-1].gain_db
+
+    def _split_audio(
+        self,
+        settings: ClipAudioSettings,
+        split_offset: float,
+        total_duration: float,
+    ) -> tuple[ClipAudioSettings, ClipAudioSettings]:
+        boundary_gain = self._gain_at(settings.envelope, split_offset)
+        left_points = [
+            point for point in settings.envelope
+            if point.offset_seconds < split_offset - TIME_EPSILON
+        ]
+        right_points = [
+            point.model_copy(
+                update={"offset_seconds": point.offset_seconds - split_offset}
+            )
+            for point in settings.envelope
+            if point.offset_seconds > split_offset + TIME_EPSILON
+        ]
+        if settings.envelope:
+            exact = next(
+                (
+                    point for point in settings.envelope
+                    if abs(point.offset_seconds - split_offset) <= TIME_EPSILON
+                ),
+                None,
+            )
+            left_points.append(
+                (exact or AudioEnvelopePoint(
+                    point_id=self.id_factory("envelope"),
+                    offset_seconds=split_offset,
+                    gain_db=boundary_gain,
+                )).model_copy(update={"offset_seconds": split_offset})
+            )
+            right_points.insert(
+                0,
+                AudioEnvelopePoint(
+                    point_id=self.id_factory("envelope"),
+                    offset_seconds=0,
+                    gain_db=boundary_gain,
+                ),
+            )
+        right_duration = total_duration - split_offset
+        left = settings.model_copy(
+            update={
+                "fade_in_seconds": min(settings.fade_in_seconds, split_offset),
+                "fade_out_seconds": 0.0,
+                "envelope": tuple(left_points),
+            }
+        )
+        right = settings.model_copy(
+            update={
+                "fade_in_seconds": 0.0,
+                "fade_out_seconds": min(settings.fade_out_seconds, right_duration),
+                "envelope": tuple(right_points),
+            }
+        )
+        return left, right
+
+    def _trim_audio(
+        self,
+        settings: ClipAudioSettings,
+        *,
+        removed_start: float,
+        new_duration: float,
+        removed_end: float,
+    ) -> ClipAudioSettings:
+        points = [
+            point.model_copy(
+                update={
+                    "offset_seconds": point.offset_seconds - removed_start
+                }
+            )
+            for point in settings.envelope
+            if (
+                point.offset_seconds >= removed_start - TIME_EPSILON
+                and point.offset_seconds
+                <= removed_start + new_duration + TIME_EPSILON
+            )
+        ]
+        points.sort(key=lambda point: (point.offset_seconds, point.point_id))
+        return settings.model_copy(
+            update={
+                "fade_in_seconds": min(
+                    new_duration,
+                    max(0.0, settings.fade_in_seconds - removed_start),
+                ),
+                "fade_out_seconds": min(
+                    new_duration,
+                    max(0.0, settings.fade_out_seconds - removed_end),
+                ),
+                "envelope": tuple(points),
+            }
+        )
+
     def _resolve_track(
         self,
         track_reference: str,
@@ -136,6 +261,13 @@ class TimelineEditEngine:
             track_reference,
             allow_locked=True,
         )[1].kind
+
+    def clip_state(
+        self, track_reference: str, clip_id: str
+    ) -> tuple[str, TrackConfig, ClipConfig]:
+        """Read an exact detached clip for adapters without exposing mutation."""
+
+        return self._clip(track_reference, clip_id)
 
     def _clip(
         self,
@@ -261,12 +393,19 @@ class TimelineEditEngine:
                 split_at - clip.timeline_start
             ) * clip.speed_factor
             original_out = clip.trim_out
+            original_duration = clip_duration(clip)
+            split_offset = split_at - clip.timeline_start
+            left_audio, right_audio = self._split_audio(
+                clip.audio, split_offset, original_duration
+            )
             clip.trim_out = source_split
+            clip.audio = left_audio
             right = clip.model_copy(deep=True)
             right.id = new_id
             right.trim_in = source_split
             right.trim_out = original_out
             right.timeline_start = split_at
+            right.audio = right_audio
             right.link_group_id = right_group_id
             track.clips.append(right)
             created.append(new_id)
@@ -335,6 +474,12 @@ class TimelineEditEngine:
                 )
             clip.trim_in = next_in
             clip.trim_out = next_out
+            clip.audio = self._trim_audio(
+                clip.audio,
+                removed_start=left_delta_seconds,
+                new_duration=clip_duration(clip),
+                removed_end=right_delta_seconds,
+            )
             delta = clip_duration(clip) - old_duration
             ripple_specs.append((track, old_end, delta))
             modified.append(clip.id)
@@ -653,6 +798,141 @@ class TimelineEditEngine:
             direct=(clip_id,),
             consequential=consequential,
             modified=modified,
+        )
+
+    def set_clip_audio(
+        self,
+        track_reference: str,
+        clip_id: str,
+        *,
+        gain_db: float | None,
+        muted: bool | None,
+        pan: float | None,
+        fade_in_seconds: float | None,
+        fade_out_seconds: float | None,
+        playback_rate: float | None,
+        normalization: AppliedLoudnessNormalization | None,
+    ):
+        key, track, clip = self._clip(track_reference, clip_id)
+        if track.kind == "video" and not clip.keep_audio:
+            raise TimelineEditError("The target video clip has no active audio component")
+        if playback_rate is not None and track.kind != "audio":
+            raise TimelineEditError(
+                "Independent audio playback rate is supported only on audio tracks; "
+                "use the shared clip speed edit for embedded video audio"
+            )
+        updates = clip.audio.model_dump(mode="python")
+        for field, value in (
+            ("gain_db", gain_db),
+            ("muted", muted),
+            ("pan", pan),
+            ("fade_in_seconds", fade_in_seconds),
+            ("fade_out_seconds", fade_out_seconds),
+            ("normalization", normalization),
+        ):
+            if value is not None:
+                updates[field] = value
+        before = clip.model_copy(deep=True)
+        clip.audio = ClipAudioSettings.model_validate(updates)
+        if playback_rate is not None:
+            clip.speed_factor = playback_rate
+        try:
+            ClipConfig.model_validate(clip.model_dump(mode="python"))
+        except ValueError as exc:
+            raise TimelineEditError(str(exc)) from exc
+        if clip == before:
+            raise TimelineEditError("Audio property edit does not change the clip")
+        return self._finish(
+            operation="set_clip_audio",
+            primary_key=key,
+            primary_track=track,
+            direct=(clip.id,),
+            modified=(clip.id,),
+        )
+
+    def set_track_mix(
+        self,
+        track_id: str,
+        *,
+        gain_db: float | None,
+        muted: bool | None,
+        pan: float | None,
+    ):
+        key, track = self._resolve_track(track_id)
+        if track.kind != "audio":
+            raise TimelineEditError("Track mix properties require an audio track")
+        updates = track.mix.model_dump(mode="python")
+        if gain_db is not None:
+            updates["gain_db"] = gain_db
+        if muted is not None:
+            updates["muted"] = muted
+        if pan is not None:
+            updates["pan"] = pan
+        updated = TrackMixSettings.model_validate(updates)
+        if updated == track.mix:
+            raise TimelineEditError("Track mix edit does not change the track")
+        track.mix = updated
+        return self._finish(
+            operation="set_track_mix",
+            primary_key=key,
+            primary_track=track,
+            direct=(),
+            consequential=tuple(clip.id for clip in track.clips),
+            modified=tuple(clip.id for clip in track.clips),
+        )
+
+    def set_volume_envelope(
+        self,
+        track_reference: str,
+        clip_id: str,
+        *,
+        action: str,
+        point_id: str | None,
+        offset_seconds: float | None,
+        gain_db: float | None,
+    ):
+        key, track, clip = self._clip(track_reference, clip_id)
+        points = list(clip.audio.envelope)
+        if action == "clear":
+            if not points:
+                raise TimelineEditError("The volume envelope is already empty")
+            points = []
+        elif action == "delete":
+            matches = [point for point in points if point.point_id == point_id]
+            if len(matches) != 1:
+                raise TimelineEditError("Envelope point ID must identify one point")
+            points = [point for point in points if point.point_id != point_id]
+        elif action == "upsert":
+            assert point_id is not None
+            assert offset_seconds is not None
+            assert gain_db is not None
+            replacement = AudioEnvelopePoint(
+                point_id=point_id,
+                offset_seconds=offset_seconds,
+                gain_db=gain_db,
+            )
+            points = [point for point in points if point.point_id != point_id]
+            if any(
+                abs(point.offset_seconds - replacement.offset_seconds)
+                <= TIME_EPSILON
+                for point in points
+            ):
+                raise TimelineEditError("Envelope offsets must be unique")
+            points.append(replacement)
+        else:
+            raise TimelineEditError("Unsupported envelope action")
+        points.sort(key=lambda point: (point.offset_seconds, point.point_id))
+        clip.audio = clip.audio.model_copy(update={"envelope": tuple(points)})
+        try:
+            ClipConfig.model_validate(clip.model_dump(mode="python"))
+        except ValueError as exc:
+            raise TimelineEditError(str(exc)) from exc
+        return self._finish(
+            operation="set_volume_envelope",
+            primary_key=key,
+            primary_track=track,
+            direct=(clip.id,),
+            modified=(clip.id,),
         )
 
     def manage_track(

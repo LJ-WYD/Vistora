@@ -20,24 +20,42 @@ from contracts import (
     ManualClipLink,
     ManualClipSplit,
     ManualClipUpdate,
+    ManualClipAudio,
     ManualEditChange,
     ManualEditConfirmationRecord,
     ManualEditProposal,
     ManualEditProposalReference,
     ManualEditReview,
     ManualTrackManage,
+    ManualTrackMix,
+    ManualVolumeEnvelope,
     PlanReference,
 )
-from core.timeline import ClipConfig, TimelineConfig, TrackConfig
+from core.timeline import (
+    AudioEnvelopePoint,
+    ClipAudioSettings,
+    ClipConfig,
+    TimelineConfig,
+    TrackConfig,
+    TrackMixSettings,
+)
 from timeline_edit import TimelineEditEngine, TimelineEditError
 from timeline_query import TimelineSnapshot, TimelineSnapshotService
 
 
 MANUAL_EDIT_TOOL_NAME = "VideoApplyManualEditsSkill"
+LOUDNESS_ANALYSIS_TOOL_NAME = "AudioAnalyzeLoudnessSkill"
 
 
 class ManualEditValidationError(ValueError):
     """A user-authored proposal cannot be reviewed or applied safely."""
+
+
+def _validation_message(exc: ValidationError, subject: str) -> str:
+    error = exc.errors(include_url=False, include_context=False)[0]
+    location = ".".join(str(item) for item in error.get("loc", ()))
+    detail = str(error.get("msg", "does not match the versioned schema"))
+    return f"Invalid {subject} field {location}: {detail}."
 
 
 def _clip_state(clip: Any, order_index: int) -> dict[str, Any]:
@@ -57,6 +75,13 @@ def _clip_state(clip: Any, order_index: int) -> dict[str, Any]:
         "link_group_id": clip.link_group_id,
         "source_id": clip.source.source_id,
         "source_name": clip.source.display_name,
+        "audio_gain_db": clip.audio_gain_db,
+        "audio_muted": clip.audio_muted,
+        "audio_pan": clip.audio_pan,
+        "audio_fade_in_seconds": clip.audio_fade_in_seconds,
+        "audio_fade_out_seconds": clip.audio_fade_out_seconds,
+        "audio_envelope": clip.audio_envelope,
+        "loudness_analysis_id": clip.loudness_analysis_id,
     }
 
 
@@ -299,6 +324,11 @@ def _timeline_from_snapshot(snapshot: TimelineSnapshot) -> TimelineConfig:
                 enabled=track.enabled,
                 muted=track.muted,
                 locked=track.locked,
+                mix=TrackMixSettings(
+                    gain_db=track.mix_gain_db,
+                    muted=track.mix_muted,
+                    pan=track.mix_pan,
+                ),
                 clips=[
                     ClipConfig(
                         id=clip.clip_id,
@@ -312,6 +342,21 @@ def _timeline_from_snapshot(snapshot: TimelineSnapshot) -> TimelineConfig:
                         reverse=clip.reverse,
                         rotate=clip.rotate_degrees,
                         link_group_id=clip.link_group_id,
+                        audio=ClipAudioSettings(
+                            gain_db=clip.audio_gain_db,
+                            muted=clip.audio_muted,
+                            pan=clip.audio_pan,
+                            fade_in_seconds=clip.audio_fade_in_seconds,
+                            fade_out_seconds=clip.audio_fade_out_seconds,
+                            envelope=tuple(
+                                AudioEnvelopePoint(
+                                    point_id=point[0],
+                                    offset_seconds=point[1],
+                                    gain_db=point[2],
+                                )
+                                for point in clip.audio_envelope
+                            ),
+                        ),
                     )
                     for clip in track.clips
                 ],
@@ -355,6 +400,29 @@ def review_manual_edit_proposal(
         before = _state_map(engine.timeline)
         try:
             outcomes = []
+            if isinstance(edit, ManualTrackMix):
+                key, track = engine._resolve_track(edit.track_id)
+                track_before = track.model_dump(mode="json", exclude={"clips"})
+                updated, outcome = engine.set_track_mix(
+                    edit.track_id,
+                    gain_db=edit.gain_db,
+                    muted=edit.muted,
+                    pan=edit.pan,
+                )
+                _, changed_track = engine._resolve_track(edit.track_id)
+                changes.append(
+                    ManualEditChange(
+                        operation_id=edit.operation_id,
+                        target_kind="track",
+                        track_key=key,
+                        track_id=edit.track_id,
+                        clip_id=edit.track_id,
+                        action="update",
+                        before=track_before,
+                        after=changed_track.model_dump(mode="json", exclude={"clips"}),
+                    )
+                )
+                continue
             if isinstance(edit, ManualTrackManage):
                 key, track = engine._resolve_track(
                     edit.track_id,
@@ -435,7 +503,30 @@ def review_manual_edit_proposal(
                 outcomes.append(outcome)
             else:
                 track_reference = edit.track_id or edit.track_key
-            if isinstance(edit, ManualClipRemove):
+            if isinstance(edit, ManualClipAudio):
+                updated, outcome = engine.set_clip_audio(
+                    track_reference,
+                    edit.clip_id,
+                    gain_db=edit.gain_db,
+                    muted=edit.muted,
+                    pan=edit.pan,
+                    fade_in_seconds=edit.fade_in_seconds,
+                    fade_out_seconds=edit.fade_out_seconds,
+                    playback_rate=edit.playback_rate,
+                    normalization=edit.normalization_evidence,
+                )
+                outcomes.append(outcome)
+            elif isinstance(edit, ManualVolumeEnvelope):
+                updated, outcome = engine.set_volume_envelope(
+                    track_reference,
+                    edit.clip_id,
+                    action=edit.action,
+                    point_id=edit.point_id,
+                    offset_seconds=edit.offset_seconds,
+                    gain_db=edit.gain_db,
+                )
+                outcomes.append(outcome)
+            elif isinstance(edit, ManualClipRemove):
                 updated, outcome = engine.remove(
                     track_reference,
                     edit.clip_id,
@@ -592,6 +683,17 @@ class ManualEditApplicationService:
             else None
         )
 
+    def _dispatch_gateway(
+        self,
+        request: AtomicToolRequestEnvelope,
+        context: AtomicExecutionContext,
+    ):
+        if self._gateway is None:
+            raise ManualEditValidationError(
+                "The production atomic gateway is unavailable"
+            )
+        return self._gateway.execute(request, context)
+
     def review(self, proposal_value: Any) -> tuple[
         ManualEditProposal,
         ManualEditReview,
@@ -599,12 +701,57 @@ class ManualEditApplicationService:
         try:
             proposal = ManualEditProposal.model_validate(proposal_value)
         except ValidationError as exc:
-            raise ManualEditValidationError(str(exc)) from exc
+            raise ManualEditValidationError(
+                _validation_message(exc, "manual proposal")
+            ) from exc
         review = review_manual_edit_proposal(
             self._snapshot_provider(),
             proposal,
         )
         return proposal, review
+
+    def analyze_loudness(self, request_value: Any) -> dict[str, Any]:
+        """Dispatch one read-only analysis through the production gateway."""
+
+        if self._gateway is None:
+            raise ManualEditValidationError(
+                "Loudness analysis requires the production atomic registry"
+            )
+        snapshot = self._snapshot_provider()
+        token = uuid.uuid4().hex
+        request = AtomicToolRequestEnvelope(
+            request_id=f"request_loudness_{token}",
+            execution_id=f"execution_loudness_{token}",
+            project_id=snapshot.project_id,
+            confirmation_id="confirmation_read_only_analysis",
+            plan_ref=PlanReference(
+                plan_id="plan_read_only_analysis",
+                plan_version=1,
+                plan_digest=snapshot.timeline_digest,
+            ),
+            step_id=f"step_loudness_{token}",
+            tool_name=LOUDNESS_ANALYSIS_TOOL_NAME,
+            arguments=request_value,
+            requested_at=datetime.now(timezone.utc),
+        )
+        result = self._dispatch_gateway(
+            request,
+            AtomicExecutionContext(
+                caller="manual_edit",
+                registry_ref=self._registry.reference,
+                project_id=snapshot.project_id,
+                confirmation_id="confirmation_read_only_analysis",
+                allowed_side_effects=(),
+                idempotency_key=request.request_id,
+            ),
+        )
+        if result.status != "success" or result.payload is None:
+            raise ManualEditValidationError(
+                result.error.message
+                if result.error is not None
+                else "Loudness analysis failed"
+            )
+        return result.payload
 
     def apply(
         self,
@@ -617,7 +764,9 @@ class ManualEditApplicationService:
                 confirmation_value
             )
         except ValidationError as exc:
-            raise ManualEditValidationError(str(exc)) from exc
+            raise ManualEditValidationError(
+                _validation_message(exc, "manual confirmation")
+            ) from exc
         if not confirmation.confirms(proposal):
             raise ManualEditValidationError(
                 "Apply requires confirmation of this exact manual proposal"
@@ -653,7 +802,7 @@ class ManualEditApplicationService:
                 arguments=arguments,
                 requested_at=datetime.now(timezone.utc),
             )
-            gateway_result = self._gateway.execute(
+            gateway_result = self._dispatch_gateway(
                 request,
                 AtomicExecutionContext(
                     caller="manual_edit",

@@ -6,14 +6,19 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from audio_analysis import clip_audio_state_digest, source_sha256
+
 from contracts import (
     ManualClipRemove,
     ManualClipLink,
     ManualClipSplit,
     ManualClipUpdate,
+    ManualClipAudio,
     ManualEditConfirmationRecord,
     ManualEditProposal,
     ManualTrackManage,
+    ManualTrackMix,
+    ManualVolumeEnvelope,
 )
 from core import timeline_manager
 from core.timeline import TimelineConfig
@@ -172,6 +177,14 @@ class VideoApplyManualEditsSkill(BaseSkill):
 
         engine = TimelineEditEngine(current)
         for edit in proposal.edits:
+            if isinstance(edit, ManualTrackMix):
+                engine.set_track_mix(
+                    edit.track_id,
+                    gain_db=edit.gain_db,
+                    muted=edit.muted,
+                    pan=edit.pan,
+                )
+                continue
             if isinstance(edit, ManualTrackManage):
                 _, track = engine._resolve_track(
                     edit.track_id,
@@ -220,7 +233,43 @@ class VideoApplyManualEditsSkill(BaseSkill):
                 )
                 continue
             track_reference = edit.track_id or edit.track_key
-            if isinstance(edit, ManualClipRemove):
+            if isinstance(edit, ManualClipAudio):
+                if edit.normalization_evidence is not None:
+                    _, target_track, target_clip = engine.clip_state(
+                        track_reference, edit.clip_id
+                    )
+                    evidence = edit.normalization_evidence
+                    if edit.gain_db != evidence.applied_gain_db:
+                        raise ValueError(
+                            "Loudness application must use the analyzed gain"
+                        )
+                    if evidence.analyzed_clip_digest != clip_audio_state_digest(
+                        target_track.id, target_clip
+                    ) or evidence.source_sha256 != source_sha256(
+                        target_clip.source
+                    ):
+                        raise ValueError("Loudness evidence is stale or mismatched")
+                engine.set_clip_audio(
+                    track_reference,
+                    edit.clip_id,
+                    gain_db=edit.gain_db,
+                    muted=edit.muted,
+                    pan=edit.pan,
+                    fade_in_seconds=edit.fade_in_seconds,
+                    fade_out_seconds=edit.fade_out_seconds,
+                    playback_rate=edit.playback_rate,
+                    normalization=edit.normalization_evidence,
+                )
+            elif isinstance(edit, ManualVolumeEnvelope):
+                engine.set_volume_envelope(
+                    track_reference,
+                    edit.clip_id,
+                    action=edit.action,
+                    point_id=edit.point_id,
+                    offset_seconds=edit.offset_seconds,
+                    gain_db=edit.gain_db,
+                )
+            elif isinstance(edit, ManualClipRemove):
                 engine.remove(
                     track_reference,
                     edit.clip_id,

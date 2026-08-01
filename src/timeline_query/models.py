@@ -126,6 +126,13 @@ class ClipSnapshot(ReadModel):
     reverse: bool
     rotate_degrees: int
     link_group_id: SnapshotId | None = None
+    audio_gain_db: FiniteFloat = 0
+    audio_muted: bool = False
+    audio_pan: FiniteFloat = 0
+    audio_fade_in_seconds: FiniteFloat = 0
+    audio_fade_out_seconds: FiniteFloat = 0
+    audio_envelope: tuple[tuple[str, FiniteFloat, FiniteFloat], ...] = ()
+    loudness_analysis_id: SnapshotId | None = None
     provenance: ClipProvenanceSummary | None = None
 
 
@@ -140,6 +147,9 @@ class TrackSnapshot(ReadModel):
     enabled: bool
     muted: bool
     locked: bool
+    mix_gain_db: FiniteFloat = 0
+    mix_muted: bool = False
+    mix_pan: FiniteFloat = 0
     clips: tuple[ClipSnapshot, ...] = ()
     clip_count: int = Field(ge=0)
     duration_seconds: FiniteFloat = Field(ge=0)

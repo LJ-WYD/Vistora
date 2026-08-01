@@ -174,6 +174,10 @@ It constructs a fresh immutable `AtomicSkillRegistry` containing:
 - `VideoSetClipPropertiesSkill`
 - `TimelineManageTrackSkill`
 - `TimelineSetClipLinkSkill`
+- `AudioAnalyzeLoudnessSkill`
+- `AudioSetClipPropertiesSkill`
+- `AudioSetTrackMixSkill`
+- `AudioSetVolumeEnvelopeSkill`
 
 The registry has stable ID/version/revision, deterministic input-schema and
 full-descriptor digests, and frozen per-skill metadata for exact input/output
@@ -444,8 +448,8 @@ Rollback is a second workflow, never an automatic failure handler. The service r
 
 `src/core/timeline.py` defines three Pydantic models:
 
-- `ClipConfig`: stable clip ID, source, trim, timeline placement, optional explicit link-group ID, audio, speed, reverse, and rotation properties.
-- `TrackConfig`: stable track ID, video/audio kind, role, unique order, enabled/muted/locked state, and an ordered list of clips.
+- `ClipConfig`: stable clip ID, source, trim, timeline placement, optional explicit link-group ID, legacy audio flags/volume, frozen versioned clip-audio settings, speed, reverse, and rotation properties.
+- `TrackConfig`: stable track ID, video/audio kind, role, unique order, enabled/muted/locked state, frozen versioned mix settings, and an ordered list of clips.
 - `TimelineConfig`: schema version `2.0.0`, output dimensions, frame rate, and an arbitrary mapping of video/audio tracks.
 
 `TimelineManager` persists one active timeline at `.workspace/current_timeline.json`. It creates default primary video and audio tracks, deterministically migrates legacy fixed-track JSON, loads and validates schema-v2 JSON, saves the full model, and deletes the file when reset. Native v2 documents reject duplicate track IDs/order and clip IDs. It has no first-class project identifier or canonical project-store revision; guarded workflow transactions/checkpoints remain separate.
@@ -460,8 +464,8 @@ The returned `vistora.timeline-snapshot` schema is version `2.0.0`. Its frozen, 
 
 - snapshot, project, revision, source-schema, migration, and timeline-digest identity;
 - output width, height, and frame rate;
-- every configured track with its mapping key, stable ID, video/audio kind, role, unique order, enabled/muted/locked state, clips, count, and derived duration;
-- every clip with its configured ID, optional explicit link-group ID, source reference, trim, placement, speed-adjusted duration, audio flags, volume, reversal, and rotation;
+- every configured track with its mapping key, stable ID, video/audio kind, role, unique order, enabled/muted/locked state, gain/mix mute/pan, clips, count, and derived duration;
+- every clip with its configured ID, optional explicit link-group ID, source reference, trim, placement, speed-adjusted duration, legacy audio flags/volume, dB gain, mute, pan, fades, stable linear envelope, applied loudness evidence ID, reversal, and rotation;
 - a detached `vistora.clip-provenance-summary` for each clip, reporting recorded origin, latest change origin, mapping health, confirmed plan/operation/step/request/result identity, execution status, and browser-safe evidence locators;
 - aggregate track/clip/video/audio counts, timeline duration, and empty state.
 
@@ -524,6 +528,7 @@ The loopback-only server has a deliberately narrow route surface:
 | `/analysis/thumbnail/<analysis_id>/<artifact_id>` | `GET`, `HEAD` | One cached PNG addressed only by validated opaque analysis IDs. |
 | `/api/manual-edits/validate` | `POST` | Validates a detached user-authored proposal and returns a reviewable diff; never writes. |
 | `/api/manual-edits/apply` | `POST` | Requires an exact matching confirmation, then asks the application service to dispatch the registered manual-edit atomic skill. |
+| `/api/audio/loudness/analyze` | `POST` | Dispatches the registered read-only analyzer for one exact current clip; returns path-free evidence and never changes timeline/media state. |
 | `/api/workflow/reviews` | `POST` | Persists the exact current fixture review; never confirms it. |
 | `/api/workflow/confirmations` | `POST` | Persists one explicit immutable confirmation or rejection. |
 | `/api/workflow/executions` | `POST` | Runs only an exact unused confirmation through the workflow service and registry. |
@@ -550,7 +555,7 @@ Current-workspace mode adds a deliberately narrow manual path:
 
 ```text
 TimelineSnapshot (detached read)
-  -> local browser draft (trim/move/split/removal, track state/order, link/unlink)
+  -> local browser draft (timeline edits, track/link state, audio mix/envelope)
   -> POST validate -> ManualEditReview (no persistence)
   -> explicit Confirm & apply
   -> ManualEditConfirmationRecord bound to exact proposal digest
@@ -578,9 +583,12 @@ python src/main.py preview --timeline path\to\timeline.json `
 `TimelineRenderer` consumes a `TimelineConfig` and writes media. Enabled video
 tracks are composited bottom-to-top by deterministic track order; disabled
 tracks are omitted. Enabled, unmuted audio tracks and permitted embedded
-video audio are mixed without normalizing away declared volume. The bounded
-FFmpeg multitrack path fixes output canvas/frame rate/duration and is covered
-by a four-track render/ffprobe regression. Single-track compatibility fast
+video audio are converted to stereo and processed in deterministic order:
+legacy volume, clip/track dB gain, mute, equal-power pan, clip-local linear
+envelope, fades, timeline delay, sum, a `0.95` peak limiter, and 48 kHz stereo
+output. No hidden LUFS normalization is applied. The bounded FFmpeg multitrack
+path is covered by four-track and advanced-audio render/ffprobe regressions.
+Single-track compatibility fast
 paths remain. Unsupported non-video/audio track kinds fail validation rather
 than being rendered as fictitious semantics.
 
@@ -607,6 +615,10 @@ The implemented mutation ownership is:
 | `VideoSetClipPropertiesSkill` | Updates speed, volume/mute, embedded audio, or video rotation for the current clip or exact link group without creating a reverse proxy. | None. |
 | `TimelineManageTrackSkill` | Adds/updates/removes an empty video/audio track or changes deterministic track order; locked tracks reject clip mutation. | None. |
 | `TimelineSetClipLinkSkill` | Links/unlinks explicit exact clip references with a stable group ID; never infers membership. | None. |
+| `AudioAnalyzeLoudnessSkill` | None; returns cached, versioned integrated-LUFS/true-peak evidence bound to exact clip state and source hash. | Read-only decode only. |
+| `AudioSetClipPropertiesSkill` | Atomically sets bounded clip gain/mute/pan/fades or audio-track playback rate; analyzed gain requires exact evidence. | None. |
+| `AudioSetTrackMixSkill` | Atomically sets bounded gain/mute/pan on one exact unlocked audio track. | None. |
+| `AudioSetVolumeEnvelopeSkill` | Atomically upserts/deletes/clears stable linear clip gain-envelope points. | None. |
 
 These are the only registered atomic mutation entry points. Tests may reset state directly as test-fixture setup. The CLI `render` command remains a documented nonconforming compatibility exception.
 
@@ -783,7 +795,7 @@ Mutation-capable utilities and core objects are implementation details behind to
 | G-03 | Operator combines incompatible roles | `OperatorAgent` owns dialogue, planning, and execution. | Separate/retire the hybrid behind Director and Editing contracts. |
 | G-06 | Direct CLI render bypass | `render` instantiates `TimelineRenderer` directly. | Route mutations through an explicit atomic tool or clearly isolated maintenance interface. |
 | G-07 | Canonical timeline persistence remains legacy | Workflow checkpoints and confirmed restore add guarded history/recovery, but the canonical timeline is still one legacy JSON file with content-derived snapshot identity. | Introduce a first-class versioned project store only in a separately approved migration. |
-| G-11 | Professional controls remain intentionally bounded | The loopback UI now provides arbitrary video/audio lanes, track state/order, explicit link/unlink, safe material preview, thumbnails/waveforms, inspector, and confirmed exact-ID edits with current/linked scope. Insert/overwrite remains available through structured Director plans, not a broad browser ingest surface. | Add subtitles, color, transitions, keyframes, masks, richer track kinds, and later professional controls only through separately approved contracts and atomic tools. |
+| G-11 | Professional controls remain intentionally bounded | The loopback UI provides arbitrary video/audio lanes, track/link state, thumbnails/waveforms with envelope overlay, confirmed exact-ID edits, bounded clip/track mixing, and evidenced loudness gain. Insert/overwrite remains available through structured Director plans. | Add subtitles/transcription, color, transitions, visual keyframes, masks, denoise/de-reverb/separation, plugin hosting, richer track kinds, and later professional controls only through separately approved contracts and atomic tools. |
 
 This gap register is descriptive. Closing any gap requires a separate approved implementation task.
 
@@ -800,7 +812,7 @@ STEP 17 introduced the detached exact-ID engine and six core edit skills.
 STEP 18 extends that foundation with timeline schema `2.0.0`, arbitrary
 ordered video/audio tracks, stable track IDs and roles, enabled/muted/locked
 state, explicit stable clip link groups, and deterministic linked/current
-editing. `TimelineManageTrackSkill` and `TimelineSetClipLinkSkill` bring the
+editing. `TimelineManageTrackSkill` and `TimelineSetClipLinkSkill` brought the
 production registry to fifteen skills. The same detached engine powers review
 and the confirmed transaction path; it reports direct and consequential
 effects, rejects locked members, and preserves source provenance/tombstones.
@@ -813,3 +825,22 @@ current-only editing, trace, export/ffprobe, and rollback. Index-based
 compatibility surfaces. This does not close G-06 or G-07 and does not add
 automatic A/V linking, linked multi-source ingest, subtitles, color,
 transitions, keyframes, masks, AI providers, or effects.
+
+STEP 19 adds four registry entries (nineteen total): a read-only cached
+loudness analyzer plus transactional clip-audio, track-mix, and linear-envelope
+skills. Clip and track audio contracts are frozen/versioned and optional, so
+legacy `volume`, `keep_audio`, and timeline JSON retain their meaning.
+Analysis and gain application are separate: application requires the exact
+clip-state digest and source hash measured by the analyzer. Snapshot, Director
+context, detached review, manual draft/confirmation, workflow trace, rollback
+checkpoints, and the inspector expose the state without moving mutation
+authority out of the registry/gateway boundary.
+
+The renderer applies dB gain, mute, pan, fades and linear automation before
+mixing, then uses a fixed peak limiter and 48 kHz stereo output. The extended
+reference covers analyzed dialogue gain, track mix, mute, pan, fades,
+automation, linked editing, confirmed Editing-Agent dispatch, ffprobe,
+provenance, and rollback. This is not a general keyframe system or mastering
+suite; ASR/subtitles, noise reduction, de-reverb, source separation, plugin
+hosting, AI audio providers, complex mastering, color, transitions, visual
+keyframes, masks, and effects remain out of scope.

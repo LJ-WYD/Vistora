@@ -136,6 +136,13 @@ registry. The browser never writes `TimelineManager` or media directly.
 Manual apply is disabled for `--timeline` external documents, which remain
 strictly read-only.
 
+The same confirmed draft surface exposes bounded local audio controls: clip
+gain in dB, clip mute/pan, linear fades, stable linear gain-envelope points,
+and audio-track gain/mute/pan. A read-only **Analyze loudness** action measures
+the exact selected range; suggested gain remains a draft until **Stage analyzed
+gain** and the separate **Confirm & apply** action. Evidence is bound to clip
+timing and the source hash, so changed or missing media fails closed.
+
 ## Provenance and trace queries
 
 Vistora stores new provenance in an append-only `current_timeline.trace.json` sidecar beside the compatible legacy timeline. Versioned contracts link source evidence, a confirmed Director plan, its execution step, atomic request/result, and the clips or generated output affected by that result. Manual Apply records a separate truthful `user_manual` change; it never labels user-authored edits as Director intent. Trims and reorders preserve the original clip origin while recording the latest user change, and removals retain a queryable tombstone.
@@ -256,7 +263,9 @@ opaque media facts, including first-clip canvas adoption), safe legacy clip
 property/speed modification, exact-ID
 split/trim/move/insert/overwrite/lift/ripple-delete/playback-property
 operations across arbitrary video/audio tracks, explicit current-only versus
-linked-group effects, track management, link/unlink, timeline clear/default
+linked-group effects, clip/track audio mixing, linear gain envelopes,
+read-only loudness analysis with explicit evidenced gain application, track
+management, link/unlink, timeline clear/default
 project reset, and export timeline effects. Ripple, linked members, and
 overwrite-retained sides are shown as consequential changes. Locked-track
 proposals fail closed. Proxy-generating reverse operations, timelapse output,
@@ -288,7 +297,7 @@ The ledger keeps one stable logical identity for the workspace while every revie
 ## Atomic skill registry and execution gateway
 
 `src/atomic_runtime/` is the single production composition root for the
-fifteen existing atomic skills. A fresh immutable `AtomicSkillRegistry` carries an
+nineteen existing atomic skills. A fresh immutable `AtomicSkillRegistry` carries an
 explicit ID, semantic version, revision, deterministic input-schema digest, and
 full descriptor digest. Every frozen `SkillDescriptor` declares the stable
 skill version, exact input and output schemas, timeline/media/file/external
@@ -357,8 +366,26 @@ legacy compatibility surfaces. Property-only edits can use
 reverse behavior is not expanded or promised transactionally reversible.
 Linked A/V and arbitrary video/audio track foundations are implemented.
 Automatic link inference, linked-source ingest as one operation, unlimited
-track kinds, color, subtitles, transitions, keyframes, masks, and effects
-remain unimplemented.
+track kinds, color, subtitles/transcription, transitions, visual keyframes,
+masks, denoise/de-reverb/source separation, plugin hosting, AI audio
+providers, complex mastering, and effects remain unimplemented.
+
+## Local audio editing and mix policy
+
+`ClipAudioSettings` and `TrackMixSettings` are strict frozen version `1.0.0`
+attachments to the compatible timeline-v2 model. Legacy `volume` remains a
+linear pre-gain and `keep_audio` still controls embedded video audio; with no
+new settings, old timelines load and render equivalently. New clip/track gain
+uses `-60..+24 dB`, pan uses `-1..+1`, and fades/envelope points use clip-local
+post-speed timeline seconds. The existing `speed_factor` remains the shared
+video/embedded-audio rate; independent audio rate is accepted only for an
+audio-track clip.
+
+Final multitrack export converts active sources to stereo, applies legacy and
+dB gain, mute, equal-power pan, fades and linear envelope automation, then
+mixes without hidden normalization. A deterministic `0.95` peak limiter and
+48 kHz stereo output policy protect the combined bus. Browser waveforms are a
+read-only approximation; FFmpeg export is authoritative.
 
 ## Constrained Editing Agent
 

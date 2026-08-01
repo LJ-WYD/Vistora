@@ -1,4 +1,4 @@
-"""Single production composition root for Vistora's seven atomic skills."""
+"""Single production composition root for Vistora's atomic skills."""
 
 from __future__ import annotations
 
@@ -6,6 +6,14 @@ from collections.abc import Callable
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
+
+from audio_analysis import LoudnessAnalysisResult
+from skills.audio_timeline_edits import (
+    AudioAnalyzeLoudnessSkill,
+    AudioSetClipPropertiesSkill,
+    AudioSetTrackMixSkill,
+    AudioSetVolumeEnvelopeSkill,
+)
 
 from skills.video_add_clip import VideoAddClipSkill
 from skills.video_apply_manual_edits import VideoApplyManualEditsSkill
@@ -100,6 +108,9 @@ class CoreTimelineEditResult(_Result):
         "set_properties",
         "manage_track",
         "set_clip_link",
+        "set_clip_audio",
+        "set_track_mix",
+        "set_volume_envelope",
     ]
     track_id: str
     track_key: str
@@ -169,7 +180,7 @@ def build_production_registry(
     )
     return AtomicSkillRegistry(
         registry_id="registry_atomic_skills",
-        registry_revision=2,
+        registry_revision=3,
         entries=(
             _entry(
                 VideoAddClipSkill(),
@@ -240,6 +251,33 @@ def build_production_registry(
                 preview_supported=True,
                 rollback_support="checkpoint_restore",
                 required_capabilities=(),
+            ),
+            _entry(
+                AudioAnalyzeLoudnessSkill(),
+                LoudnessAnalysisResult,
+                side_effects=(),
+                transactionality="none",
+                retry_safety="intrinsically_idempotent",
+                preview_supported=True,
+                rollback_support="none",
+                required_capabilities=("ffmpeg", "local_media_read"),
+            ),
+            *tuple(
+                _entry(
+                    skill,
+                    CoreTimelineEditResult,
+                    side_effects=("files", "timeline"),
+                    transactionality="atomic_project_state",
+                    retry_safety="gateway_replay_only",
+                    preview_supported=True,
+                    rollback_support="checkpoint_restore",
+                    required_capabilities=(),
+                )
+                for skill in (
+                    AudioSetClipPropertiesSkill(),
+                    AudioSetTrackMixSkill(),
+                    AudioSetVolumeEnvelopeSkill(),
+                )
             ),
             *tuple(
                 _entry(

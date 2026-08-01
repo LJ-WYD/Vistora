@@ -63,6 +63,31 @@ class DirectorContextService:
                 "clip_count": snapshot.clip_count,
                 "video_clip_count": snapshot.video_clip_count,
                 "audio_clip_count": snapshot.audio_clip_count,
+                "audio_editing": {
+                    "clips_with_custom_mix": sum(
+                        1
+                        for track in snapshot.tracks
+                        for clip in track.clips
+                        if (
+                            clip.audio_gain_db != 0
+                            or clip.audio_muted
+                            or clip.audio_pan != 0
+                            or clip.audio_fade_in_seconds != 0
+                            or clip.audio_fade_out_seconds != 0
+                            or clip.audio_envelope
+                        )
+                    ),
+                    "tracks_with_custom_mix": sum(
+                        1
+                        for track in snapshot.tracks
+                        if (
+                            track.mix_gain_db != 0
+                            or track.mix_muted
+                            or track.mix_pan != 0
+                        )
+                    ),
+                    "mix_policy": "deterministic_linear_envelope_limiter_v1",
+                },
                 "empty": snapshot.empty,
             },
             materials=tuple(sorted(materials, key=lambda item: item.material_id)),

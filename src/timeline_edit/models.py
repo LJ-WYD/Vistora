@@ -6,6 +6,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from core.timeline import AppliedLoudnessNormalization
+
 
 EditScope = Literal["current_clip", "linked_group"]
 StableTrackId = Annotated[
@@ -122,6 +124,88 @@ class SetClipPropertiesInput(TrackTargetModel):
         return self
 
 
+class SetClipAudioPropertiesInput(TrackTargetModel):
+    """Exact clip-local audio controls; never expands to linked members."""
+
+    clip_id: StableClipId
+    gain_db: float | None = Field(
+        default=None, ge=-60, le=24, allow_inf_nan=False
+    )
+    muted: bool | None = None
+    pan: float | None = Field(default=None, ge=-1, le=1, allow_inf_nan=False)
+    fade_in_seconds: float | None = Field(
+        default=None, ge=0, allow_inf_nan=False
+    )
+    fade_out_seconds: float | None = Field(
+        default=None, ge=0, allow_inf_nan=False
+    )
+    playback_rate: float | None = Field(
+        default=None, gt=0, le=16, allow_inf_nan=False
+    )
+    normalization_evidence: AppliedLoudnessNormalization | None = None
+
+    @model_validator(mode="after")
+    def has_audio_change(self) -> "SetClipAudioPropertiesInput":
+        if all(
+            value is None
+            for value in (
+                self.gain_db,
+                self.muted,
+                self.pan,
+                self.fade_in_seconds,
+                self.fade_out_seconds,
+                self.playback_rate,
+                self.normalization_evidence,
+            )
+        ):
+            raise ValueError("At least one audio property is required")
+        return self
+
+
+class SetTrackMixPropertiesInput(TimelineEditModel):
+    track_id: StableTrackId
+    gain_db: float | None = Field(
+        default=None, ge=-60, le=24, allow_inf_nan=False
+    )
+    muted: bool | None = None
+    pan: float | None = Field(default=None, ge=-1, le=1, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def has_mix_change(self) -> "SetTrackMixPropertiesInput":
+        if self.gain_db is None and self.muted is None and self.pan is None:
+            raise ValueError("At least one track mix property is required")
+        return self
+
+
+class SetVolumeEnvelopeInput(TrackTargetModel):
+    clip_id: StableClipId
+    action: Literal["upsert", "delete", "clear"]
+    point_id: StableClipId | None = None
+    offset_seconds: float | None = Field(
+        default=None, ge=0, allow_inf_nan=False
+    )
+    gain_db: float | None = Field(
+        default=None, ge=-60, le=24, allow_inf_nan=False
+    )
+
+    @model_validator(mode="after")
+    def envelope_action_fields(self) -> "SetVolumeEnvelopeInput":
+        if self.action == "upsert" and (
+            self.point_id is None
+            or self.offset_seconds is None
+            or self.gain_db is None
+        ):
+            raise ValueError("upsert requires point_id, offset_seconds, and gain_db")
+        if self.action == "delete" and self.point_id is None:
+            raise ValueError("delete requires point_id")
+        if self.action == "clear" and any(
+            value is not None
+            for value in (self.point_id, self.offset_seconds, self.gain_db)
+        ):
+            raise ValueError("clear does not accept point fields")
+        return self
+
+
 class ClipReference(TimelineEditModel):
     track_id: StableTrackId
     clip_id: StableClipId
@@ -191,6 +275,9 @@ class TimelineEditOutcome(TimelineEditModel):
         "set_properties",
         "manage_track",
         "set_clip_link",
+        "set_clip_audio",
+        "set_track_mix",
+        "set_volume_envelope",
     ]
     track_id: StableTrackId
     track_key: str

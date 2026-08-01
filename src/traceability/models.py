@@ -16,6 +16,7 @@ from contracts import (
     ManualEditConfirmationRecord,
     ManualEditProposal,
     ManualTrackManage,
+    ManualTrackMix,
     PlanReference,
 )
 
@@ -320,7 +321,7 @@ class ManualEditTrace(TraceModel):
                 for relation in operation_relations
                 if relation.effect_kind == "direct"
             )
-            if isinstance(edit, ManualTrackManage):
+            if isinstance(edit, (ManualTrackManage, ManualTrackMix)):
                 if (
                     len(direct) != 1
                     or direct[0].entity.entity_kind != "track"

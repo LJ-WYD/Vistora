@@ -43,6 +43,25 @@ const ui = {
   stageLink: document.querySelector("#stage-link"),
   stageUnlink: document.querySelector("#stage-unlink"),
   stageTrack: document.querySelector("#stage-track"),
+  audioGain: document.querySelector("#audio-gain"),
+  audioPan: document.querySelector("#audio-pan"),
+  audioFadeIn: document.querySelector("#audio-fade-in"),
+  audioFadeOut: document.querySelector("#audio-fade-out"),
+  audioMuted: document.querySelector("#audio-muted"),
+  audioTrackGain: document.querySelector("#audio-track-gain"),
+  audioTrackPan: document.querySelector("#audio-track-pan"),
+  audioTrackMuted: document.querySelector("#audio-track-muted"),
+  audioPointId: document.querySelector("#audio-point-id"),
+  audioPointTime: document.querySelector("#audio-point-time"),
+  audioPointGain: document.querySelector("#audio-point-gain"),
+  audioAnalysisStatus: document.querySelector("#audio-analysis-status"),
+  stageAudio: document.querySelector("#stage-audio"),
+  stageTrackMix: document.querySelector("#stage-track-mix"),
+  stageEnvelope: document.querySelector("#stage-envelope"),
+  deleteEnvelope: document.querySelector("#delete-envelope"),
+  clearEnvelope: document.querySelector("#clear-envelope"),
+  analyzeLoudness: document.querySelector("#analyze-loudness"),
+  applyLoudness: document.querySelector("#apply-loudness"),
   draftPanel: document.querySelector("#draft-panel"),
   draftState: document.querySelector("#draft-state"),
   draftChanges: document.querySelector("#draft-changes"),
@@ -100,6 +119,7 @@ const state = {
   proposalCreatedAt: null,
   review: null,
   applying: false,
+  loudnessEvidence: null,
   planReview: null,
   selectedPlanChange: null,
   director: null,
@@ -190,12 +210,18 @@ function safeChangeState(stateValue) {
   if ("width" in stateValue && "height" in stateValue) {
     return `${stateValue.width}×${stateValue.height} · ${stateValue.fps} fps`;
   }
+  if ("track_id" in stateValue && "gain_db" in stateValue) {
+    return `${stateValue.gain_db} dB · pan ${stateValue.pan} · ` +
+      `${stateValue.muted ? "muted" : "active"}`;
+  }
   return (
     `${formatSeconds(stateValue.timeline_start_seconds)}–` +
     `${formatSeconds(stateValue.timeline_end_seconds)} · ` +
     `${formatSeconds(stateValue.trim_in_seconds)}–` +
     `${formatSeconds(stateValue.trim_out_seconds)} source · ` +
-    `${stateValue.speed_factor}×`
+    `${stateValue.speed_factor}× · audio ${stateValue.audio_gain_db ?? 0} dB · ` +
+    `pan ${stateValue.audio_pan ?? 0} · ` +
+    `${stateValue.audio_envelope?.length || 0} envelope points`
   );
 }
 
@@ -223,11 +249,15 @@ function showPlanChangeDetails(change) {
     detailRow("Expected effect", change.expected_effect),
     detailRow(
       "Before",
-      safeChangeState(change.before || change.before_project),
+      safeChangeState(
+        change.before || change.before_project || change.before_track_mix,
+      ),
     ),
     detailRow(
       "After",
-      safeChangeState(change.after || change.after_project),
+      safeChangeState(
+        change.after || change.after_project || change.after_track_mix,
+      ),
     ),
     detailRow("Reason", change.reason),
     detailRow("Source evidence", evidence),
@@ -1148,8 +1178,11 @@ function cloneEdits(edits) {
   return JSON.parse(JSON.stringify(edits));
 }
 
-function existingDraftForClip(clipId) {
-  return state.draftEdits.find((edit) => edit.clip_id === clipId) || null;
+function existingDraftForClip(clipId, kinds = null) {
+  return state.draftEdits.find(
+    (edit) =>
+      edit.clip_id === clipId && (!kinds || kinds.includes(edit.kind)),
+  ) || null;
 }
 
 function showManualEditor(track, clip) {
@@ -1159,7 +1192,10 @@ function showManualEditor(track, clip) {
   if (!applyEnabled) {
     return;
   }
-  const existing = existingDraftForClip(clip.clip_id);
+  const existing = existingDraftForClip(
+    clip.clip_id,
+    ["update", "remove", "split"],
+  );
   if (existing?.kind === "remove") {
     ui.manualEditor.hidden = true;
     return;
@@ -1213,6 +1249,53 @@ function showManualEditor(track, clip) {
   ui.editTrackEnabled.checked = track.enabled;
   ui.editTrackMuted.checked = track.muted;
   ui.editTrackLocked.checked = track.locked;
+  const audioDraft = existingDraftForClip(clip.clip_id, ["clip_audio"]);
+  ui.audioGain.value = String(audioDraft?.gain_db ?? clip.audio_gain_db ?? 0);
+  ui.audioPan.value = String(audioDraft?.pan ?? clip.audio_pan ?? 0);
+  ui.audioFadeIn.value = String(
+    audioDraft?.fade_in_seconds ?? clip.audio_fade_in_seconds ?? 0,
+  );
+  ui.audioFadeOut.value = String(
+    audioDraft?.fade_out_seconds ?? clip.audio_fade_out_seconds ?? 0,
+  );
+  ui.audioMuted.checked = audioDraft?.muted ?? clip.audio_muted ?? false;
+  const trackMixDraft = state.draftEdits.find(
+    (edit) => edit.kind === "track_mix" && edit.track_id === track.track_id,
+  );
+  ui.audioTrackGain.value = String(
+    trackMixDraft?.gain_db ?? track.mix_gain_db ?? 0,
+  );
+  ui.audioTrackPan.value = String(
+    trackMixDraft?.pan ?? track.mix_pan ?? 0,
+  );
+  ui.audioTrackMuted.checked =
+    trackMixDraft?.muted ?? track.mix_muted ?? false;
+  ui.audioPointId.value = newStableId("envelope");
+  ui.audioPointTime.value = "0";
+  ui.audioPointGain.value = "0";
+  state.loudnessEvidence = null;
+  ui.applyLoudness.disabled = true;
+  ui.audioAnalysisStatus.textContent =
+    clip.loudness_analysis_id
+      ? `Applied evidence: ${clip.loudness_analysis_id}`
+      : "No loudness analysis has been run.";
+  for (const control of [
+    ui.stageAudio,
+    ui.stageTrackMix,
+    ui.stageEnvelope,
+    ui.deleteEnvelope,
+    ui.clearEnvelope,
+    ui.analyzeLoudness,
+  ]) {
+    control.disabled = track.locked;
+  }
+  ui.stageTrackMix.disabled = track.locked || track.kind !== "audio";
+  const hasAudioComponent = track.kind === "audio" || clip.keep_audio;
+  ui.stageAudio.disabled = track.locked || !hasAudioComponent;
+  ui.stageEnvelope.disabled = track.locked || !hasAudioComponent;
+  ui.deleteEnvelope.disabled = track.locked || !hasAudioComponent;
+  ui.clearEnvelope.disabled = track.locked || !hasAudioComponent;
+  ui.analyzeLoudness.disabled = track.locked || !hasAudioComponent;
   ui.clipEditForm.querySelector('button[type="submit"]').disabled =
     track.locked;
   ui.stageRemove.disabled = track.locked;
@@ -1271,20 +1354,49 @@ function changedFieldLines(change) {
     trim_out_seconds: "Source out",
     timeline_start_seconds: "Timeline start",
     order_index: "Order",
+    audio_gain_db: "Clip gain",
+    audio_muted: "Clip mute",
+    audio_pan: "Clip pan",
+    audio_fade_in_seconds: "Fade in",
+    audio_fade_out_seconds: "Fade out",
+    audio_envelope: "Gain envelope",
+    mix_gain_db: "Track gain",
+    mix_muted: "Track mix mute",
+    mix_pan: "Track pan",
   };
   const lines = [];
   for (const [field, label] of Object.entries(labels)) {
     if (change.before[field] !== change.after[field]) {
-      const before =
-        field === "order_index"
-          ? change.before[field]
-          : formatSeconds(change.before[field]);
-      const after =
-        field === "order_index"
-          ? change.after[field]
-          : formatSeconds(change.after[field]);
+      const timeField = [
+        "trim_in_seconds",
+        "trim_out_seconds",
+        "timeline_start_seconds",
+        "audio_fade_in_seconds",
+        "audio_fade_out_seconds",
+      ].includes(field);
+      const display = (value) =>
+        Array.isArray(value)
+          ? `${value.length} point${value.length === 1 ? "" : "s"}`
+          : timeField
+            ? formatSeconds(value)
+            : String(value);
+      const before = display(change.before[field]);
+      const after = display(change.after[field]);
       lines.push(`${label}: ${before} → ${after}`);
     }
+  }
+  if (
+    change.before.mix && change.after.mix &&
+    JSON.stringify(change.before.mix) !== JSON.stringify(change.after.mix)
+  ) {
+    const before = change.before.mix;
+    const after = change.after.mix;
+    lines.push(
+      `Track mix: ${before.gain_db} dB / pan ${before.pan} / ` +
+      `${before.muted ? "muted" : "active"} → ` +
+      `${after.gain_db} dB / pan ${after.pan} / ` +
+      `${after.muted ? "muted" : "active"}`,
+    );
   }
   return lines;
 }
@@ -1378,7 +1490,14 @@ function stageEdit(edit) {
     if (value.kind === "manage_track") {
       return `track:${value.track_id}`;
     }
-    return `clip:${value.track_id || value.track_key}/${value.clip_id}`;
+    if (value.kind === "track_mix") {
+      return `track_mix:${value.track_id}`;
+    }
+    if (value.kind === "volume_envelope") {
+      return `envelope:${value.track_id}/${value.clip_id}/${value.point_id || value.action}`;
+    }
+    const domain = value.kind === "clip_audio" ? "audio" : "timing";
+    return `clip:${domain}:${value.track_id || value.track_key}/${value.clip_id}`;
   };
   state.draftHistory.push(cloneEdits(state.draftEdits));
   state.draftEdits = state.draftEdits.filter(
@@ -1506,6 +1625,26 @@ function showDetails(track, clip) {
       "Playback",
       `${clip.speed_factor}× · ${clip.reverse ? "reverse" : "forward"} · ` +
         `${clip.rotate_degrees}°`,
+    ),
+    detailRow(
+      "Clip audio",
+      `${clip.audio_gain_db ?? 0} dB · pan ${clip.audio_pan ?? 0} · ` +
+        `${clip.audio_muted ? "muted" : "active"}`,
+    ),
+    detailRow(
+      "Fades / envelope",
+      `${formatSeconds(clip.audio_fade_in_seconds ?? 0)} in · ` +
+        `${formatSeconds(clip.audio_fade_out_seconds ?? 0)} out · ` +
+        `${clip.audio_envelope?.length || 0} linear points`,
+    ),
+    detailRow(
+      "Track mix",
+      `${track.mix_gain_db ?? 0} dB · pan ${track.mix_pan ?? 0} · ` +
+        `${track.mix_muted ? "muted" : "active"}`,
+    ),
+    detailRow(
+      "Loudness evidence",
+      clip.loudness_analysis_id || "Not applied",
     ),
     detailRow(
       "Media access",
@@ -1688,7 +1827,7 @@ function videoThumbnailStrip(result) {
   return strip;
 }
 
-function audioWaveform(result) {
+function audioWaveform(result, clip) {
   if (!result || result.status !== "ready") {
     return analysisPlaceholder(result);
   }
@@ -1708,6 +1847,18 @@ function audioWaveform(result) {
   });
   path.setAttribute("d", commands.join(""));
   svg.append(path);
+  if (clip.audio_envelope?.length) {
+    const envelope = document.createElementNS(namespace, "polyline");
+    envelope.classList.add("gain-envelope");
+    const duration = Math.max(0.001, clip.effective_duration_seconds);
+    const values = clip.audio_envelope.map((point) => {
+      const x = Math.max(0, Math.min(100, (point[1] / duration) * 100));
+      const y = 36 - ((Math.max(-60, Math.min(24, point[2])) + 60) / 84) * 32;
+      return `${x.toFixed(3)},${y.toFixed(3)}`;
+    });
+    envelope.setAttribute("points", values.join(" "));
+    svg.append(envelope);
+  }
   return svg;
 }
 
@@ -1717,7 +1868,7 @@ function clipVisualization(track, clip) {
     return videoThumbnailStrip(result);
   }
   if (track.kind === "audio") {
-    return audioWaveform(result);
+    return audioWaveform(result, clip);
   }
   return analysisPlaceholder(null);
 }
@@ -2274,6 +2425,143 @@ ui.stageTrack.addEventListener("click", () => {
     ui.editFormMessage.textContent =
       error instanceof Error ? error.message : String(error);
   }
+});
+
+ui.stageAudio.addEventListener("click", () => {
+  if (!state.selected || state.selected.track.locked) return;
+  try {
+    const clip = state.selected.clip;
+    stageEdit({
+      schema_version: "1.0.0",
+      operation_id: newStableId("manual_audio"),
+      kind: "clip_audio",
+      track_key: state.selected.track.track_key,
+      track_id: state.selected.track.track_id,
+      clip_id: clip.clip_id,
+      gain_db: readFiniteInput(ui.audioGain, "Clip gain"),
+      muted: ui.audioMuted.checked,
+      pan: readFiniteInput(ui.audioPan, "Clip pan"),
+      fade_in_seconds: readFiniteInput(ui.audioFadeIn, "Fade in"),
+      fade_out_seconds: readFiniteInput(ui.audioFadeOut, "Fade out"),
+    });
+    ui.editFormMessage.classList.remove("error");
+    ui.editFormMessage.textContent =
+      "Clip audio settings staged. No timeline write has occurred.";
+  } catch (error) {
+    ui.editFormMessage.classList.add("error");
+    ui.editFormMessage.textContent = error.message || String(error);
+  }
+});
+
+ui.stageTrackMix.addEventListener("click", () => {
+  if (!state.selected || state.selected.track.locked) return;
+  try {
+    const track = state.selected.track;
+    stageEdit({
+      schema_version: "1.0.0",
+      operation_id: newStableId("manual_track_mix"),
+      kind: "track_mix",
+      track_key: track.track_key,
+      track_id: track.track_id,
+      gain_db: readFiniteInput(ui.audioTrackGain, "Track gain"),
+      muted: ui.audioTrackMuted.checked,
+      pan: readFiniteInput(ui.audioTrackPan, "Track pan"),
+    });
+  } catch (error) {
+    ui.editFormMessage.classList.add("error");
+    ui.editFormMessage.textContent = error.message || String(error);
+  }
+});
+
+function stageEnvelopeAction(action) {
+  if (!state.selected || state.selected.track.locked) return;
+  try {
+    const pointId = ui.audioPointId.value.trim();
+    const edit = {
+      schema_version: "1.0.0",
+      operation_id: newStableId("manual_envelope"),
+      kind: "volume_envelope",
+      track_key: state.selected.track.track_key,
+      track_id: state.selected.track.track_id,
+      clip_id: state.selected.clip.clip_id,
+      action,
+    };
+    if (action !== "clear") edit.point_id = pointId;
+    if (action === "upsert") {
+      edit.offset_seconds = readFiniteInput(ui.audioPointTime, "Point time");
+      edit.gain_db = readFiniteInput(ui.audioPointGain, "Point gain");
+    }
+    stageEdit(edit);
+  } catch (error) {
+    ui.editFormMessage.classList.add("error");
+    ui.editFormMessage.textContent = error.message || String(error);
+  }
+}
+
+ui.stageEnvelope.addEventListener("click", () => stageEnvelopeAction("upsert"));
+ui.deleteEnvelope.addEventListener("click", () => stageEnvelopeAction("delete"));
+ui.clearEnvelope.addEventListener("click", () => stageEnvelopeAction("clear"));
+
+ui.analyzeLoudness.addEventListener("click", async () => {
+  if (!state.selected || state.selected.track.locked) return;
+  ui.analyzeLoudness.disabled = true;
+  ui.audioAnalysisStatus.textContent = "Analyzing exact selected audio range…";
+  try {
+    const response = await fetch("/api/audio/loudness/analyze", {
+      method: "POST",
+      headers: {Accept: "application/json", "Content-Type": "application/json"},
+      body: JSON.stringify({
+        schema_name: "vistora.loudness-analysis-request",
+        schema_version: "1.0.0",
+        track_id: state.selected.track.track_id,
+        clip_id: state.selected.clip.clip_id,
+        target_lufs: -16,
+        max_true_peak_dbfs: -1,
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error?.message || "Analysis failed");
+    state.loudnessEvidence = payload;
+    ui.audioAnalysisStatus.textContent =
+      `${payload.integrated_lufs.toFixed(2)} LUFS / ` +
+      `${payload.true_peak_dbfs.toFixed(2)} dBTP; suggested ` +
+      `${payload.recommended_gain_db.toFixed(2)} dB` +
+      `${payload.cached ? " (cached)" : ""}.`;
+    ui.applyLoudness.disabled = false;
+  } catch (error) {
+    state.loudnessEvidence = null;
+    ui.applyLoudness.disabled = true;
+    ui.audioAnalysisStatus.textContent = error.message || String(error);
+  } finally {
+    ui.analyzeLoudness.disabled = false;
+  }
+});
+
+ui.applyLoudness.addEventListener("click", () => {
+  if (!state.selected || !state.loudnessEvidence) return;
+  const evidence = state.loudnessEvidence;
+  stageEdit({
+    schema_version: "1.0.0",
+    operation_id: newStableId("manual_loudness_apply"),
+    kind: "clip_audio",
+    track_key: state.selected.track.track_key,
+    track_id: state.selected.track.track_id,
+    clip_id: state.selected.clip.clip_id,
+    gain_db: evidence.recommended_gain_db,
+    normalization_evidence: {
+      schema_version: "1.0.0",
+      analysis_id: evidence.analysis_id,
+      analyzed_clip_digest: evidence.analyzed_clip_digest,
+      source_sha256: evidence.source_sha256,
+      integrated_lufs: evidence.integrated_lufs,
+      true_peak_dbfs: evidence.true_peak_dbfs,
+      target_lufs: evidence.target_lufs,
+      max_true_peak_dbfs: evidence.max_true_peak_dbfs,
+      applied_gain_db: evidence.recommended_gain_db,
+    },
+  });
+  ui.audioGain.value = String(evidence.recommended_gain_db);
+  ui.audioAnalysisStatus.textContent += " Gain staged; explicit confirmation remains required.";
 });
 
 ui.undoDraft.addEventListener("click", () => {

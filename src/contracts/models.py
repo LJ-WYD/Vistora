@@ -14,7 +14,7 @@ from pydantic import (
     model_validator,
 )
 
-from core.timeline import TimelineConfig
+from core.timeline import AppliedLoudnessNormalization, TimelineConfig
 
 
 CONTRACT_VERSION = "1.0.0"
@@ -449,12 +449,94 @@ class ManualTrackManage(ContractModel):
         return self
 
 
+class ManualClipAudio(ContractModel):
+    """User-authored exact clip audio-property proposal."""
+
+    operation_id: StableId
+    kind: Literal["clip_audio"] = "clip_audio"
+    track_key: str = Field(min_length=1)
+    track_id: StableId
+    clip_id: StableId
+    gain_db: float | None = Field(default=None, ge=-60, le=24)
+    muted: bool | None = None
+    pan: float | None = Field(default=None, ge=-1, le=1)
+    fade_in_seconds: float | None = Field(default=None, ge=0)
+    fade_out_seconds: float | None = Field(default=None, ge=0)
+    playback_rate: float | None = Field(default=None, gt=0, le=16)
+    normalization_evidence: AppliedLoudnessNormalization | None = None
+
+    @model_validator(mode="after")
+    def has_change(self) -> "ManualClipAudio":
+        if all(
+            value is None
+            for value in (
+                self.gain_db,
+                self.muted,
+                self.pan,
+                self.fade_in_seconds,
+                self.fade_out_seconds,
+                self.playback_rate,
+                self.normalization_evidence,
+            )
+        ):
+            raise ValueError("Manual clip audio edit requires a property")
+        return self
+
+
+class ManualTrackMix(ContractModel):
+    operation_id: StableId
+    kind: Literal["track_mix"] = "track_mix"
+    track_key: str = Field(min_length=1)
+    track_id: StableId
+    gain_db: float | None = Field(default=None, ge=-60, le=24)
+    muted: bool | None = None
+    pan: float | None = Field(default=None, ge=-1, le=1)
+
+    @model_validator(mode="after")
+    def has_change(self) -> "ManualTrackMix":
+        if self.gain_db is None and self.muted is None and self.pan is None:
+            raise ValueError("Manual track mix edit requires a property")
+        return self
+
+
+class ManualVolumeEnvelope(ContractModel):
+    operation_id: StableId
+    kind: Literal["volume_envelope"] = "volume_envelope"
+    track_key: str = Field(min_length=1)
+    track_id: StableId
+    clip_id: StableId
+    action: Literal["upsert", "delete", "clear"]
+    point_id: StableId | None = None
+    offset_seconds: float | None = Field(default=None, ge=0)
+    gain_db: float | None = Field(default=None, ge=-60, le=24)
+
+    @model_validator(mode="after")
+    def action_fields(self) -> "ManualVolumeEnvelope":
+        if self.action == "upsert" and (
+            self.point_id is None
+            or self.offset_seconds is None
+            or self.gain_db is None
+        ):
+            raise ValueError("Envelope upsert requires complete point fields")
+        if self.action == "delete" and self.point_id is None:
+            raise ValueError("Envelope delete requires point_id")
+        if self.action == "clear" and any(
+            value is not None
+            for value in (self.point_id, self.offset_seconds, self.gain_db)
+        ):
+            raise ValueError("Envelope clear does not accept point fields")
+        return self
+
+
 ManualEditOperation = Annotated[
     ManualClipUpdate
     | ManualClipRemove
     | ManualClipSplit
     | ManualClipLink
-    | ManualTrackManage,
+    | ManualTrackManage
+    | ManualClipAudio
+    | ManualTrackMix
+    | ManualVolumeEnvelope,
     Field(discriminator="kind"),
 ]
 

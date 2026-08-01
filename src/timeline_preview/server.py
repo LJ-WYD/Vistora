@@ -276,6 +276,7 @@ class PreviewApplication:
                 "manual_draft": True,
                 "manual_edit_apply": self.manual_edits is not None,
                 "confirmed_manual_dispatch": self.manual_edits is not None,
+                "audio_loudness_analysis": self.manual_edits is not None,
                 "plan_review": (
                     self.plan_review_enabled
                 ),
@@ -976,6 +977,10 @@ def _handler_class(
                     )
                     self._send_json(HTTPStatus.OK, result)
                     return
+                if route == "/api/audio/loudness/analyze":
+                    result = application.manual_edits.analyze_loudness(payload)
+                    self._send_json(HTTPStatus.OK, result)
+                    return
             except ManualEditValidationError as exc:
                 self._send_error_json(
                     HTTPStatus.UNPROCESSABLE_ENTITY,
@@ -1112,6 +1117,7 @@ def _handler_class(
             if route in {
                 "/api/manual-edits/validate",
                 "/api/manual-edits/apply",
+                "/api/audio/loudness/analyze",
             }:
                 self._manual_edit(route)
                 return

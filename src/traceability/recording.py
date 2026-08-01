@@ -12,9 +12,12 @@ from contracts import (
     EditingExecutionPlan,
     ManualClipLink,
     ManualClipSplit,
+    ManualClipAudio,
     ManualEditConfirmationRecord,
     ManualEditProposal,
     ManualTrackManage,
+    ManualTrackMix,
+    ManualVolumeEnvelope,
 )
 from timeline_query import TimelineSnapshot
 
@@ -261,7 +264,7 @@ class ManualTraceRecorder:
             for track in after_snapshot.tracks
         }
         for edit in proposal.edits:
-            if isinstance(edit, ManualTrackManage):
+            if isinstance(edit, (ManualTrackManage, ManualTrackMix)):
                 if (
                     edit.track_key not in before_tracks
                     or edit.track_key not in after_tracks
@@ -317,6 +320,12 @@ class ManualTraceRecorder:
                 raise ValueError(
                     "Manual update trace target is absent after application"
                 )
+            if isinstance(edit, (ManualClipAudio, ManualVolumeEnvelope)):
+                if before_clips[key] == after_clips[key]:
+                    raise ValueError(
+                        "Manual audio trace has no exact state change"
+                    )
+                continue
             actual = after_clips[key]
             expected = {
                 "trim_in_seconds": edit.trim_in_seconds,
@@ -331,7 +340,7 @@ class ManualTraceRecorder:
         effect_rows: list[tuple[Any, str, str, str, str]] = []
         seen_effects: set[tuple[str, str, str]] = set()
         for edit in proposal.edits:
-            if isinstance(edit, ManualTrackManage):
+            if isinstance(edit, (ManualTrackManage, ManualTrackMix)):
                 effect_rows.append(
                     (
                         edit,
@@ -467,7 +476,7 @@ class ManualTraceRecorder:
                 entity=TraceEntityReference(
                     entity_kind=(
                         "track"
-                        if isinstance(edit, ManualTrackManage)
+                        if isinstance(edit, (ManualTrackManage, ManualTrackMix))
                         else "clip"
                     ),
                     entity_id=clip_id,

@@ -303,6 +303,13 @@ class PreviewClipState(ReviewModel):
     reverse: bool
     rotate_degrees: int
     link_group_id: StableId | None = None
+    audio_gain_db: FiniteFloat = 0
+    audio_muted: bool = False
+    audio_pan: FiniteFloat = 0
+    audio_fade_in_seconds: FiniteFloat = 0
+    audio_fade_out_seconds: FiniteFloat = 0
+    audio_envelope: tuple[tuple[str, FiniteFloat, FiniteFloat], ...] = ()
+    loudness_analysis_id: StableId | None = None
     provisional: bool = False
 
 
@@ -310,6 +317,13 @@ class PreviewProjectSettings(ReviewModel):
     width: int = Field(gt=0)
     height: int = Field(gt=0)
     fps: int = Field(gt=0)
+
+
+class PreviewTrackMixState(ReviewModel):
+    track_id: StableId
+    gain_db: FiniteFloat
+    muted: bool
+    pan: FiniteFloat
 
 
 class ProposedEntityReference(ReviewModel):
@@ -332,6 +346,10 @@ class PlanChange(ReviewModel):
         "clip_speed",
         "clip_properties",
         "clip_linkage",
+        "clip_audio",
+        "audio_envelope",
+        "track_mix",
+        "audio_analysis",
         "track_management",
         "project_settings",
         "export_only",
@@ -350,6 +368,8 @@ class PlanChange(ReviewModel):
     after: PreviewClipState | None = None
     before_project: PreviewProjectSettings | None = None
     after_project: PreviewProjectSettings | None = None
+    before_track_mix: PreviewTrackMixState | None = None
+    after_track_mix: PreviewTrackMixState | None = None
     reason: str = Field(min_length=1)
     evidence: tuple[EvidenceSummary, ...] = ()
     current_provenance: ClipProvenanceSummary | None = None

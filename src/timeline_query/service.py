@@ -128,6 +128,20 @@ def _clip_snapshot(clip: ClipConfig, order_index: int) -> ClipSnapshot:
         reverse=clip.reverse,
         rotate_degrees=clip.rotate,
         link_group_id=clip.link_group_id,
+        audio_gain_db=clip.audio.gain_db,
+        audio_muted=clip.audio.muted,
+        audio_pan=clip.audio.pan,
+        audio_fade_in_seconds=clip.audio.fade_in_seconds,
+        audio_fade_out_seconds=clip.audio.fade_out_seconds,
+        audio_envelope=tuple(
+            (point.point_id, point.offset_seconds, point.gain_db)
+            for point in clip.audio.envelope
+        ),
+        loudness_analysis_id=(
+            clip.audio.normalization.analysis_id
+            if clip.audio.normalization is not None
+            else None
+        ),
     )
 
 
@@ -195,6 +209,9 @@ class TimelineSnapshotService:
                         enabled=track.enabled,
                         muted=track.muted,
                         locked=track.locked,
+                        mix_gain_db=track.mix.gain_db,
+                        mix_muted=track.mix.muted,
+                        mix_pan=track.mix.pan,
                         clips=clips,
                         clip_count=len(clips),
                         duration_seconds=max(0.0, duration),

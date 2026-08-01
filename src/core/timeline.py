@@ -1,9 +1,89 @@
 import os
 from typing import Any, List, Dict, Literal, Optional
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from moviepy import VideoFileClip, AudioFileClip, CompositeVideoClip, CompositeAudioClip
 
 TIMELINE_MODEL_VERSION = "2.0.0"
+
+
+class AudioEnvelopePoint(BaseModel):
+    """One deterministic linear gain-envelope point in clip-local time."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    schema_name: Literal["vistora.audio-envelope-point"] = (
+        "vistora.audio-envelope-point"
+    )
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    point_id: str = Field(
+        min_length=3,
+        max_length=160,
+        pattern=r"^[A-Za-z][A-Za-z0-9._:-]*$",
+    )
+    offset_seconds: float = Field(ge=0, allow_inf_nan=False)
+    gain_db: float = Field(ge=-60, le=24, allow_inf_nan=False)
+
+
+class AppliedLoudnessNormalization(BaseModel):
+    """Exact read-only analysis evidence used for an explicit gain change."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    schema_name: Literal["vistora.applied-loudness-normalization"] = (
+        "vistora.applied-loudness-normalization"
+    )
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    analysis_id: str = Field(min_length=3, max_length=160)
+    analyzed_clip_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    integrated_lufs: float = Field(ge=-120, le=20, allow_inf_nan=False)
+    true_peak_dbfs: float = Field(ge=-120, le=20, allow_inf_nan=False)
+    target_lufs: float = Field(ge=-36, le=-5, allow_inf_nan=False)
+    max_true_peak_dbfs: float = Field(ge=-9, le=0, allow_inf_nan=False)
+    applied_gain_db: float = Field(ge=-60, le=24, allow_inf_nan=False)
+
+
+class ClipAudioSettings(BaseModel):
+    """Versioned non-destructive audio controls for one clip component."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    schema_name: Literal["vistora.clip-audio-settings"] = (
+        "vistora.clip-audio-settings"
+    )
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    gain_db: float = Field(0, ge=-60, le=24, allow_inf_nan=False)
+    muted: bool = False
+    pan: float = Field(0, ge=-1, le=1, allow_inf_nan=False)
+    fade_in_seconds: float = Field(0, ge=0, allow_inf_nan=False)
+    fade_out_seconds: float = Field(0, ge=0, allow_inf_nan=False)
+    envelope: tuple[AudioEnvelopePoint, ...] = ()
+    normalization: AppliedLoudnessNormalization | None = None
+
+    @model_validator(mode="after")
+    def stable_envelope(self) -> "ClipAudioSettings":
+        identities = [point.point_id for point in self.envelope]
+        offsets = [point.offset_seconds for point in self.envelope]
+        if len(identities) != len(set(identities)):
+            raise ValueError("audio envelope point IDs must be unique")
+        if len(offsets) != len(set(offsets)):
+            raise ValueError("audio envelope offsets must be unique")
+        if list(self.envelope) != sorted(
+            self.envelope,
+            key=lambda point: (point.offset_seconds, point.point_id),
+        ):
+            raise ValueError("audio envelope points must be deterministically sorted")
+        return self
+
+
+class TrackMixSettings(BaseModel):
+    """Versioned deterministic mix controls applied to an audio source lane."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    schema_name: Literal["vistora.track-mix-settings"] = (
+        "vistora.track-mix-settings"
+    )
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    gain_db: float = Field(0, ge=-60, le=24, allow_inf_nan=False)
+    muted: bool = False
+    pan: float = Field(0, ge=-1, le=1, allow_inf_nan=False)
 
 
 class ClipConfig(BaseModel):
@@ -26,6 +106,27 @@ class ClipConfig(BaseModel):
         pattern=r"^[A-Za-z][A-Za-z0-9._:-]*$",
         description="Explicit linked-clip group; never inferred.",
     )
+    audio: ClipAudioSettings = Field(default_factory=ClipAudioSettings)
+
+    @model_validator(mode="after")
+    def audio_timing_is_bounded(self) -> "ClipConfig":
+        if self.speed_factor <= 0:
+            return self
+        duration = (self.trim_out - self.trim_in) / self.speed_factor
+        if duration <= 0:
+            return self
+        if self.audio.fade_in_seconds > duration + 1e-6:
+            raise ValueError("audio fade-in exceeds effective clip duration")
+        if self.audio.fade_out_seconds > duration + 1e-6:
+            raise ValueError("audio fade-out exceeds effective clip duration")
+        if self.audio.fade_in_seconds + self.audio.fade_out_seconds > duration + 1e-6:
+            raise ValueError("combined audio fades exceed effective clip duration")
+        if any(
+            point.offset_seconds > duration + 1e-6
+            for point in self.audio.envelope
+        ):
+            raise ValueError("audio envelope point exceeds effective clip duration")
+        return self
 
 
 class TrackConfig(BaseModel):
@@ -38,6 +139,7 @@ class TrackConfig(BaseModel):
     enabled: bool = True
     muted: bool = False
     locked: bool = False
+    mix: TrackMixSettings = Field(default_factory=TrackMixSettings)
     clips: List[ClipConfig] = Field(default_factory=list)
 
 
@@ -151,7 +253,12 @@ class TimelineRenderer:
         audio_tracks = [
             track
             for track in ordered_tracks
-            if track.enabled and not track.muted and track.kind == "audio"
+            if (
+                track.enabled
+                and not track.muted
+                and not track.mix.muted
+                and track.kind == "audio"
+            )
         ]
         video_track = TrackConfig(
             id="render_video",
@@ -212,6 +319,11 @@ class TimelineRenderer:
         requires_multitrack = (
             len(video_tracks) > 1
             or len(audio_tracks) > 1
+            or any(
+                track.mix != TrackMixSettings()
+                or any(clip.audio != ClipAudioSettings() for clip in track.clips)
+                for track in ordered_tracks
+            )
             or any(
                 key not in {"video", "audio"}
                 and track.enabled
@@ -382,7 +494,7 @@ class TimelineRenderer:
         audio_items = [
             (track, clip)
             for track in tracks
-            if track.kind == "audio" and not track.muted
+            if track.kind == "audio" and not track.muted and not track.mix.muted
             for clip in sorted(
                 track.clips,
                 key=lambda item: (item.timeline_start, item.id),
@@ -435,6 +547,85 @@ class TimelineRenderer:
                 filters.append(f"atempo={remaining:.12g}")
             return filters
 
+        def pan_filter(value: float) -> str | None:
+            if abs(value) <= 1e-9:
+                return None
+            import math
+
+            left = math.sqrt((1.0 - value) / 2.0) * 1.41421356237
+            right = math.sqrt((1.0 + value) / 2.0) * 1.41421356237
+            return (
+                "pan=stereo|"
+                f"c0={left:.12g}*c0|c1={right:.12g}*c1"
+            )
+
+        def envelope_filter(clip: ClipConfig) -> str | None:
+            points = clip.audio.envelope
+            if not points:
+                return None
+            import math
+
+            amplitudes = [10 ** (point.gain_db / 20.0) for point in points]
+            expression = f"{amplitudes[-1]:.12g}"
+            for index in range(len(points) - 2, -1, -1):
+                left_point = points[index]
+                right_point = points[index + 1]
+                left = amplitudes[index]
+                right = amplitudes[index + 1]
+                span = right_point.offset_seconds - left_point.offset_seconds
+                interpolated = (
+                    f"{left:.12g}+(t-{left_point.offset_seconds:.12g})*"
+                    f"{(right-left):.12g}/{span:.12g}"
+                )
+                expression = (
+                    f"if(lt(t,{right_point.offset_seconds:.12g}),"
+                    f"{interpolated},{expression})"
+                )
+            expression = (
+                f"if(lt(t,{points[0].offset_seconds:.12g}),"
+                f"{amplitudes[0]:.12g},{expression})"
+            )
+            return f"volume='{expression}':eval=frame"
+
+        def audio_filters(
+            track: TrackConfig,
+            clip: ClipConfig,
+            clip_duration_seconds: float,
+        ) -> list[str]:
+            chain = ["aformat=channel_layouts=stereo"]
+            legacy_volume = 1.0 if clip.volume is None else clip.volume
+            track_gain = track.mix.gain_db if track.kind == "audio" else 0.0
+            gain = legacy_volume * 10 ** (
+                (clip.audio.gain_db + track_gain) / 20.0
+            )
+            if clip.audio.muted:
+                gain = 0.0
+            chain.append(f"volume={gain:.12g}")
+            pan = clip.audio.pan + (
+                track.mix.pan if track.kind == "audio" else 0.0
+            )
+            pan_stage = pan_filter(max(-1.0, min(1.0, pan)))
+            if pan_stage:
+                chain.append(pan_stage)
+            envelope_stage = envelope_filter(clip)
+            if envelope_stage:
+                chain.append(envelope_stage)
+            if clip.audio.fade_in_seconds > 0:
+                chain.append(
+                    "afade=t=in:st=0:"
+                    f"d={clip.audio.fade_in_seconds:.12g}"
+                )
+            if clip.audio.fade_out_seconds > 0:
+                start = max(
+                    0.0,
+                    clip_duration_seconds - clip.audio.fade_out_seconds,
+                )
+                chain.append(
+                    f"afade=t=out:st={start:.12g}:"
+                    f"d={clip.audio.fade_out_seconds:.12g}"
+                )
+            return chain
+
         duration = max(
             (
                 clip.timeline_start
@@ -480,35 +671,40 @@ class TimelineRenderer:
                 if (
                     clip.keep_audio
                     and not track.muted
+                    and not clip.audio.muted
                     and has_audio(clip.source)
                 ):
+                    effective_duration = (
+                        clip.trim_out - clip.trim_in
+                    ) / clip.speed_factor
                     audio_chain = [
                         f"[{index}:a]atrim=start={clip.trim_in:.12g}:"
                         f"end={clip.trim_out:.12g}",
                         "asetpts=PTS-STARTPTS",
                         *atempo(clip.speed_factor),
+                        *audio_filters(track, clip, effective_duration),
                     ]
                     if clip.reverse:
                         audio_chain.append("areverse")
-                    if clip.volume is not None:
-                        audio_chain.append(f"volume={clip.volume:.12g}")
                     audio_chain.extend((
                         f"adelay={delay_ms}|{delay_ms}",
                         f"atrim=end={duration:.12g}[audio_{index}]",
                     ))
                     filters.append(",".join(audio_chain))
                     audio_labels.append(f"[audio_{index}]")
-            elif has_audio(clip.source):
+            elif not clip.audio.muted and has_audio(clip.source):
+                effective_duration = (
+                    clip.trim_out - clip.trim_in
+                ) / clip.speed_factor
                 audio_chain = [
                     f"[{index}:a]atrim=start={clip.trim_in:.12g}:"
                     f"end={clip.trim_out:.12g}",
                     "asetpts=PTS-STARTPTS",
                     *atempo(clip.speed_factor),
+                    *audio_filters(track, clip, effective_duration),
                 ]
                 if clip.reverse:
                     audio_chain.append("areverse")
-                if clip.volume is not None:
-                    audio_chain.append(f"volume={clip.volume:.12g}")
                 audio_chain.extend((
                     f"adelay={delay_ms}|{delay_ms}",
                     f"atrim=end={duration:.12g}[audio_{index}]",
@@ -529,7 +725,9 @@ class TimelineRenderer:
             filters.append(
                 "".join(audio_labels)
                 + f"amix=inputs={len(audio_labels)}:"
-                f"duration=longest:normalize=0[audio_out]"
+                "duration=longest:normalize=0,"
+                "alimiter=limit=0.95:level=false,"
+                "aresample=48000,aformat=channel_layouts=stereo[audio_out]"
             )
         command.extend([
             "-filter_complex",
@@ -538,7 +736,9 @@ class TimelineRenderer:
             "[video_out]",
         ])
         if audio_labels:
-            command.extend(["-map", "[audio_out]", "-c:a", "aac"])
+            command.extend([
+                "-map", "[audio_out]", "-c:a", "aac", "-ar", "48000", "-ac", "2"
+            ])
         command.extend([
             "-c:v",
             "libx264",

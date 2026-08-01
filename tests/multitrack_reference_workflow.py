@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from agent import EditingAgent  # noqa: E402
 from atomic_runtime import build_production_registry  # noqa: E402
+from audio_analysis import LoudnessAnalysisRequest, LoudnessAnalysisService  # noqa: E402
 from contracts import (  # noqa: E402
     DirectorOperation,
     DirectorPlan,
@@ -22,7 +23,12 @@ from contracts import (  # noqa: E402
     SourceEvidenceReference,
 )
 from core import timeline_manager  # noqa: E402
-from core.timeline import ClipConfig, TimelineConfig, TrackConfig  # noqa: E402
+from core.timeline import (  # noqa: E402
+    AppliedLoudnessNormalization,
+    ClipConfig,
+    TimelineConfig,
+    TrackConfig,
+)
 from plan_review import (  # noqa: E402
     PlanDiffRequest,
     ProposedEditingExecutionPlan,
@@ -237,7 +243,79 @@ def run_multitrack_reference_workflow() -> dict:
                     ),
                 ),
             )
+            loudness = LoudnessAnalysisService().analyze(
+                timeline,
+                LoudnessAnalysisRequest(
+                    track_id="track_audio_dialogue",
+                    clip_id="clip_audio_dialogue",
+                    target_lufs=-16,
+                    max_true_peak_dbfs=-1,
+                ),
+            )
+            loudness_evidence = AppliedLoudnessNormalization(
+                analysis_id=loudness.analysis_id,
+                analyzed_clip_digest=loudness.analyzed_clip_digest,
+                source_sha256=loudness.source_sha256,
+                integrated_lufs=loudness.integrated_lufs,
+                true_peak_dbfs=loudness.true_peak_dbfs,
+                target_lufs=loudness.target_lufs,
+                max_true_peak_dbfs=loudness.max_true_peak_dbfs,
+                applied_gain_db=loudness.recommended_gain_db,
+            )
             operations = (
+                DirectorOperation(
+                    operation_id="operation_dialogue_loudness",
+                    tool_name="AudioSetClipPropertiesSkill",
+                    arguments={
+                        "track_id": "track_audio_dialogue",
+                        "clip_id": "clip_audio_dialogue",
+                        "gain_db": loudness.recommended_gain_db,
+                        "pan": 0.2,
+                        "fade_in_seconds": 0.1,
+                        "fade_out_seconds": 0.2,
+                        "normalization_evidence": loudness_evidence.model_dump(mode="json"),
+                    },
+                    rationale="Normalize and place the verified dialogue safely.",
+                    expected_effect="Apply analyzed gain, pan, and bounded fades.",
+                    evidence_ids=("evidence_audio_dialogue",),
+                ),
+                DirectorOperation(
+                    operation_id="operation_music_mix",
+                    tool_name="AudioSetTrackMixSkill",
+                    arguments={
+                        "track_id": "track_audio_music",
+                        "gain_db": -6,
+                        "pan": -0.25,
+                    },
+                    rationale="Place the music under the verified dialogue.",
+                    expected_effect="Apply deterministic track gain and pan.",
+                ),
+                DirectorOperation(
+                    operation_id="operation_dialogue_envelope",
+                    tool_name="AudioSetVolumeEnvelopeSkill",
+                    arguments={
+                        "track_id": "track_audio_dialogue",
+                        "clip_id": "clip_audio_dialogue",
+                        "action": "upsert",
+                        "point_id": "envelope_dialogue_mid",
+                        "offset_seconds": 1,
+                        "gain_db": -3,
+                    },
+                    rationale="Add one bounded linear dialogue automation point.",
+                    expected_effect="Create deterministic clip-local automation.",
+                    evidence_ids=("evidence_audio_dialogue",),
+                ),
+                DirectorOperation(
+                    operation_id="operation_music_mute",
+                    tool_name="AudioSetClipPropertiesSkill",
+                    arguments={
+                        "track_id": "track_audio_music",
+                        "clip_id": "clip_audio_music",
+                        "muted": True,
+                    },
+                    rationale="Mute the optional music layer for this reference cut.",
+                    expected_effect="Exclude only the selected music component.",
+                ),
                 DirectorOperation(
                     operation_id="operation_linked_split",
                     tool_name="VideoSplitClipSkill",
@@ -370,6 +448,8 @@ def run_multitrack_reference_workflow() -> dict:
                 "current_video_clip_count": current.video_clip_count,
                 "current_audio_clip_count": current.audio_clip_count,
                 "rollback_status": rollback.status,
+                "loudness_analysis_id": loudness.analysis_id,
+                "loudness_gain_db": loudness.recommended_gain_db,
                 "output": metadata,
             }
     finally:
