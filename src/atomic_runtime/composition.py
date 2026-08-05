@@ -43,6 +43,7 @@ from skills.video_timeline_edits import (
     VideoMoveClipSkill,
     VideoRemoveClipSkill,
     VideoSetClipPropertiesSkill,
+    VideoSetClipFreezeFrameSkill,
     VideoSplitClipSkill,
     VideoTrimClipSkill,
 )
@@ -139,6 +140,7 @@ class CoreTimelineEditResult(_Result):
         "overwrite",
         "remove",
         "set_properties",
+        "set_freeze_frame",
         "manage_track",
         "set_clip_link",
         "set_clip_audio",
@@ -268,7 +270,7 @@ def build_production_registry(
     )
     return AtomicSkillRegistry(
         registry_id="registry_atomic_skills",
-        registry_revision=8,
+        registry_revision=9,
         entries=(
             _entry(
                 VideoAddClipSkill(),
@@ -525,6 +527,13 @@ def build_production_registry(
                         )
                     ),
                     VideoSetClipPropertiesSkill(
+                        **(
+                            {"id_factory": timeline_id_factory}
+                            if timeline_id_factory is not None
+                            else {}
+                        )
+                    ),
+                    VideoSetClipFreezeFrameSkill(
                         **(
                             {"id_factory": timeline_id_factory}
                             if timeline_id_factory is not None

@@ -258,10 +258,11 @@ and richer editing skills are not implemented.
 
 `src/plan_review/` provides strict version `1.0.0` contracts and a deterministic read-only diff engine for the period before confirmation. A `PlanDiffRequest` binds an exact timeline snapshot ID/revision/digest, Director plan ID/version/digest, non-executable proposed execution-plan digest, and the exact registered tool-schema set. The engine validates proposed arguments with the current registry schemas, simulates supported semantics on detached clip data, and returns stable before/after changes, source-evidence links, provenance summaries, warnings, and net counts. Repeating the same request produces the same document and digest; snapshot or registry drift requires regeneration.
 
-The current semantic adapters cover non-reverse video add (with supplied
+The current semantic adapters cover non-reverse legacy video add (with supplied
 opaque media facts, including first-clip canvas adoption), safe legacy clip
 property/speed modification, exact-ID
-split/trim/move/insert/overwrite/lift/ripple-delete/playback-property
+split/trim/move/insert/overwrite/lift/ripple-delete/playback-property,
+declarative reverse, and freeze-frame
 operations across arbitrary video/audio tracks, explicit current-only versus
 linked-group effects, clip/track audio mixing, linear gain envelopes,
 read-only loudness analysis with explicit evidenced gain application, track
@@ -269,7 +270,7 @@ management, link/unlink, bounded visual keyframe curves, validated clip masks,
 bounded compositing declarations, timeline clear/default
 project reset, and export timeline effects. Ripple, linked members, and
 overwrite-retained sides are shown as consequential changes. Locked-track
-proposals fail closed. Proxy-generating reverse operations, timelapse output,
+proposals fail closed. Legacy proxy-generating add/modify operations, timelapse output,
 and registered tools without an adapter are blockers rather than fabricated
 previews. Export paths and configured source paths never cross the browser
 boundary.
@@ -298,7 +299,7 @@ The ledger keeps one stable logical identity for the workspace while every revie
 ## Atomic skill registry and execution gateway
 
 `src/atomic_runtime/` is the single production composition root for the
-thirty-nine existing atomic skills. A fresh immutable `AtomicSkillRegistry` carries an
+forty existing atomic skills. A fresh immutable `AtomicSkillRegistry` carries an
 explicit ID, semantic version, revision, deterministic input-schema digest, and
 full descriptor digest. Every frozen `SkillDescriptor` declares the stable
 skill version, exact input and output schemas, timeline/media/file/external
@@ -328,10 +329,11 @@ transactional or reversible.
 
 `src/timeline_edit/` defines the detached deterministic edit engine and shared
 same-directory durable transaction used by the professional core edit
-foundation. Six versioned exact-`clip_id` tools cover split, source trim with
+foundation. Versioned exact-`clip_id` tools cover split, source trim with
 optional ripple, explicit move with optional per-track ripple,
-insert/overwrite, lift/ripple remove, and playback properties (speed,
-volume/mute, embedded audio, rotation). `TimelineManageTrackSkill` adds,
+insert/overwrite, lift/ripple remove, playback properties (speed, declarative
+reverse, volume/mute, embedded audio, rotation), and a versioned video-only
+freeze frame with an exact source time and hold duration. `TimelineManageTrackSkill` adds,
 updates, removes empty tracks, or changes deterministic order; the separate
 `TimelineSetClipLinkSkill` explicitly links/unlinks exact clip references.
 All operate on any configured video/audio track, return structured
@@ -363,8 +365,11 @@ restores the prior timeline bytes.
 
 `VideoModifyClipSkill` and index-based manual/order fields remain explicit
 legacy compatibility surfaces. Property-only edits can use
-`VideoSetClipPropertiesSkill` without generating a reverse proxy. Existing
-reverse behavior is not expanded or promised transactionally reversible.
+`VideoSetClipPropertiesSkill` without generating a reverse proxy.
+`VideoSetClipFreezeFrameSkill` stores no proxy or still file, carries no
+embedded audio, and is rendered from the exact bounded source frame. Legacy
+`VideoModifyClipSkill` retains its best-effort proxy behavior only for
+compatibility.
 Linked A/V and arbitrary video/audio track foundations are implemented.
 Automatic link inference, linked-source ingest as one operation,
 transcription/ASR, motion tracking, denoise/de-reverb/source separation, plugin hosting, AI audio
@@ -440,7 +445,7 @@ processing, not a color-managed HDR, LUT, or secondary-grade pipeline.
 video clip IDs, reject locked/non-video targets, copy only to explicitly named
 clips, never spread through linked audio, and use the shared atomic timeline
 transaction. Detached review, confirmation/workflow, Editing Agent, trace,
-rollback, snapshot v7, Director context, and the manual draft UI carry the
+rollback, snapshot v8, Director context, and the manual draft UI carry the
 same visual state and digest. Browser video/CSS preview is labeled an
 approximation; final FFmpeg export is authoritative. Thumbnail analysis can
 request original or applied mode, and its cache key binds the complete visual
@@ -557,7 +562,7 @@ never propagate through linked audio, and use the shared atomic project-state
 transaction. Split and trim rebase mask curves deterministically, copy issues
 new mask/curve/keyframe IDs, and remove emits truthful mask tombstones.
 Detached plan/manual review, explicit confirmation, gateway execution,
-snapshot v7, provenance, and rollback share the same state.
+snapshot v8, provenance, and rollback share the same state.
 
 Final FFmpeg export generates its alpha expression only from validated mask
 fields and composites masked clips in deterministic track order. The browser

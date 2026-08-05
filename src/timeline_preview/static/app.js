@@ -356,7 +356,11 @@ function safeChangeState(stateValue) {
     `${formatSeconds(stateValue.timeline_end_seconds)} · ` +
     `${formatSeconds(stateValue.trim_in_seconds)}–` +
     `${formatSeconds(stateValue.trim_out_seconds)} source · ` +
-    `${stateValue.speed_factor}× · audio ${stateValue.audio_gain_db ?? 0} dB · ` +
+    (stateValue.freeze_frame_source_time_seconds != null
+      ? `freeze @ ${formatSeconds(stateValue.freeze_frame_source_time_seconds)} / ` +
+        `${formatSeconds(stateValue.freeze_frame_duration_seconds)} · `
+      : `${stateValue.speed_factor}× · `) +
+    `audio ${stateValue.audio_gain_db ?? 0} dB · ` +
     `pan ${stateValue.audio_pan ?? 0} · ` +
     `${stateValue.audio_envelope?.length || 0} envelope points`
   );
@@ -2407,8 +2411,11 @@ function showDetails(track, clip) {
     detailRow("Source ID", clip.source.source_id),
     detailRow(
       "Playback",
-      `${clip.speed_factor}× · ${clip.reverse ? "reverse" : "forward"} · ` +
-        `${clip.rotate_degrees}°`,
+      clip.freeze_frame_source_time_seconds != null
+        ? `freeze @ ${formatSeconds(clip.freeze_frame_source_time_seconds)} · ` +
+          `${formatSeconds(clip.freeze_frame_duration_seconds)} hold · silent`
+        : `${clip.speed_factor}× · ${clip.reverse ? "reverse" : "forward"} · ` +
+          `${clip.rotate_degrees}°`,
     ),
     detailRow(
       "Clip audio",
@@ -2540,7 +2547,10 @@ function selectClip(track, clip, element) {
     "Previewing allowlisted media. Playback updates the local playhead only.";
 
   const seekToTrim = () => {
-    const safeTime = Math.max(0, clip.trim_in_seconds);
+    const safeTime = Math.max(
+      0,
+      clip.freeze_frame_source_time_seconds ?? clip.trim_in_seconds,
+    );
     if (Number.isFinite(ui.previewVideo.duration)) {
       ui.previewVideo.currentTime = Math.min(
         safeTime,
@@ -2549,7 +2559,12 @@ function selectClip(track, clip, element) {
     } else {
       ui.previewVideo.currentTime = safeTime;
     }
-    if (clip.speed_factor >= 0.25 && clip.speed_factor <= 4) {
+    if (clip.freeze_frame_source_time_seconds != null) {
+      ui.previewVideo.pause();
+      ui.previewVideo.playbackRate = 1;
+      ui.previewStatus.textContent =
+        "Freeze-frame preview is pinned to the reviewed source frame; final export uses the exact hold duration.";
+    } else if (clip.speed_factor >= 0.25 && clip.speed_factor <= 4) {
       ui.previewVideo.playbackRate = clip.speed_factor;
     } else {
       ui.previewVideo.playbackRate = 1;

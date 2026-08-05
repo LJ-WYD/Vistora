@@ -68,12 +68,12 @@ def test_reference_main_workflow_is_traceable_and_repeatable() -> None:
     )
 
     plan_ref = first.confirmation.plan_ref
-    assert len({request.request_id for request in first.requests}) == 4
+    assert len({request.request_id for request in first.requests}) == 6
     assert all(
         request.request_id.startswith("atomic_request_reference_")
         for request in first.requests
     )
-    assert len({result.result_id for result in first.results}) == 4
+    assert len({result.result_id for result in first.results}) == 6
     assert all(
         result.result_id.startswith("atomic_result_reference_")
         for result in first.results
@@ -99,13 +99,19 @@ def test_reference_main_workflow_is_traceable_and_repeatable() -> None:
     assert first.results[2].payload["modified_clip_ids"] == [
         "clip_reference_main"
     ]
-    assert first.results[3].payload["output_path"] == (
+    assert first.results[3].payload["modified_clip_ids"] == [
+        "clip_reference_main"
+    ]
+    assert first.results[4].payload["modified_clip_ids"] == [
+        "clip_reference_main"
+    ]
+    assert first.results[5].payload["output_path"] == (
         "tests/test_data/reference_workflow/output.mp4"
     )
     assert first.output_metadata["video_codec"] == "h264"
     assert first.output_metadata["width"] == 320
     assert first.output_metadata["height"] == 180
-    assert first.output_metadata["frame_rate"] == "24/1"
+    assert first.output_metadata["frame_rate"] == "30/1"
     assert first.output_metadata["audio_stream_count"] == 0
     assert abs(first.output_metadata["duration_seconds"] - 1.25) <= 0.08
     assert first.timeline_state_removed is True
@@ -127,11 +133,11 @@ def test_reference_main_workflow_is_traceable_and_repeatable() -> None:
     assert first.no_material_chain["artifact_accepted"] is True
     assert first.no_material_chain["catalog_revision"] == 1
     assert first.no_material_chain["catalog_material_id"].startswith("source_")
-    assert first.trace_document.revision == 5
+    assert first.trace_document.revision == 7
     assert tuple(
         trace.trace_sequence
         for trace in first.trace_document.confirmed_traces
-    ) == (1, 2, 3, 4)
+    ) == (1, 2, 3, 4, 5, 6)
     insert_relation = first.trace_document.confirmed_traces[1].relations[0]
     assert insert_relation.origin_kind == "director_plan"
     assert insert_relation.entity.entity_id == "clip_reference_main"
@@ -143,7 +149,12 @@ def test_reference_main_workflow_is_traceable_and_repeatable() -> None:
     assert trim_relation.relation_type == "modifies"
     assert trim_relation.entity.entity_id == "clip_reference_main"
     assert trim_relation.evidence_ids == insert_relation.evidence_ids
-    export_relations = first.trace_document.confirmed_traces[3].relations
+    reverse_relation = first.trace_document.confirmed_traces[3].relations[0]
+    assert reverse_relation.relation_type == "modifies"
+    freeze_relation = first.trace_document.confirmed_traces[4].relations[0]
+    assert freeze_relation.relation_type == "modifies"
+    assert freeze_relation.evidence_ids == insert_relation.evidence_ids
+    export_relations = first.trace_document.confirmed_traces[5].relations
     generated = [
         relation
         for relation in export_relations

@@ -166,7 +166,7 @@ def test_subtitle_models_are_frozen_strict_and_snapshot_is_detached() -> None:
         )
     before = timeline.model_dump(mode="json")
     snapshot = TimelineSnapshotService.snapshot(timeline)
-    assert snapshot.schema_version == "7.0.0"
+    assert snapshot.schema_version == "8.0.0"
     assert snapshot.subtitle_track_count == 1
     assert snapshot.subtitle_cue_count == 2
     assert snapshot.subtitle_tracks[0].cues[0].text == "First line"
@@ -289,7 +289,7 @@ def test_registry_gateway_requires_exact_confirmation_and_is_transactional(
     monkeypatch.setattr(timeline_manager, "PROJECT_FILE", str(project))
     monkeypatch.setattr(timeline_manager, "WORKSPACE_DIR", str(project.parent))
     registry = build_production_registry()
-    assert registry.reference.registry_revision == 8
+    assert registry.reference.registry_revision == 9
     descriptor = registry.descriptor("SubtitleEditCueSkill")
     assert descriptor.transactionality == "atomic_project_state"
     assert descriptor.preview_supported is True

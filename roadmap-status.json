@@ -129,7 +129,7 @@
     {
       "id": "O11",
       "original_summary": "补齐基础剪辑原子能力",
-      "status": "partial",
+      "status": "in_progress",
       "commits": ["eba5bdb3325f6eccfbb62c4632668c34c6ae4b5f", "a0a4f75f8485e0bd90c9900ca8bffcbe22b04c90", "5c9b73e8e4f0f96c764315aea80797dbdbd72856"],
       "remote_verified": true,
       "implementation_paths": ["src/timeline_edit", "src/skills/video_timeline_edits.py", "src/audio_editing"],

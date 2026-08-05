@@ -7,8 +7,8 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-TIMELINE_SNAPSHOT_VERSION = "7.0.0"
-SnapshotVersion = Literal["2.0.0", "3.0.0", "4.0.0", "5.0.0", "6.0.0", "7.0.0"]
+TIMELINE_SNAPSHOT_VERSION = "8.0.0"
+SnapshotVersion = Literal["2.0.0", "3.0.0", "4.0.0", "5.0.0", "6.0.0", "7.0.0", "8.0.0"]
 SnapshotId = Annotated[
     str,
     Field(
@@ -224,6 +224,8 @@ class ClipSnapshot(ReadModel):
     volume: FiniteFloat | None
     keep_audio: bool
     reverse: bool
+    freeze_frame_source_time_seconds: FiniteFloat | None = None
+    freeze_frame_duration_seconds: FiniteFloat | None = None
     rotate_degrees: int
     link_group_id: SnapshotId | None = None
     audio_gain_db: FiniteFloat = 0

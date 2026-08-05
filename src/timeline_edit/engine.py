@@ -12,6 +12,7 @@ from core.timeline import (
     AudioEnvelopePoint,
     ClipAudioSettings,
     ClipConfig,
+    FreezeFrameSettings,
     ClipColorAdjustment,
     ClipCompositeSettings,
     ClipTransform,
@@ -44,6 +45,8 @@ def _random_id(prefix: str) -> str:
 
 
 def clip_duration(clip: ClipConfig) -> float:
+    if clip.freeze_frame is not None:
+        return clip.freeze_frame.duration_seconds
     return (clip.trim_out - clip.trim_in) / clip.speed_factor
 
 
@@ -122,6 +125,10 @@ class TimelineEditEngine:
                 if clip_duration(clip) <= TIME_EPSILON:
                     raise TimelineEditError(
                         f"Clip {clip.id} has zero effective duration"
+                    )
+                if clip.freeze_frame is not None and track.kind != "video":
+                    raise TimelineEditError(
+                        "Freeze-frame playback is supported only on video clips"
                     )
                 crop_curves = {
                     item.property_path: item
@@ -703,6 +710,10 @@ class TimelineEditEngine:
         left, right = clips[left_index], clips[right_index]
         if abs(clip_end(left) - right.timeline_start) > TIME_EPSILON:
             return False
+        if transition.kind != "cut" and (
+            left.freeze_frame is not None or right.freeze_frame is not None
+        ):
+            return False
         if transition.media_type == "video":
             return track.kind == "video"
         return track.kind == "audio" or (
@@ -1065,12 +1076,10 @@ class TimelineEditEngine:
                 for current in candidate.clips
             ):
                 raise TimelineEditError("Split output clip ID already exists")
-            source_split = clip.trim_in + (
-                split_at - clip.timeline_start
-            ) * clip.speed_factor
+            split_offset = split_at - clip.timeline_start
+            source_split = clip.trim_in + split_offset * clip.speed_factor
             original_out = clip.trim_out
             original_duration = clip_duration(clip)
-            split_offset = split_at - clip.timeline_start
             left_audio, right_audio = self._split_audio(
                 clip.audio, split_offset, original_duration
             )
@@ -1078,14 +1087,29 @@ class TimelineEditEngine:
                 clip, split_offset, new_id
             )
             left_masks, right_masks = self._split_masks(clip, split_offset)
-            clip.trim_out = source_split
+            original_freeze = clip.freeze_frame
+            if original_freeze is None:
+                clip.trim_out = source_split
+            else:
+                clip.freeze_frame = original_freeze.model_copy(
+                    update={"duration_seconds": split_offset}
+                )
             clip.audio = left_audio
             clip.visual_automations = left_automation
             clip.masks = left_masks
             right = clip.model_copy(deep=True)
             right.id = new_id
-            right.trim_in = source_split
-            right.trim_out = original_out
+            if original_freeze is None:
+                right.trim_in = source_split
+                right.trim_out = original_out
+            else:
+                right.trim_in = clip.trim_in
+                right.trim_out = original_out
+                right.freeze_frame = original_freeze.model_copy(
+                    update={
+                        "duration_seconds": original_duration - split_offset
+                    }
+                )
             right.timeline_start = split_at
             right.audio = right_audio
             right.visual_automations = right_automation
@@ -1148,6 +1172,11 @@ class TimelineEditEngine:
         )
         target = next(item for item in members if item[2].id == clip_id)
         target_clip = target[2]
+        if any(clip.freeze_frame is not None for _, _, clip in members):
+            raise TimelineEditError(
+                "Source-range trim is not defined for frozen-frame clips; "
+                "set a new freeze duration instead"
+            )
         subtitle_anchor = clip_end(target_clip)
         if trim_out <= trim_in + TIME_EPSILON:
             raise TimelineEditError("Trim must retain positive source duration")
@@ -1437,19 +1466,33 @@ class TimelineEditEngine:
                     < other_end - TIME_EPSILON
                 ):
                     split_offset = start - other.timeline_start
-                    source_split = other.trim_in + (
-                        split_offset
-                    ) * other.speed_factor
+                    source_split = other.trim_in + split_offset * other.speed_factor
                     original_out = other.trim_out
+                    original_freeze = other.freeze_frame
                     left_curves, right_curves = self._split_visual(
                         other, split_offset, "pending"
                     )
-                    other.trim_out = source_split
+                    if original_freeze is None:
+                        other.trim_out = source_split
+                    else:
+                        other.freeze_frame = original_freeze.model_copy(
+                            update={"duration_seconds": split_offset}
+                        )
                     other.visual_automations = left_curves
                     right = other.model_copy(deep=True)
                     right.id = self.id_factory("clip")
-                    right.trim_in = source_split
-                    right.trim_out = original_out
+                    if original_freeze is None:
+                        right.trim_in = source_split
+                        right.trim_out = original_out
+                    else:
+                        right.trim_in = other.trim_in
+                        right.trim_out = original_out
+                        right.freeze_frame = original_freeze.model_copy(
+                            update={
+                                "duration_seconds": original_freeze.duration_seconds
+                                - split_offset
+                            }
+                        )
                     right.timeline_start = start + duration
                     right.visual_automations = tuple(
                         item.model_copy(update={"clip_id": right.id})
@@ -1483,9 +1526,14 @@ class TimelineEditEngine:
                 right_duration = max(0.0, other_end - end)
                 if left_duration > TIME_EPSILON:
                     left = other.model_copy(deep=True)
-                    left.trim_out = (
-                        left.trim_in + left_duration * left.speed_factor
-                    )
+                    if left.freeze_frame is None:
+                        left.trim_out = (
+                            left.trim_in + left_duration * left.speed_factor
+                        )
+                    else:
+                        left.freeze_frame = left.freeze_frame.model_copy(
+                            update={"duration_seconds": left_duration}
+                        )
                     left.visual_automations = self._trim_visual(
                         original,
                         removed_start=0.0,
@@ -1504,9 +1552,14 @@ class TimelineEditEngine:
                 if right_duration > TIME_EPSILON:
                     right = other.model_copy(deep=True)
                     right.id = self.id_factory("clip")
-                    right.trim_in = (
-                        other.trim_out - right_duration * other.speed_factor
-                    )
+                    if right.freeze_frame is None:
+                        right.trim_in = (
+                            other.trim_out - right_duration * other.speed_factor
+                        )
+                    else:
+                        right.freeze_frame = right.freeze_frame.model_copy(
+                            update={"duration_seconds": right_duration}
+                        )
                     right.timeline_start = end
                     right.visual_automations = self._retarget_visual(
                         self._trim_visual(
@@ -1564,6 +1617,7 @@ class TimelineEditEngine:
         keep_audio: bool | None,
         mute: bool | None,
         rotate: int | None,
+        reverse: bool | None = None,
         edit_scope: str = "current_clip",
     ):
         members = self._linked_members(
@@ -1581,6 +1635,18 @@ class TimelineEditEngine:
         ):
             raise TimelineEditError(
                 "Linked keep_audio cannot target an audio track"
+            )
+        if reverse is not None and any(
+            clip.freeze_frame is not None for _, _, clip in members
+        ):
+            raise TimelineEditError(
+                "Reverse playback is not defined for a frozen-frame clip"
+            )
+        if speed_factor is not None and any(
+            clip.freeze_frame is not None for _, _, clip in members
+        ):
+            raise TimelineEditError(
+                "Frozen-frame duration is explicit and cannot use speed_factor"
             )
         modified: list[str] = []
         consequential: list[str] = []
@@ -1624,6 +1690,8 @@ class TimelineEditEngine:
                     )
             if rotate is not None:
                 clip.rotate = rotate
+            if reverse is not None:
+                clip.reverse = reverse
             if clip != before:
                 modified.append(clip.id)
                 if clip.id != clip_id:
@@ -1640,6 +1708,39 @@ class TimelineEditEngine:
             consequential=consequential,
             modified=modified,
             modified_automations=modified_automations,
+        )
+
+    def set_freeze_frame(
+        self,
+        track_reference: str,
+        clip_id: str,
+        *,
+        freeze_frame: FreezeFrameSettings | None,
+    ):
+        key, track, clip = self._clip(track_reference, clip_id)
+        if track.kind != "video":
+            raise TimelineEditError("Freeze-frame playback requires a video clip")
+        if freeze_frame == clip.freeze_frame:
+            raise TimelineEditError("Freeze-frame edit does not change the clip")
+        if freeze_frame is not None and not (
+            clip.trim_in <= freeze_frame.source_time_seconds < clip.trim_out
+        ):
+            raise TimelineEditError(
+                "Freeze-frame source time must be inside the current source range"
+            )
+        clip.freeze_frame = freeze_frame
+        if freeze_frame is not None:
+            clip.reverse = False
+            clip.keep_audio = False
+        return self._finish(
+            operation="set_freeze_frame",
+            primary_key=key,
+            primary_track=track,
+            direct=(clip_id,),
+            modified=(clip_id,),
+            warnings=(
+                "Freeze-frame playback is video-only and carries no embedded audio.",
+            ) if freeze_frame is not None else (),
         )
 
     def set_clip_transform(

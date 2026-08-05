@@ -150,7 +150,7 @@ def test_snapshot_v7_is_detached_and_browser_safe() -> None:
     timeline = _timeline(source="C:/private/secret/source.mp4")
     snapshot = TimelineSnapshotService.snapshot(timeline)
     clip = snapshot.tracks[0].clips[0]
-    assert snapshot.schema_version == "7.0.0"
+    assert snapshot.schema_version == "8.0.0"
     assert clip.masks[0].mask_id == "mask_main"
     assert clip.masks[0].automations[0].keyframes[1].value == .65
     assert clip.composite.blend_mode == "normal"
@@ -198,10 +198,10 @@ def test_engine_mask_crud_copy_split_trim_and_lock() -> None:
         )
 
 
-def test_registry_revision_8_exposes_only_validated_mask_skills() -> None:
+def test_registry_revision_9_exposes_only_validated_mask_skills() -> None:
     registry = build_production_registry()
-    assert registry.reference.registry_revision == 8
-    assert len(registry) == 39
+    assert registry.reference.registry_revision == 9
+    assert len(registry) == 40
     for name in (
         "VideoSetClipMaskSkill",
         "VideoReplaceClipMasksSkill",

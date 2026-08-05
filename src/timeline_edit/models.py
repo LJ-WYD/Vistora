@@ -6,7 +6,11 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from core.timeline import AppliedLoudnessNormalization, TimelineTransition
+from core.timeline import (
+    AppliedLoudnessNormalization,
+    FreezeFrameSettings,
+    TimelineTransition,
+)
 
 
 EditScope = Literal["current_clip", "linked_group"]
@@ -138,6 +142,7 @@ class SetClipPropertiesInput(TrackTargetModel):
     keep_audio: bool | None = None
     mute: bool | None = None
     rotate: Literal[0, 90, 180, 270] | None = None
+    reverse: bool | None = None
     edit_scope: EditScope = "current_clip"
 
     @model_validator(mode="after")
@@ -150,9 +155,26 @@ class SetClipPropertiesInput(TrackTargetModel):
                 self.keep_audio,
                 self.mute,
                 self.rotate,
+                self.reverse,
             )
         ):
             raise ValueError("At least one playback property is required")
+        return self
+
+
+class SetClipFreezeFrameInput(TrackTargetModel):
+    """Set or clear one video clip's deterministic freeze-frame state."""
+
+    clip_id: StableClipId
+    action: Literal["set", "clear"]
+    freeze_frame: FreezeFrameSettings | None = None
+
+    @model_validator(mode="after")
+    def action_payload(self) -> "SetClipFreezeFrameInput":
+        if self.action == "set" and self.freeze_frame is None:
+            raise ValueError("set requires freeze_frame settings")
+        if self.action == "clear" and self.freeze_frame is not None:
+            raise ValueError("clear does not accept freeze_frame settings")
         return self
 
 
@@ -377,6 +399,7 @@ class TimelineEditOutcome(TimelineEditModel):
         "insert",
         "overwrite",
         "set_properties",
+        "set_freeze_frame",
         "manage_track",
         "set_clip_link",
         "set_clip_audio",

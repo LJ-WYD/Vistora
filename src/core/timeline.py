@@ -6,6 +6,18 @@ from moviepy import VideoFileClip, AudioFileClip, CompositeVideoClip, CompositeA
 TIMELINE_MODEL_VERSION = "2.0.0"
 
 
+class FreezeFrameSettings(BaseModel):
+    """One exact source frame held for a deterministic timeline duration."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    schema_name: Literal["vistora.freeze-frame-settings"] = (
+        "vistora.freeze-frame-settings"
+    )
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    source_time_seconds: float = Field(ge=0, allow_inf_nan=False)
+    duration_seconds: float = Field(gt=0, le=86400, allow_inf_nan=False)
+
+
 class AudioEnvelopePoint(BaseModel):
     """One deterministic linear gain-envelope point in clip-local time."""
 
@@ -636,6 +648,7 @@ class ClipConfig(BaseModel):
     keep_audio: bool = True
     speed_factor: float = 1.0
     reverse: bool = False
+    freeze_frame: FreezeFrameSettings | None = None
     rotate: int = 0
     link_group_id: Optional[str] = Field(
         None,
@@ -655,9 +668,25 @@ class ClipConfig(BaseModel):
     def audio_timing_is_bounded(self) -> "ClipConfig":
         if self.speed_factor <= 0:
             return self
-        duration = (self.trim_out - self.trim_in) / self.speed_factor
+        duration = (
+            self.freeze_frame.duration_seconds
+            if self.freeze_frame is not None
+            else (self.trim_out - self.trim_in) / self.speed_factor
+        )
         if duration <= 0:
             return self
+        if self.freeze_frame is not None:
+            if not (
+                self.trim_in <= self.freeze_frame.source_time_seconds
+                < self.trim_out
+            ):
+                raise ValueError(
+                    "freeze-frame source time must be inside the clip source range"
+                )
+            if self.reverse:
+                raise ValueError("a frozen frame cannot also be reversed")
+            if self.keep_audio:
+                raise ValueError("a frozen frame cannot retain embedded audio")
         if self.audio.fade_in_seconds > duration + 1e-6:
             raise ValueError("audio fade-in exceeds effective clip duration")
         if self.audio.fade_out_seconds > duration + 1e-6:
@@ -710,6 +739,14 @@ class ClipConfig(BaseModel):
             ):
                 raise ValueError("Mask keyframe exceeds effective clip duration")
         return self
+
+
+def effective_clip_duration(clip: ClipConfig) -> float:
+    """Return exact declared timeline duration for normal or frozen playback."""
+
+    if clip.freeze_frame is not None:
+        return clip.freeze_frame.duration_seconds
+    return (clip.trim_out - clip.trim_in) / clip.speed_factor
 
 
 class TrackConfig(BaseModel):
@@ -858,15 +895,20 @@ class TimelineConfig(BaseModel):
                 raise ValueError("transition clips must be same-track adjacent")
             outgoing = clips[from_indices[0]]
             incoming = clips[to_indices[0]]
-            outgoing_end = outgoing.timeline_start + (
-                outgoing.trim_out - outgoing.trim_in
-            ) / outgoing.speed_factor
+            outgoing_end = outgoing.timeline_start + effective_clip_duration(outgoing)
             if abs(outgoing_end - incoming.timeline_start) > 1e-6:
                 raise ValueError(
                     "transition clips must meet at one exact cut without gap/overlap"
                 )
             if transition.media_type == "video" and track.kind != "video":
                 raise ValueError("video transition requires a video track")
+            if transition.kind != "cut" and (
+                outgoing.freeze_frame is not None
+                or incoming.freeze_frame is not None
+            ):
+                raise ValueError(
+                    "non-cut transitions over frozen frames are unsupported"
+                )
             if transition.media_type == "audio":
                 if track.kind == "video" and not (
                     outgoing.keep_audio and incoming.keep_audio
@@ -978,6 +1020,7 @@ class TimelineRenderer:
                 and not clip.visual_automations
                 and not clip.masks
                 and clip.composite == ClipCompositeSettings()
+                and clip.freeze_frame is None
                 for clip in video_track.clips
             )
         ):
@@ -1021,6 +1064,7 @@ class TimelineRenderer:
                 or bool(clip.visual_automations)
                 or bool(clip.masks)
                 or clip.composite != ClipCompositeSettings()
+                or clip.freeze_frame is not None
                 for track in video_tracks
                 for clip in track.clips
             )
@@ -1335,8 +1379,7 @@ class TimelineRenderer:
 
         duration = max(
             (
-                clip.timeline_start
-                + (clip.trim_out - clip.trim_in) / clip.speed_factor
+                clip.timeline_start + effective_clip_duration(clip)
                 for _, _, clip in all_items
             ),
             default=0.0,
@@ -1352,13 +1395,24 @@ class TimelineRenderer:
             if kind == "video":
                 from visuals.render import clip_visual_filter_chain
 
-                chain = [
-                    f"[{index}:v]trim=start={clip.trim_in:.12g}:"
-                    f"end={clip.trim_out:.12g}",
-                    f"setpts=(PTS-STARTPTS)/{clip.speed_factor:.12g}",
-                ]
-                if clip.reverse:
-                    chain.append("reverse")
+                if clip.freeze_frame is not None:
+                    frame_window = max(1.0 / self.config.fps, 0.001)
+                    chain = [
+                        f"[{index}:v]trim=start={clip.freeze_frame.source_time_seconds:.12g}:"
+                        f"end={clip.freeze_frame.source_time_seconds + frame_window:.12g}",
+                        "setpts=PTS-STARTPTS",
+                        "tpad=stop_mode=clone:"
+                        f"stop_duration={clip.freeze_frame.duration_seconds:.12g}",
+                        f"trim=duration={clip.freeze_frame.duration_seconds:.12g}",
+                    ]
+                else:
+                    chain = [
+                        f"[{index}:v]trim=start={clip.trim_in:.12g}:"
+                        f"end={clip.trim_out:.12g}",
+                        f"setpts=(PTS-STARTPTS)/{clip.speed_factor:.12g}",
+                    ]
+                    if clip.reverse:
+                        chain.append("reverse")
                 visual_chain, overlay_expression = clip_visual_filter_chain(
                     clip,
                     self.config.width,
@@ -1374,13 +1428,12 @@ class TimelineRenderer:
                 video_labels.append((f"[video_{index}]", overlay_expression))
                 if (
                     clip.keep_audio
+                    and clip.freeze_frame is None
                     and not track.muted
                     and not clip.audio.muted
                     and has_audio(clip.source)
                 ):
-                    effective_duration = (
-                        clip.trim_out - clip.trim_in
-                    ) / clip.speed_factor
+                    effective_duration = effective_clip_duration(clip)
                     audio_chain = [
                         f"[{index}:a]atrim=start={clip.trim_in:.12g}:"
                         f"end={clip.trim_out:.12g}",
@@ -1397,9 +1450,7 @@ class TimelineRenderer:
                     filters.append(",".join(audio_chain))
                     audio_labels.append(f"[audio_{index}]")
             elif not clip.audio.muted and has_audio(clip.source):
-                effective_duration = (
-                    clip.trim_out - clip.trim_in
-                ) / clip.speed_factor
+                effective_duration = effective_clip_duration(clip)
                 audio_chain = [
                     f"[{index}:a]atrim=start={clip.trim_in:.12g}:"
                     f"end={clip.trim_out:.12g}",

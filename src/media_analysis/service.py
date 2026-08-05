@@ -270,13 +270,11 @@ class MediaAnalysisService:
             timeline_ratio = (
                 (index + 0.5) / request.settings.thumbnail_count
             )
-            source_ratio = (
-                1 - timeline_ratio
-                if request.reverse
-                else timeline_ratio
-            )
+            source_ratio = 1 - timeline_ratio if request.reverse else timeline_ratio
             source_time = (
-                request.source_start_seconds + duration * source_ratio
+                request.freeze_frame_source_time_seconds
+                if request.freeze_frame_source_time_seconds is not None
+                else request.source_start_seconds + duration * source_ratio
             )
             source_time = min(
                 source_time,

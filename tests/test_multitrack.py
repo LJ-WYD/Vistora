@@ -121,7 +121,7 @@ def test_snapshot_exposes_detached_ordered_multitrack_state() -> None:
     source = _timeline()
     before = source.model_dump(mode="json")
     snapshot = TimelineSnapshotService.snapshot(source)
-    assert snapshot.schema_version == "7.0.0"
+    assert snapshot.schema_version == "8.0.0"
     assert [track.track_id for track in snapshot.tracks] == [
         "track_video_main",
         "track_video_overlay",

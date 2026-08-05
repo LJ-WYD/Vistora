@@ -116,7 +116,11 @@ def _clip_snapshot(clip: ClipConfig, order_index: int) -> ClipSnapshot:
         )
 
     declared_source_duration = trim_out - trim_in
-    effective_duration = declared_source_duration / speed_factor
+    effective_duration = (
+        clip.freeze_frame.duration_seconds
+        if clip.freeze_frame is not None
+        else declared_source_duration / speed_factor
+    )
     timeline_end = timeline_start + effective_duration
     source_digest = _sha256({"configured_path": source_value})
 
@@ -146,6 +150,16 @@ def _clip_snapshot(clip: ClipConfig, order_index: int) -> ClipSnapshot:
         volume=volume,
         keep_audio=clip.keep_audio,
         reverse=clip.reverse,
+        freeze_frame_source_time_seconds=(
+            clip.freeze_frame.source_time_seconds
+            if clip.freeze_frame is not None
+            else None
+        ),
+        freeze_frame_duration_seconds=(
+            clip.freeze_frame.duration_seconds
+            if clip.freeze_frame is not None
+            else None
+        ),
         rotate_degrees=clip.rotate,
         link_group_id=clip.link_group_id,
         audio_gain_db=clip.audio.gain_db,

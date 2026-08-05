@@ -103,12 +103,14 @@ from workflow import (  # noqa: E402
 REFERENCE_TIME = datetime(2026, 7, 24, tzinfo=timezone.utc)
 REFERENCE_CLIP_UUID = UUID("12345678-1234-5678-1234-567812345678")
 REFERENCE_PLAN_DIGEST = (
-    "sha256:2ca88546e1abe3e48ce4a3210f7bbb06a65e0087d4c16a244c366ce4a77b86f2"
+    "sha256:327e2c89c7391ebecb3526648b1f139087705637483e0e76a49092f1cc650d4b"
 )
 REFERENCE_TOOL_ORDER = (
     "VideoClearTimelineSkill",
     "VideoInsertOverwriteClipSkill",
     "VideoTrimClipSkill",
+    "VideoSetClipPropertiesSkill",
+    "VideoSetClipFreezeFrameSkill",
     "VideoExportSkill",
 )
 
@@ -395,6 +397,34 @@ def _build_plan(
                 evidence_ids=(evidence_id,),
             ),
             DirectorOperation(
+                operation_id="operation_reverse_reference_clip",
+                tool_name="VideoSetClipPropertiesSkill",
+                arguments={
+                    "track_id": "video",
+                    "clip_id": "clip_reference_main",
+                    "reverse": True,
+                },
+                rationale="Exercise declarative reverse without proxy media.",
+                expected_effect="Reverse the exact clip as timeline state.",
+                evidence_ids=(evidence_id,),
+            ),
+            DirectorOperation(
+                operation_id="operation_freeze_reference_clip",
+                tool_name="VideoSetClipFreezeFrameSkill",
+                arguments={
+                    "track_id": "video",
+                    "clip_id": "clip_reference_main",
+                    "action": "set",
+                    "freeze_frame": {
+                        "source_time_seconds": 0.75,
+                        "duration_seconds": 1.25,
+                    },
+                },
+                rationale="Hold one exact reviewed source frame.",
+                expected_effect="Create a silent 1.25-second freeze frame.",
+                evidence_ids=(evidence_id,),
+            ),
+            DirectorOperation(
                 operation_id="operation_export_reference",
                 tool_name="VideoExportSkill",
                 arguments={
@@ -441,7 +471,7 @@ class DeterministicReferenceDirectorAdapter:
             evidence_ids=(evidence.evidence_id,),
             assumptions=intended.assumptions,
             acceptance_criteria=(
-                "Output is 320x180 at 24 fps.",
+                "Output is 320x180 at the project-default 30 fps.",
                 "Output duration is 1.25 seconds.",
                 "Timeline is clear after export.",
             ),
@@ -671,7 +701,7 @@ def _verify_output(path: str) -> dict[str, Any]:
         "video_codec": "h264",
         "width": 320,
         "height": 180,
-        "frame_rate": "24/1",
+        "frame_rate": "30/1",
         "audio_stream_count": 0,
     }
     for field, value in expected.items():

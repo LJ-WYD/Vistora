@@ -48,6 +48,7 @@ from core.timeline import (
     MaskPoint,
     ClipConfig,
     ClipTransform,
+    FreezeFrameSettings,
     TimelineConfig,
     TimelineTransition,
     TransitionParameters,
@@ -372,6 +373,15 @@ def _timeline_from_snapshot(snapshot: TimelineSnapshot) -> TimelineConfig:
                         keep_audio=clip.keep_audio,
                         speed_factor=clip.speed_factor,
                         reverse=clip.reverse,
+                        freeze_frame=(
+                            FreezeFrameSettings(
+                                source_time_seconds=clip.freeze_frame_source_time_seconds,
+                                duration_seconds=clip.freeze_frame_duration_seconds,
+                            )
+                            if clip.freeze_frame_source_time_seconds is not None
+                            and clip.freeze_frame_duration_seconds is not None
+                            else None
+                        ),
                         rotate=clip.rotate_degrees,
                         link_group_id=clip.link_group_id,
                         audio=ClipAudioSettings(

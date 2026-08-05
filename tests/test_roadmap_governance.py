@@ -29,10 +29,15 @@ def _write_status(tmp_path: Path, status: dict) -> Path:
 
 def test_authoritative_roadmap_passes() -> None:
     result = VALIDATOR.validate(ROOT / "ROADMAP.md", ROOT / "roadmap-status.json")
+    current = _baseline()
     assert result == {
         "digest": VALIDATOR.INITIAL_DEFINITIONS_DIGEST,
         "items": 32,
-        "in_progress": [],
+        "in_progress": [
+            item["id"]
+            for item in current["items"]
+            if item["status"] == "in_progress"
+        ],
     }
 
 
@@ -50,6 +55,7 @@ def test_definition_change_without_digest_and_approval_fails(tmp_path: Path) -> 
 
 def test_cannot_skip_earlier_partial_item(tmp_path: Path) -> None:
     status = copy.deepcopy(_baseline())
+    status["items"][10]["status"] = "partial"
     status["items"][11]["status"] = "in_progress"  # O12 skips partial O11.
     with pytest.raises(VALIDATOR.RoadmapValidationError, match="skips unfinished"):
         VALIDATOR.validate(ROOT / "ROADMAP.md", _write_status(tmp_path, status), check_git=False)
@@ -57,6 +63,7 @@ def test_cannot_skip_earlier_partial_item(tmp_path: Path) -> None:
 
 def test_explicit_user_waiver_allows_audited_skip(tmp_path: Path) -> None:
     status = copy.deepcopy(_baseline())
+    status["items"][10]["status"] = "partial"
     status["items"][11]["status"] = "in_progress"
     status["execution_waivers"].append(
         {

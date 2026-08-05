@@ -593,6 +593,12 @@ class PreviewApplication:
                     timeline_start_seconds=clip.timeline_start_seconds,
                     timeline_end_seconds=clip.timeline_end_seconds,
                     reverse=clip.reverse,
+                    freeze_frame_source_time_seconds=(
+                        clip.freeze_frame_source_time_seconds
+                    ),
+                    freeze_frame_duration_seconds=(
+                        clip.freeze_frame_duration_seconds
+                    ),
                     rotate_degrees=clip.rotate_degrees,
                     preview_mode=(
                         preview_mode if track.kind == "video" else "original"

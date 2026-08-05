@@ -458,7 +458,7 @@ Rollback is a second workflow, never an automatic failure handler. The service r
 `src/core/timeline.py` defines the compatible media timeline models plus a
 separate first-class subtitle domain:
 
-- `ClipConfig`: stable clip ID, source, trim, timeline placement, optional explicit link-group ID, legacy audio flags/volume, frozen versioned clip-audio settings, speed, reverse, legacy rotation, neutral-by-default frozen visual transform/color properties, optional frozen visual-automation curves, an ordered bounded mask stack, and a bounded compositing declaration.
+- `ClipConfig`: stable clip ID, source, trim, timeline placement, optional explicit link-group ID, legacy audio flags/volume, frozen versioned clip-audio settings, speed, declarative reverse, optional versioned video-only freeze-frame state, legacy rotation, neutral-by-default frozen visual transform/color properties, optional frozen visual-automation curves, an ordered bounded mask stack, and a bounded compositing declaration.
 - `TrackConfig`: stable track ID, video/audio kind, role, unique order, enabled/muted/locked state, frozen versioned mix settings, and an ordered list of clips.
 - `SubtitleTrackConfig` / `SubtitleCue` / `SubtitleStyle`: frozen versioned text lanes, stable timed cues, and safe logical-font styling, separate from media clips.
 - `TimelineTransition`: a frozen version `1.0.0` exact-cut entity with stable ID, exact track/from/to clip IDs, whitelisted video/audio kind and parameters, bounded duration/alignment, enabled state, and reciprocal explicit audio pairing.
@@ -472,7 +472,7 @@ separate first-class subtitle domain:
 
 `src/timeline_query/` is the stable library boundary for future timeline/player visualization. `TimelineSnapshotService.snapshot` accepts a `TimelineConfig`, legacy timeline dictionary, or `TimelineProjectDocument`; `snapshot_current` delegates only to `TimelineManager.get_current_timeline`. Neither method saves, resets, renders, executes a skill, probes media, or writes files.
 
-The returned `vistora.timeline-snapshot` schema is version `7.0.0`. Its frozen, recursively detached read models expose:
+The returned `vistora.timeline-snapshot` schema is version `8.0.0`. Its frozen, recursively detached read models expose:
 
 - snapshot, project, revision, source-schema, migration, and timeline-digest identity;
 - output width, height, and frame rate;
@@ -630,7 +630,8 @@ The implemented mutation ownership is:
 | `VideoMoveClipSkill` | Moves an exact clip or explicit linked group to an explicit start with non-ripple overlap or deterministic per-track ripple. | None. |
 | `VideoInsertOverwriteClipSkill` | Inserts or overwrites accepted catalog/allowable local media while preserving uncovered overlap sides. | Reads source metadata; does not rewrite source media. |
 | `VideoRemoveClipSkill` | Performs gap-preserving lift or per-track ripple delete by exact ID and explicit current/linked scope. | None. |
-| `VideoSetClipPropertiesSkill` | Updates speed, volume/mute, embedded audio, or video rotation for the current clip or exact link group without creating a reverse proxy. | None. |
+| `VideoSetClipPropertiesSkill` | Updates speed, declarative reverse, volume/mute, embedded audio, or video rotation for the current clip or exact link group without creating a reverse proxy. | None. |
+| `VideoSetClipFreezeFrameSkill` | Sets or clears an exact video source frame and bounded hold duration; enabling it disables reverse and embedded audio. | None; the final renderer reads the source frame without creating a proxy. |
 | `TimelineManageTrackSkill` | Adds/updates/removes an empty video/audio track or changes deterministic track order; locked tracks reject clip mutation. | None. |
 | `TimelineSetClipLinkSkill` | Links/unlinks explicit exact clip references with a stable group ID; never infers membership. | None. |
 | `AudioAnalyzeLoudnessSkill` | None; returns cached, versioned integrated-LUFS/true-peak evidence bound to exact clip state and source hash. | Read-only decode only. |
@@ -663,7 +664,7 @@ These are the only registered atomic mutation entry points. Tests may reset stat
 Versioned atomic request/result envelopes define the agent boundary and the
 gateway validates them against the production registry, normalizes registered
 result schemas, redacts failures, and provides in-process idempotent replay.
-The six core edit skills and manual/restore tools declare atomic project-state
+The core edit skills and manual/restore tools declare atomic project-state
 transactions. Legacy add/modify/export/timelapse/clear behavior remains
 truthfully best-effort; external media writes are not generally reversible.
 
@@ -897,7 +898,7 @@ contract.
 The subtitle extension added four production registry entries for
 subtitle track management, exact cue editing, deterministic SRT/WebVTT
 import, and atomic sidecar export. Optional frozen subtitle tracks/cues/styles
-extend compatible timeline-v2 JSON; snapshot v7 retains and exposes detached subtitle
+extend compatible timeline-v2 JSON; snapshot v8 retains and exposes detached subtitle
 state. The detached review engine and manual proposal service simulate cue
 and track changes before confirmation, and confirmed workflow/EditingAgent
 dispatch records subtitle entity relations and tombstones through the same
@@ -1005,7 +1006,7 @@ The final FFmpeg path evaluates schema-generated expressions before transition
 composition, stable track layering, subtitle burn-in, and final format output.
 No raw expression/filter/script enters from a plan or browser. Applied media
 analysis binds exact timeline sample time plus automation digest to its cache
-key. Snapshot v7, Director read context, plan/manual review, confirmed Editing
+key. Snapshot v8, Director read context, plan/manual review, confirmed Editing
 Agent execution, provenance, rollback, and the compact browser inspector share
 the same detached automation data. The deterministic reference carries
 hold/linear/ease curves through review, explicit confirmation, gateway
@@ -1015,9 +1016,17 @@ Visual automation does not add path animation, tracking, speed-remapping curves,
 per-word subtitle animation, arbitrary Bezier/expression editing, 3D,
 particles, plugins, or AI motion effects.
 
-Original O16's mask completion raises the production registry to revision 8
-with thirty-nine entries and snapshot schema to version `7.0.0`. Frozen
-version `1.0.0` `ClipMask`, `MaskPoint`, and `MaskAutomation` contracts bind a
+Original O11's reverse/freeze completion raises the production registry to
+revision 9 with forty entries and snapshot schema to version `8.0.0`.
+`FreezeFrameSettings` is a frozen version `1.0.0` contract bound to an exact
+source time inside the clip range and a positive hold duration. It is
+video-only, silent, incompatible with simultaneous reverse, split-safe, and
+rendered as an exact cloned frame without proxy media. Reverse on the exact-ID
+property skill is now a declarative, atomic timeline change; the older
+index-addressed compatibility tools retain their truthfully best-effort proxy
+behavior.
+
+Frozen version `1.0.0` `ClipMask`, `MaskPoint`, and `MaskAutomation` contracts bind a
 stable mask to one exact video clip. The supported primitives are rectangle,
 ellipse, and convex polygon; operations are the ordered safe subset add,
 subtract, and intersect. Invert, opacity, normalized feather/expand,

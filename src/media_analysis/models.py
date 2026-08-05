@@ -61,6 +61,12 @@ class MediaAnalysisRequest(AnalysisModel):
     timeline_start_seconds: FiniteFloat = Field(ge=0)
     timeline_end_seconds: FiniteFloat = Field(gt=0)
     reverse: bool = False
+    freeze_frame_source_time_seconds: FiniteFloat | None = Field(
+        default=None, ge=0
+    )
+    freeze_frame_duration_seconds: FiniteFloat | None = Field(
+        default=None, gt=0
+    )
     rotate_degrees: int = 0
     preview_mode: Literal["original", "applied"] = "original"
     visual_digest: Sha256Digest | None = None
@@ -79,6 +85,21 @@ class MediaAnalysisRequest(AnalysisModel):
             raise ValueError("Analysis source range must be forward")
         if self.timeline_end_seconds <= self.timeline_start_seconds:
             raise ValueError("Analysis timeline range must be forward")
+        if (self.freeze_frame_source_time_seconds is None) != (
+            self.freeze_frame_duration_seconds is None
+        ):
+            raise ValueError("Freeze-frame analysis fields must be provided together")
+        if self.freeze_frame_source_time_seconds is not None:
+            if self.media_kind != "video":
+                raise ValueError("Freeze-frame analysis requires video media")
+            if not (
+                self.source_start_seconds
+                <= self.freeze_frame_source_time_seconds
+                < self.source_end_seconds
+            ):
+                raise ValueError("Freeze-frame source time must be inside the source range")
+            if self.reverse:
+                raise ValueError("Freeze-frame analysis cannot also be reversed")
         if self.preview_mode == "applied" and (
             self.media_kind != "video"
             or self.visual_digest is None

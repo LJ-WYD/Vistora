@@ -304,6 +304,8 @@ class PreviewClipState(ReviewModel):
     speed_factor: FiniteFloat = Field(gt=0)
     keep_audio: bool
     reverse: bool
+    freeze_frame_source_time_seconds: FiniteFloat | None = None
+    freeze_frame_duration_seconds: FiniteFloat | None = None
     rotate_degrees: int
     link_group_id: StableId | None = None
     audio_gain_db: FiniteFloat = 0
@@ -406,6 +408,7 @@ class PlanChange(ReviewModel):
         "clip_reorder",
         "clip_speed",
         "clip_properties",
+        "clip_freeze_frame",
         "clip_transform",
         "clip_color",
         "visual_automation",

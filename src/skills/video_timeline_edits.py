@@ -17,6 +17,7 @@ from timeline_edit import (
     ManageTrackInput,
     MoveClipInput,
     RemoveClipInput,
+    SetClipFreezeFrameInput,
     SetClipPropertiesInput,
     SetClipLinkInput,
     SplitClipInput,
@@ -233,8 +234,8 @@ class VideoInsertOverwriteClipSkill(_TransactionalEditSkill):
 class VideoSetClipPropertiesSkill(_TransactionalEditSkill):
     name = "VideoSetClipPropertiesSkill"
     description = (
-        "Update speed, volume/mute, embedded-audio retention, or rotation for "
-        "one exact clip_id without generating reverse proxy media."
+        "Update speed, direction, volume/mute, embedded-audio retention, or "
+        "rotation for one exact clip_id without generating proxy media."
     )
     input_model = SetClipPropertiesInput
 
@@ -248,7 +249,29 @@ class VideoSetClipPropertiesSkill(_TransactionalEditSkill):
                 keep_audio=params.keep_audio,
                 mute=params.mute,
                 rotate=params.rotate,
+                reverse=params.reverse,
                 edit_scope=params.edit_scope,
+            ),
+            id_factory=self.id_factory,
+        )
+
+
+class VideoSetClipFreezeFrameSkill(_TransactionalEditSkill):
+    name = "VideoSetClipFreezeFrameSkill"
+    description = (
+        "Set or clear one exact video clip's versioned freeze-frame playback "
+        "without writing proxy media. Frozen frames carry no embedded audio."
+    )
+    input_model = SetClipFreezeFrameInput
+
+    def run(self, params: SetClipFreezeFrameInput) -> dict[str, Any]:
+        return TimelineEditTransaction.apply(
+            lambda engine: engine.set_freeze_frame(
+                params.track_reference,
+                params.clip_id,
+                freeze_frame=(
+                    params.freeze_frame if params.action == "set" else None
+                ),
             ),
             id_factory=self.id_factory,
         )

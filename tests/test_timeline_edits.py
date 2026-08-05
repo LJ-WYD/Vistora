@@ -29,7 +29,13 @@ from contracts import (  # noqa: E402
     SourceEvidenceReference,
 )
 from core import timeline_manager  # noqa: E402
-from core.timeline import ClipConfig, TimelineConfig, TrackConfig  # noqa: E402
+from core.timeline import (  # noqa: E402
+    ClipConfig,
+    FreezeFrameSettings,
+    TimelineConfig,
+    TimelineRenderer,
+    TrackConfig,
+)
 from timeline_edit import (  # noqa: E402
     MoveClipInput,
     SetClipPropertiesInput,
@@ -348,6 +354,220 @@ def test_audio_properties_are_real_and_rotation_is_rejected() -> None:
             mute=None,
             rotate=90,
         )
+
+
+def test_reverse_is_a_transactional_clip_property_without_proxy_media(
+    project_file: Path,
+) -> None:
+    registry = build_production_registry()
+    gateway = AtomicExecutionGateway(registry)
+    request = AtomicToolRequestEnvelope(
+        request_id="request_reverse",
+        execution_id="execution_reverse",
+        project_id="legacy_project",
+        confirmation_id="confirmation_reverse",
+        plan_ref=PlanReference(
+            plan_id="plan_reverse",
+            plan_version=1,
+            plan_digest=DIGEST,
+        ),
+        step_id="step_reverse",
+        tool_name="VideoSetClipPropertiesSkill",
+        arguments={
+            "track_id": "video",
+            "clip_id": "clip_a",
+            "reverse": False,
+        },
+        requested_at=NOW,
+    )
+    # The fixture starts reversed; disabling it proves the exact clip-ID path
+    # mutates only declarative project state and never substitutes a proxy.
+    before_source = _timeline().tracks["video"].clips[0].source
+    result = gateway.execute(
+        request,
+        AtomicExecutionContext(
+            caller="workflow",
+            registry_ref=registry.reference,
+            project_id="legacy_project",
+            confirmation_id="confirmation_reverse",
+            allowed_side_effects=("files", "timeline"),
+            idempotency_key="reverse_once",
+        ),
+    )
+    assert result.status == "success"
+    persisted = TimelineConfig.model_validate_json(
+        project_file.read_text(encoding="utf-8")
+    )
+    clip = _by_id(persisted, "video", "clip_a")
+    assert clip.reverse is False
+    assert clip.source == before_source
+    assert "reverse_cache" not in clip.source
+
+
+def test_freeze_frame_is_versioned_bounded_split_safe_and_clearable() -> None:
+    settings = FreezeFrameSettings(
+        source_time_seconds=1.25,
+        duration_seconds=3.0,
+    )
+    updated, outcome = TimelineEditEngine(_timeline()).set_freeze_frame(
+        "video", "clip_a", freeze_frame=settings
+    )
+    frozen = _by_id(updated, "video", "clip_a")
+    assert frozen.freeze_frame == settings
+    assert frozen.keep_audio is False and frozen.reverse is False
+    assert outcome.operation == "set_freeze_frame"
+
+    split, split_outcome = TimelineEditEngine(
+        updated, id_factory=lambda prefix: f"{prefix}_frozen_right"
+    ).split("video", "clip_a", 1.0, right_clip_id="clip_frozen_right")
+    left = _by_id(split, "video", "clip_a")
+    right = _by_id(split, "video", "clip_frozen_right")
+    assert left.freeze_frame.duration_seconds == pytest.approx(1.0)
+    assert right.freeze_frame.duration_seconds == pytest.approx(2.0)
+    assert left.freeze_frame.source_time_seconds == right.freeze_frame.source_time_seconds
+    assert split_outcome.created_clip_ids == ("clip_frozen_right",)
+
+    cleared, _ = TimelineEditEngine(updated).set_freeze_frame(
+        "video", "clip_a", freeze_frame=None
+    )
+    assert _by_id(cleared, "video", "clip_a").freeze_frame is None
+    with pytest.raises(TimelineEditError, match="inside"):
+        TimelineEditEngine(_timeline()).set_freeze_frame(
+            "video",
+            "clip_a",
+            freeze_frame=FreezeFrameSettings(
+                source_time_seconds=8.0,
+                duration_seconds=1.0,
+            ),
+        )
+    with pytest.raises(TimelineEditError, match="video"):
+        TimelineEditEngine(_timeline()).set_freeze_frame(
+            "audio",
+            "audio_a",
+            freeze_frame=FreezeFrameSettings(
+                source_time_seconds=0.5,
+                duration_seconds=1.0,
+            ),
+        )
+
+
+def test_freeze_frame_snapshot_and_review_are_deterministic_and_read_only(
+    project_file: Path,
+) -> None:
+    registry = build_production_registry()
+    snapshot = TimelineSnapshotService.snapshot_current()
+    operation = DirectorOperation(
+        operation_id="operation_freeze",
+        tool_name="VideoSetClipFreezeFrameSkill",
+        arguments={
+            "track_id": "video",
+            "clip_id": "clip_a",
+            "action": "set",
+            "freeze_frame": {
+                "source_time_seconds": 1.0,
+                "duration_seconds": 2.5,
+            },
+        },
+        rationale="Hold the reviewed source frame for emphasis.",
+        expected_effect="Create a silent deterministic freeze-frame clip state.",
+    )
+    plan = DirectorPlan(
+        plan_id="plan_freeze",
+        plan_version=1,
+        created_at=NOW,
+        objective="Preview a bounded freeze frame.",
+        operations=(operation,),
+    )
+    proposed = ProposedEditingExecutionPlan.from_director_plan(
+        proposal_execution_id="proposal_freeze",
+        project_id=snapshot.project_id,
+        director_plan=plan,
+    )
+    request = PlanDiffRequest(
+        request_id="request_freeze",
+        snapshot_ref=TimelineSnapshotReference.from_snapshot(snapshot),
+        director_plan=plan,
+        proposed_execution=proposed,
+        registry_ref=RegistrySchemaReference.from_registry(registry),
+    )
+    before = project_file.read_bytes()
+    first = PlanDiffEngine.generate(request, snapshot, registry)
+    second = PlanDiffEngine.generate(request, snapshot, registry)
+    assert first == second and first.digest() == second.digest()
+    assert project_file.read_bytes() == before
+    change = next(
+        item for item in first.changes if item.category == "clip_freeze_frame"
+    )
+    assert change.after.freeze_frame_source_time_seconds == 1.0
+    assert change.after.freeze_frame_duration_seconds == 2.5
+    assert first.steps[0].status == "warning"
+
+
+def test_reverse_and_freeze_render_real_deterministic_frames(tmp_path: Path) -> None:
+    import numpy as np
+    from moviepy import VideoClip, VideoFileClip
+
+    source = tmp_path / "direction_source.mp4"
+    clip = VideoClip(
+        frame_function=lambda t: np.full(
+            (180, 320, 3),
+            (240, 20, 20) if t < 1.0 else (20, 220, 20),
+            dtype=np.uint8,
+        ),
+        duration=2.0,
+    ).with_fps(10)
+    clip.write_videofile(str(source), codec="libx264", audio=False, logger=None)
+    clip.close()
+
+    reverse_output = tmp_path / "reverse.mp4"
+    reverse_timeline = TimelineConfig(
+        width=320,
+        height=180,
+        fps=10,
+        tracks={
+            "video": TrackConfig(
+                id="video",
+                clips=[
+                    ClipConfig(
+                        id="clip_reverse",
+                        source=str(source),
+                        trim_in=0,
+                        trim_out=2,
+                        reverse=True,
+                        keep_audio=False,
+                    )
+                ],
+            ),
+            "audio": TrackConfig(id="audio"),
+        },
+    )
+    TimelineRenderer(reverse_timeline).render(str(reverse_output))
+
+    freeze_output = tmp_path / "freeze.mp4"
+    freeze_timeline = reverse_timeline.model_copy(deep=True)
+    frozen = freeze_timeline.tracks["video"].clips[0]
+    frozen.reverse = False
+    frozen.freeze_frame = FreezeFrameSettings(
+        source_time_seconds=0.25,
+        duration_seconds=1.2,
+    )
+    TimelineRenderer(freeze_timeline).render(str(freeze_output))
+
+    reverse_video = VideoFileClip(str(reverse_output))
+    freeze_video = VideoFileClip(str(freeze_output))
+    try:
+        reverse_first = reverse_video.get_frame(0.1).mean(axis=(0, 1))
+        reverse_last = reverse_video.get_frame(1.7).mean(axis=(0, 1))
+        freeze_first = freeze_video.get_frame(0.1).mean(axis=(0, 1))
+        freeze_last = freeze_video.get_frame(1.0).mean(axis=(0, 1))
+        assert reverse_first[1] > reverse_first[0]
+        assert reverse_last[0] > reverse_last[1]
+        assert freeze_first[0] > freeze_first[1]
+        assert np.max(np.abs(freeze_first - freeze_last)) < 3.0
+        assert freeze_video.duration == pytest.approx(1.2, abs=0.15)
+    finally:
+        reverse_video.close()
+        freeze_video.close()
 
 
 def test_property_style_invariants_hold_for_operation_sequence() -> None:

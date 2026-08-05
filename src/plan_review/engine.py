@@ -26,6 +26,7 @@ from timeline_edit import (
     MaskAutomation,
     MaskPoint,
     ClipTransform,
+    FreezeFrameSettings,
     TimelineConfig,
     TimelineTransition,
     TransitionParameters,
@@ -122,6 +123,8 @@ def _clip_state(
         speed_factor=clip.speed_factor,
         keep_audio=clip.keep_audio,
         reverse=clip.reverse,
+        freeze_frame_source_time_seconds=clip.freeze_frame_source_time_seconds,
+        freeze_frame_duration_seconds=clip.freeze_frame_duration_seconds,
         rotate_degrees=clip.rotate_degrees,
         link_group_id=clip.link_group_id,
         audio_gain_db=clip.audio_gain_db,
@@ -150,8 +153,12 @@ def _replace_clip(
     values = clip.model_dump(mode="python")
     values.update(changes)
     duration = (
-        values["trim_out_seconds"] - values["trim_in_seconds"]
-    ) / values["speed_factor"]
+        values["freeze_frame_duration_seconds"]
+        if values.get("freeze_frame_duration_seconds") is not None
+        else (
+            values["trim_out_seconds"] - values["trim_in_seconds"]
+        ) / values["speed_factor"]
+    )
     values["effective_duration_seconds"] = duration
     values["timeline_end_seconds"] = (
         values["timeline_start_seconds"] + duration
@@ -279,6 +286,15 @@ def _timeline_from_snapshot(snapshot: TimelineSnapshot) -> TimelineConfig:
                     keep_audio=clip.keep_audio,
                     speed_factor=clip.speed_factor,
                     reverse=clip.reverse,
+                    freeze_frame=(
+                        FreezeFrameSettings(
+                            source_time_seconds=clip.freeze_frame_source_time_seconds,
+                            duration_seconds=clip.freeze_frame_duration_seconds,
+                        )
+                        if clip.freeze_frame_source_time_seconds is not None
+                        and clip.freeze_frame_duration_seconds is not None
+                        else None
+                    ),
                     rotate=clip.rotate_degrees,
                     link_group_id=clip.link_group_id,
                     audio=ClipAudioSettings(
@@ -444,7 +460,11 @@ def _preview_state(
     track_key: str,
     track_id: str,
 ) -> PreviewClipState:
-    duration = (clip.trim_out - clip.trim_in) / clip.speed_factor
+    duration = (
+        clip.freeze_frame.duration_seconds
+        if clip.freeze_frame is not None
+        else (clip.trim_out - clip.trim_in) / clip.speed_factor
+    )
     return PreviewClipState(
         clip_id=clip.id,
         track_key=track_key,
@@ -461,6 +481,16 @@ def _preview_state(
         speed_factor=clip.speed_factor,
         keep_audio=clip.keep_audio,
         reverse=clip.reverse,
+        freeze_frame_source_time_seconds=(
+            clip.freeze_frame.source_time_seconds
+            if clip.freeze_frame is not None
+            else None
+        ),
+        freeze_frame_duration_seconds=(
+            clip.freeze_frame.duration_seconds
+            if clip.freeze_frame is not None
+            else None
+        ),
         rotate_degrees=clip.rotate,
         link_group_id=clip.link_group_id,
         audio_gain_db=clip.audio.gain_db,
@@ -748,6 +778,7 @@ class PlanDiffEngine:
                 "VideoInsertOverwriteClipSkill",
                 "VideoRemoveClipSkill",
                 "VideoSetClipPropertiesSkill",
+                "VideoSetClipFreezeFrameSkill",
                 "TimelineManageTrackSkill",
                 "TimelineSetClipLinkSkill",
                 "AudioSetClipPropertiesSkill",
@@ -785,6 +816,15 @@ class PlanDiffEngine:
                             keep_audio=clip.keep_audio,
                             speed_factor=clip.speed_factor,
                             reverse=clip.reverse,
+                            freeze_frame=(
+                                FreezeFrameSettings(
+                                    source_time_seconds=clip.freeze_frame_source_time_seconds,
+                                    duration_seconds=clip.freeze_frame_duration_seconds,
+                                )
+                                if clip.freeze_frame_source_time_seconds is not None
+                                and clip.freeze_frame_duration_seconds is not None
+                                else None
+                            ),
                             rotate=clip.rotate_degrees,
                             link_group_id=clip.link_group_id,
                             audio=ClipAudioSettings(
@@ -1155,6 +1195,7 @@ class PlanDiffEngine:
                 "clip_reorder",
                 "clip_speed",
                 "clip_properties",
+                "clip_freeze_frame",
                 "clip_transform",
                 "clip_color",
                 "visual_automation",
@@ -1193,6 +1234,15 @@ class PlanDiffEngine:
                     keep_audio=clip.keep_audio,
                     speed_factor=clip.speed_factor,
                     reverse=clip.reverse,
+                    freeze_frame=(
+                        FreezeFrameSettings(
+                            source_time_seconds=clip.freeze_frame_source_time_seconds,
+                            duration_seconds=clip.freeze_frame_duration_seconds,
+                        )
+                        if clip.freeze_frame_source_time_seconds is not None
+                        and clip.freeze_frame_duration_seconds is not None
+                        else None
+                    ),
                     rotate=clip.rotate_degrees,
                     transform=ClipTransform.model_validate(
                         clip.transform.model_dump(mode="python")
@@ -1436,7 +1486,16 @@ class PlanDiffEngine:
                     keep_audio=params.keep_audio,
                     mute=params.mute,
                     rotate=params.rotate,
+                    reverse=params.reverse,
                     edit_scope=params.edit_scope,
+                )
+            elif name == "VideoSetClipFreezeFrameSkill":
+                updated, outcome = engine.set_freeze_frame(
+                    params.track_reference,
+                    params.clip_id,
+                    freeze_frame=(
+                        params.freeze_frame if params.action == "set" else None
+                    ),
                 )
             elif name == "AudioSetClipPropertiesSkill":
                 if params.normalization_evidence is not None:
@@ -1740,6 +1799,17 @@ class PlanDiffEngine:
             elif old.link_group_id != new.link_group_id:
                 category = "clip_linkage"
                 reason = "The edit changes explicit clip linkage."
+            elif (
+                old.freeze_frame_source_time_seconds
+                != new.freeze_frame_source_time_seconds
+                or old.freeze_frame_duration_seconds
+                != new.freeze_frame_duration_seconds
+            ):
+                category = "clip_freeze_frame"
+                reason = (
+                    "The edit sets, changes, or clears deterministic "
+                    "freeze-frame playback."
+                )
             elif (
                 old.trim_in_seconds != new.trim_in_seconds
                 or old.trim_out_seconds != new.trim_out_seconds
