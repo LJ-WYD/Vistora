@@ -149,12 +149,12 @@
     {
       "id": "O13",
       "original_summary": "补齐字幕、文字、标题、图片与贴纸能力",
-      "status": "in_progress",
-      "commits": ["a16d06049c45784a005e1681bac6f9773692f7f9"],
+      "status": "complete",
+      "commits": ["a16d06049c45784a005e1681bac6f9773692f7f9", "1ab05965a0d94542f8c1b10537f7d51fa5c41769"],
       "remote_verified": true,
-      "implementation_paths": ["src/subtitles", "src/skills/subtitle_timeline_edits.py"],
-      "validation_evidence": ["tests/test_subtitles.py"],
-      "remaining_scope": ["词级时间", "标题", "图片", "贴纸"]
+      "implementation_paths": ["src/subtitles", "src/graphics", "src/skills/subtitle_timeline_edits.py", "src/skills/video_graphics.py", "src/core/timeline.py", "src/timeline_query", "src/plan_review", "src/timeline_preview"],
+      "validation_evidence": ["tests/test_subtitles.py", "tests/test_titles_graphics.py", "tests/subtitle_browser_fixture.py", "tests/test_reference_workflow.py", "tests/run_validation.py"],
+      "remaining_scope": []
     },
     {
       "id": "O14",
