@@ -1,0 +1,350 @@
+{
+  "schema_name": "vistora.roadmap-status",
+  "schema_version": "1.0.0",
+  "roadmap_id": "vistora-original-optimization-o1-o32",
+  "roadmap_digest": "sha256:143850f88a50bf6b43137723cff42c4f1f9132b2a12cceda369c659db5c5d618",
+  "definitions_source": "ROADMAP.md",
+  "updated_at": "2026-08-05T00:00:00Z",
+  "change_requests": [
+    {
+      "change_request_id": "change_request_initial_authoritative_import_20260805",
+      "reason": "Import the complete O1-O32 wording transcribed from the two user-provided original checklist screenshots.",
+      "approved_by": "user",
+      "approval_record": "Coordinator delegations received 2026-08-05 containing authoritative O1-O9 and O10-O32 wording.",
+      "approved_definition_digest": "sha256:143850f88a50bf6b43137723cff42c4f1f9132b2a12cceda369c659db5c5d618"
+    }
+  ],
+  "execution_waivers": [
+    {
+      "waiver_id": "waiver_finish_active_o16_mask_batch_before_governance",
+      "target_o_id": "O16",
+      "reason": "The user explicitly required the already-active mask implementation to finish before establishing the governance baseline.",
+      "approved_by": "user",
+      "approval_record": "Coordinator delegation received 2026-08-05: current internal mask batch must continue, then governance is established before any next feature.",
+      "active": false
+    }
+  ],
+  "v1_limit_acceptances": [],
+  "items": [
+    {
+      "id": "O1",
+      "original_summary": "读取并梳理现有项目结构与完整运行链路",
+      "status": "complete",
+      "commits": ["47482616096dea802b8cce63922c315a327dff19"],
+      "remote_verified": true,
+      "implementation_paths": ["ARCHITECTURE.md"],
+      "validation_evidence": ["tests/test_architecture_boundaries.py"],
+      "remaining_scope": []
+    },
+    {
+      "id": "O2",
+      "original_summary": "固化并版本化导演、项目、执行与原子工具契约",
+      "status": "complete",
+      "commits": ["a18ed15a6fdc64d3350820b8f094737d12347e22"],
+      "remote_verified": true,
+      "implementation_paths": ["src/contracts"],
+      "validation_evidence": ["tests/test_contracts.py"],
+      "remaining_scope": []
+    },
+    {
+      "id": "O3",
+      "original_summary": "建立素材到导出验证的主流程回归样例",
+      "status": "complete",
+      "commits": ["85640947e07a7a35891ef4cbc5b71e89a138e54a"],
+      "remote_verified": true,
+      "implementation_paths": ["tests/reference_workflow.py"],
+      "validation_evidence": ["tests/test_reference_workflow.py"],
+      "remaining_scope": []
+    },
+    {
+      "id": "O4",
+      "original_summary": "新增只读时间线数据接口",
+      "status": "complete",
+      "commits": ["9dcc93d96def95060d3c52dd173854cd5b91030a"],
+      "remote_verified": true,
+      "implementation_paths": ["src/timeline_query"],
+      "validation_evidence": ["tests/test_timeline_snapshot.py"],
+      "remaining_scope": []
+    },
+    {
+      "id": "O5",
+      "original_summary": "新增多类轨道、片段、时间码、播放头与素材预览窗口",
+      "status": "complete",
+      "commits": ["d1334447bb50626fda679bf757484e53388f4733", "a16d06049c45784a005e1681bac6f9773692f7f9"],
+      "remote_verified": true,
+      "implementation_paths": ["src/timeline_preview", "src/subtitles"],
+      "validation_evidence": ["tests/test_timeline_preview.py", "tests/test_subtitles.py"],
+      "remaining_scope": []
+    },
+    {
+      "id": "O6",
+      "original_summary": "新增缩略图、波形与片段详情",
+      "status": "complete",
+      "commits": ["7f4395447a4ded2e203d0cdf2e11cf206bfc593b"],
+      "remote_verified": true,
+      "implementation_paths": ["src/media_analysis", "src/timeline_preview"],
+      "validation_evidence": ["tests/test_media_analysis.py", "tests/test_timeline_preview.py"],
+      "remaining_scope": []
+    },
+    {
+      "id": "O7",
+      "original_summary": "建立方案、片段与素材证据双向定位",
+      "status": "complete",
+      "commits": ["83ded7db134a231931df6f177aa48a12e24340b4"],
+      "remote_verified": true,
+      "implementation_paths": ["src/traceability"],
+      "validation_evidence": ["tests/test_traceability.py"],
+      "remaining_scope": []
+    },
+    {
+      "id": "O8",
+      "original_summary": "新增导演方案差异预览",
+      "status": "complete",
+      "commits": ["78c9fa0c82b3e73634e9f7fd4747306ed377d59d"],
+      "remote_verified": true,
+      "implementation_paths": ["src/plan_review"],
+      "validation_evidence": ["tests/test_plan_review.py"],
+      "remaining_scope": []
+    },
+    {
+      "id": "O9",
+      "original_summary": "新增方案版本、确认、执行和回退记录",
+      "status": "complete",
+      "commits": ["94105aa99efc94c62fe3d86a5e530255bc9681de"],
+      "remote_verified": true,
+      "implementation_paths": ["src/workflow"],
+      "validation_evidence": ["tests/test_workflow.py"],
+      "remaining_scope": []
+    },
+    {
+      "id": "O10",
+      "original_summary": "建立统一原子能力注册表与验证、预览、执行、撤销、测试接口",
+      "status": "complete",
+      "commits": ["9a936539574400fe7a9c76f54dc194c3b9002d5b"],
+      "remote_verified": true,
+      "implementation_paths": ["src/atomic_runtime"],
+      "validation_evidence": ["tests/test_atomic_runtime.py"],
+      "remaining_scope": []
+    },
+    {
+      "id": "O11",
+      "original_summary": "补齐基础剪辑原子能力",
+      "status": "partial",
+      "commits": ["eba5bdb3325f6eccfbb62c4632668c34c6ae4b5f", "a0a4f75f8485e0bd90c9900ca8bffcbe22b04c90", "5c9b73e8e4f0f96c764315aea80797dbdbd72856"],
+      "remote_verified": true,
+      "implementation_paths": ["src/timeline_edit", "src/skills/video_timeline_edits.py", "src/audio_editing"],
+      "validation_evidence": ["tests/test_timeline_edits.py", "tests/test_multitrack.py", "tests/test_audio_editing.py"],
+      "remaining_scope": ["生产级倒放原子语义", "冻结帧", "复核排序能力是否完整覆盖原文"]
+    },
+    {
+      "id": "O12",
+      "original_summary": "补齐基础画面原子能力与多规格导出",
+      "status": "partial",
+      "commits": ["80a460e57d075f41ee0001c7f3939370ba2e9271"],
+      "remote_verified": true,
+      "implementation_paths": ["src/visuals", "src/skills/video_visual_edits.py"],
+      "validation_evidence": ["tests/test_visual_editing.py"],
+      "remaining_scope": ["多规格导出"]
+    },
+    {
+      "id": "O13",
+      "original_summary": "补齐字幕、文字、标题、图片与贴纸能力",
+      "status": "partial",
+      "commits": ["a16d06049c45784a005e1681bac6f9773692f7f9"],
+      "remote_verified": true,
+      "implementation_paths": ["src/subtitles", "src/skills/subtitle_timeline_edits.py"],
+      "validation_evidence": ["tests/test_subtitles.py"],
+      "remaining_scope": ["词级时间", "标题", "图片", "贴纸"]
+    },
+    {
+      "id": "O14",
+      "original_summary": "补齐基础音频、自动闪避与响度能力",
+      "status": "partial",
+      "commits": ["5c9b73e8e4f0f96c764315aea80797dbdbd72856"],
+      "remote_verified": true,
+      "implementation_paths": ["src/audio_analysis", "src/skills/audio_timeline_edits.py"],
+      "validation_evidence": ["tests/test_audio_editing.py"],
+      "remaining_scope": ["背景音乐专用语义", "音效专用语义", "自动闪避"]
+    },
+    {
+      "id": "O15",
+      "original_summary": "补齐基础调色与画面包装能力",
+      "status": "partial",
+      "commits": ["80a460e57d075f41ee0001c7f3939370ba2e9271", "d160892da1c713a09d4ffb8923af39ecf8b7901e"],
+      "remote_verified": true,
+      "implementation_paths": ["src/visuals", "src/masks"],
+      "validation_evidence": ["tests/test_visual_editing.py", "tests/test_masks.py"],
+      "remaining_scope": ["曲线", "LUT", "发光", "阴影", "圆角", "可渲染混合模式"]
+    },
+    {
+      "id": "O16",
+      "original_summary": "补齐转场、关键帧与蒙版能力",
+      "status": "complete",
+      "commits": ["5d9a5a746a3f2ce2efbf14d4033747a69bdc73e4", "b1f75d2e6fc002ee52175e8f57795744a084c4a6", "d160892da1c713a09d4ffb8923af39ecf8b7901e"],
+      "remote_verified": true,
+      "implementation_paths": ["src/transitions", "src/visual_automation", "src/masks"],
+      "validation_evidence": ["tests/test_transitions.py", "tests/test_visual_automation.py", "tests/test_masks.py"],
+      "remaining_scope": []
+    },
+    {
+      "id": "O17",
+      "original_summary": "让 Director 与 EditingAgent 理解并校验新增参数化能力",
+      "status": "complete",
+      "commits": ["d281fcd9687101d059082c09f72023665903d23b", "24e4a87674fdf6675fe6e12184251d022353fa62", "9a936539574400fe7a9c76f54dc194c3b9002d5b"],
+      "remote_verified": true,
+      "implementation_paths": ["src/agent/director_agent.py", "src/agent/editing_agent.py", "src/director/context.py"],
+      "validation_evidence": ["tests/test_director_agent.py", "tests/test_editing_agent.py", "tests/test_atomic_runtime.py"],
+      "remaining_scope": []
+    },
+    {
+      "id": "O18",
+      "original_summary": "把受控手动微调转换为原子操作和用户修订方案",
+      "status": "complete",
+      "commits": ["d1334447bb50626fda679bf757484e53388f4733", "83ded7db134a231931df6f177aa48a12e24340b4", "eba5bdb3325f6eccfbb62c4632668c34c6ae4b5f"],
+      "remote_verified": true,
+      "implementation_paths": ["src/timeline_preview/manual_edits.py", "src/contracts/models.py", "src/traceability"],
+      "validation_evidence": ["tests/test_manual_edits.py", "tests/test_traceability.py", "tests/test_timeline_edits.py"],
+      "remaining_scope": []
+    },
+    {
+      "id": "O19",
+      "original_summary": "新增 Director 对话、创作简报和规划就绪入口",
+      "status": "complete",
+      "commits": ["24e4a87674fdf6675fe6e12184251d022353fa62", "1a17f6e97c64eddf70c282a731b055eaced1e6c5"],
+      "remote_verified": true,
+      "implementation_paths": ["src/agent/director_agent.py", "src/product_entry"],
+      "validation_evidence": ["tests/test_director_agent.py", "tests/test_product_entry.py"],
+      "remaining_scope": []
+    },
+    {
+      "id": "O20",
+      "original_summary": "新增 Director 素材齐全、不完整和完全无素材判断",
+      "status": "partial",
+      "commits": ["24e4a87674fdf6675fe6e12184251d022353fa62", "759afcc57aaf975bd892665a16fcafc01f49dd86"],
+      "remote_verified": true,
+      "implementation_paths": ["src/agent", "src/material_requirements"],
+      "validation_evidence": ["tests/test_director_agent.py", "tests/test_material_requirements.py"],
+      "remaining_scope": ["将素材不完整建成明确、可审计、可进入产品流程的独立状态"]
+    },
+    {
+      "id": "O21",
+      "original_summary": "新增无素材模式素材需求方案",
+      "status": "complete",
+      "commits": ["759afcc57aaf975bd892665a16fcafc01f49dd86"],
+      "remote_verified": true,
+      "implementation_paths": ["src/material_requirements"],
+      "validation_evidence": ["tests/test_material_requirements.py"],
+      "remaining_scope": []
+    },
+    {
+      "id": "O22",
+      "original_summary": "新增创作规划 Agent",
+      "status": "complete",
+      "commits": ["222645db54ce218332434cbc34258f9e9b10de76"],
+      "remote_verified": true,
+      "implementation_paths": ["src/creation_planning"],
+      "validation_evidence": ["tests/test_creation_planning.py"],
+      "remaining_scope": []
+    },
+    {
+      "id": "O23",
+      "original_summary": "新增素材生产 Agent",
+      "status": "partial",
+      "commits": ["acdab74e8badbe84ff19b9aa6a794d997eec3bf9"],
+      "remote_verified": true,
+      "implementation_paths": ["src/material_production"],
+      "validation_evidence": ["tests/test_material_production.py", "tests/test_reference_workflow.py"],
+      "remaining_scope": ["AI 图片任务类型", "AI 视频任务类型", "AI 配音任务类型", "AI 音乐任务类型", "素材检索", "录制任务", "用户补素材请求", "默认无真实 provider 且不得虚报"]
+    },
+    {
+      "id": "O24",
+      "original_summary": "统一素材入库、代理、转码、分析、标签和质检",
+      "status": "partial",
+      "commits": ["acdab74e8badbe84ff19b9aa6a794d997eec3bf9"],
+      "remote_verified": true,
+      "implementation_paths": ["src/material_production"],
+      "validation_evidence": ["tests/test_material_production.py"],
+      "remaining_scope": ["代理", "转码", "统一媒体分析", "标签", "完整素材质检"]
+    },
+    {
+      "id": "O25",
+      "original_summary": "素材完成后回到 Director 输出最终剪辑方案",
+      "status": "complete",
+      "commits": ["acdab74e8badbe84ff19b9aa6a794d997eec3bf9"],
+      "remote_verified": true,
+      "implementation_paths": ["src/material_production", "src/agent", "src/product_entry"],
+      "validation_evidence": ["tests/test_reference_workflow.py", "tests/test_material_production.py"],
+      "remaining_scope": []
+    },
+    {
+      "id": "O26",
+      "original_summary": "新增缺素材反馈循环",
+      "status": "missing",
+      "commits": [],
+      "remote_verified": false,
+      "implementation_paths": [],
+      "validation_evidence": [],
+      "remaining_scope": ["审阅或剪辑缺素材检测", "返回 Director 生成补素材需求", "重新进入规划与生产", "可恢复闭环"]
+    },
+    {
+      "id": "O27",
+      "original_summary": "建立云端 AI 包装任务模型",
+      "status": "missing",
+      "commits": [],
+      "remote_verified": false,
+      "implementation_paths": [],
+      "validation_evidence": [],
+      "remaining_scope": ["镜头/时间段/对象/遮罩/跟踪/风格/提示词/模型/参数/验收的版本化任务契约"]
+    },
+    {
+      "id": "O28",
+      "original_summary": "接入高价值 AI 包装能力",
+      "status": "missing",
+      "commits": [],
+      "remote_verified": false,
+      "implementation_paths": [],
+      "validation_evidence": [],
+      "remaining_scope": ["背景替换", "对象移除", "局部重绘", "风格化", "补帧", "生成式转场", "生成式 B-roll", "AI 配音", "AI 音乐", "AI 音效", "provider-neutral fake/manual 验证闭环"]
+    },
+    {
+      "id": "O29",
+      "original_summary": "将 AI 结果回填统一时间线",
+      "status": "missing",
+      "commits": [],
+      "remote_verified": false,
+      "implementation_paths": [],
+      "validation_evidence": [],
+      "remaining_scope": ["标准视频片段", "透明图层", "效果层", "确认后原子回填", "回填 rollback/provenance"]
+    },
+    {
+      "id": "O30",
+      "original_summary": "新增 AI 候选、成本、进度、重试、局部重做、替换、回退和缓存",
+      "status": "missing",
+      "commits": [],
+      "remote_verified": false,
+      "implementation_paths": [],
+      "validation_evidence": [],
+      "remaining_scope": ["候选版本", "成本", "进度", "失败重试", "局部重做", "替换", "回退", "缓存"]
+    },
+    {
+      "id": "O31",
+      "original_summary": "新增成片自动质检",
+      "status": "missing",
+      "commits": [],
+      "remote_verified": false,
+      "implementation_paths": [],
+      "validation_evidence": [],
+      "remaining_scope": ["时长", "画幅", "编码", "音轨", "黑帧", "静帧", "响度", "字幕", "完整解码"]
+    },
+    {
+      "id": "O32",
+      "original_summary": "完成多规格输出、版本比较、品牌包、偏好和完整交付",
+      "status": "missing",
+      "commits": [],
+      "remote_verified": false,
+      "implementation_paths": [],
+      "validation_evidence": [],
+      "remaining_scope": ["多规格输出", "项目版本比较", "品牌风格包", "用户偏好", "完整交付流程"]
+    }
+  ]
+}

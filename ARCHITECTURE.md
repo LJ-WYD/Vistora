@@ -2,6 +2,8 @@
 
 This document is the canonical description of Vistora's implemented architecture and its target responsibility boundaries. The vision chapters under `开发文档/` describe longer-term product direction; when those chapters and the current code differ, this document identifies the difference explicitly.
 
+The immutable original optimization definitions live in [ROADMAP.md](ROADMAP.md), with evidence and status in [roadmap-status.json](roadmap-status.json). Those files are the sole authority for O1–O32 numbering; architecture sections and internal `BATCH-*` identifiers may explain implementation but cannot redefine the roadmap.
+
 The keywords **MUST**, **MUST NOT**, **SHOULD**, and **MAY** define target contracts. A target contract is not evidence that the corresponding component is already implemented.
 
 ## Non-negotiable invariant

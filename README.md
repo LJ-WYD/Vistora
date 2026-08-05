@@ -14,7 +14,7 @@ The current public baseline contains the editing runtime, versioned review/prove
 
 The architecture keeps creative planning separate from execution: the production `DirectorAgent` maintains a versioned creative brief and produces a structured, reviewable proposal; a separate explicit user-confirmation action gates the constrained production `EditingAgent`; and only atomic tools mutate timeline or media state. The interactive `OperatorAgent` remains a compatibility prototype and is not part of the confirmed production path.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the implemented runtime, binding responsibility contracts, compatibility exceptions, and current-to-target gap register.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the implemented runtime and responsibility contracts. The exact, user-approved O1–O32 definitions and evidence-based status are governed by [ROADMAP.md](ROADMAP.md) and [roadmap-status.json](roadmap-status.json); internal implementation batches never redefine or renumber those original items.
 
 ## Requirements
 
