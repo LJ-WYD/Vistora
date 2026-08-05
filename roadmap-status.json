@@ -4,7 +4,7 @@
   "roadmap_id": "vistora-original-optimization-o1-o32",
   "roadmap_digest": "sha256:143850f88a50bf6b43137723cff42c4f1f9132b2a12cceda369c659db5c5d618",
   "definitions_source": "ROADMAP.md",
-  "updated_at": "2026-08-05T08:36:47Z",
+  "updated_at": "2026-08-05T08:52:26Z",
   "change_requests": [
     {
       "change_request_id": "change_request_initial_authoritative_import_20260805",
@@ -219,12 +219,12 @@
     {
       "id": "O20",
       "original_summary": "新增 Director 素材齐全、不完整和完全无素材判断",
-      "status": "in_progress",
-      "commits": ["24e4a87674fdf6675fe6e12184251d022353fa62", "759afcc57aaf975bd892665a16fcafc01f49dd86"],
+      "status": "complete",
+      "commits": ["24e4a87674fdf6675fe6e12184251d022353fa62", "759afcc57aaf975bd892665a16fcafc01f49dd86", "4839228e3c3494c48e3f239ad1ad6e14784ba417"],
       "remote_verified": true,
-      "implementation_paths": ["src/agent", "src/material_requirements"],
-      "validation_evidence": ["tests/test_director_agent.py", "tests/test_material_requirements.py"],
-      "remaining_scope": ["将素材不完整建成明确、可审计、可进入产品流程的独立状态"]
+      "implementation_paths": ["src/agent/director_agent.py", "src/director/models.py", "src/director/query.py", "src/product_entry", "src/timeline_preview/static/app.js"],
+      "validation_evidence": ["tests/test_director_agent.py", "tests/test_product_entry.py", "tests/test_reference_workflow.py", "tests/director_visual_fixture.py"],
+      "remaining_scope": []
     },
     {
       "id": "O21",
