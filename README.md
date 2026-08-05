@@ -166,9 +166,32 @@ Provenance describes recorded history; the separate plan-review boundary below d
 
 `src/agent/director_agent.py` implements the production creative boundary. It accepts natural-language turns through a provider-neutral structured-reasoning adapter, reads only a detached timeline/material/provenance/tool-schema context, and persists an append-only, hash-chained Director session ledger. Every creative-brief version records the objective, audience, platform, duration, style, narrative and pacing, required and forbidden elements, delivery requirements, selected materials and evidence, assumptions, open questions, and acceptance criteria.
 
-The Agent deterministically gates each turn as `needs_clarification`, `ready_for_material_requirements`, `ready_to_plan`, `material_requirements_ready`, `proposal_ready`, `unsupported_next_stage`, `withdrawn`, `model_error`, or `stale_context`. It validates all model output against frozen schemas, rejects tool-call payloads, unobserved evidence, unsafe paths, unavailable tools, workflow-only tools, stale snapshots, and registry drift, and retries malformed structured output only within a configured bound. The bundled OpenAI-compatible adapter uses JSON-only responses and exposes no tool callback; tests and the reference workflow use deterministic adapters with no external model call.
+The Agent deterministically gates each turn as `needs_clarification`,
+`materials_incomplete`, `ready_for_material_requirements`, `ready_to_plan`,
+`material_requirements_ready`, `proposal_ready`, `unsupported_next_stage`,
+`withdrawn`, `model_error`, or `stale_context`. Every new brief carries a
+frozen `MaterialStateAssessment` bound to the exact snapshot, brief digest,
+and material-facts digest. It classifies the context as `materials_complete`,
+`materials_incomplete`, or `no_materials`, with stable observed/unavailable/
+selected/missing-evidence IDs and explicit reasons. Legacy brief records with
+no assessment remain readable and are displayed as legacy unknown.
 
-With existing material, a `proposal_ready` result includes an exact `DirectorPlan`, proposed execution plan, and current step-8 diff review. With no observed material, the Director first completes the same creative brief and then may produce a versioned `MaterialRequirementsPlan`: a reviewable list of required video, audio, image, narration, or reference assets and why each is needed. Neither result creates a confirmation, calls another Agent, executes tools, generates media, exports, or rolls back.
+The Agent validates all model output against frozen schemas, rejects tool-call
+payloads, unobserved evidence, unsafe paths, unavailable tools, workflow-only
+tools, stale snapshots, and registry drift, and retries malformed structured
+output only within a configured bound. The bundled OpenAI-compatible adapter
+uses JSON-only responses and exposes no tool callback; tests and the reference
+workflow use deterministic adapters with no external model call.
+
+With complete existing material, a `proposal_ready` result includes an exact
+`DirectorPlan`, proposed execution plan, and current step-8 diff review. An
+incomplete set stops at `materials_incomplete` and stays in Director dialogue;
+it cannot masquerade as either complete or empty. With no material facts, the
+Director first completes the same creative brief and then may produce a
+versioned `MaterialRequirementsPlan`: a reviewable list of required video,
+audio, image, narration, or reference assets and why each is needed. Neither
+result creates a confirmation, calls another Agent, executes tools, generates
+media, exports, or rolls back.
 
 ## No-material requirements workflow
 

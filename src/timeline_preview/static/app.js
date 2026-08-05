@@ -623,6 +623,10 @@ function renderDirector() {
       ],
       ["Style", brief.style || "Unresolved"],
       ["Pacing", brief.pacing || "Unresolved"],
+      [
+        "Material state",
+        brief.material_state?.state?.replaceAll("_", " ") || "legacy unknown",
+      ],
       ["Materials", `${brief.material_ids.length} observed`],
       ["Evidence", `${brief.evidence_ids.length} bound`],
     ];
@@ -632,6 +636,11 @@ function renderDirector() {
     ui.directorBrief.append(
       detailRow("Reason", brief.readiness_reasons.join(" ")),
     );
+    if (brief.material_state?.reasons?.length) {
+      ui.directorBrief.append(
+        detailRow("Material evidence", brief.material_state.reasons.join(" ")),
+      );
+    }
   }
   ui.directorTurns.replaceChildren();
   for (const turn of history.turns) {

@@ -257,7 +257,19 @@ user turn
   -> stop before confirmation
 ```
 
-The creative brief covers objective, audience, platform, target duration, style, narrative, pacing, must/must-not constraints, delivery requirements, existing material/evidence IDs, assumptions, unresolved questions, and acceptance criteria. Deterministic readiness reports missing clarification, missing materials, a complete brief, or an unsupported next stage. A plan can be proposed only from a complete brief with observed material and exact evidence references. A later accepted revision increments the brief and plan versions without changing the stable plan identity; withdrawal is audited.
+The creative brief covers objective, audience, platform, target duration,
+style, narrative, pacing, must/must-not constraints, delivery requirements,
+existing material/evidence IDs, assumptions, unresolved questions, and
+acceptance criteria. Each new brief embeds a strict `MaterialStateAssessment`
+bound to the exact snapshot, brief digest, and deterministic material-facts
+digest. Stable ID sets distinguish `materials_complete`,
+`materials_incomplete`, and `no_materials`; missing/unsupported/error facts and
+missing evidence are recorded rather than folded into generic clarification.
+Legacy ledgers without this optional nested record remain readable. A normal
+edit plan can be proposed only from a complete brief with a complete observed
+material set and exact evidence references. A later accepted revision
+increments the brief and plan versions without changing the stable plan
+identity; withdrawal is audited.
 
 The Agent rejects malformed or extra model fields, requested tool calls, secrets or absolute paths, unobserved evidence, cross-context IDs, unavailable/unsafe tools, stale snapshots, and registry-schema drift. Structured-output retries are bounded; provider timeout, provider failure, malformed output, and stale context remain explicit report states rather than being presented as successful reasoning. Session records persist only redacted user text and browser-safe domain data in a hash-chained, atomically replaced `*.director.json` sidecar with optimistic revision checks and tamper detection.
 

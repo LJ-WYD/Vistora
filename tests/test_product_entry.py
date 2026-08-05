@@ -68,7 +68,11 @@ class FakeDirectorAdapter:
 
     def complete(self, request):
         mode = self.modes.pop(0)
-        material = request.context.materials[0]
+        material = next(
+            item
+            for item in request.context.materials
+            if item.observation_status == "observed" and item.evidence
+        )
         if mode == "clarify":
             brief = CreativeBriefInput(
                 objective="Create a concise existing-material cut.",
@@ -354,6 +358,46 @@ def test_full_product_flow_requires_separate_confirmation_and_editing(product):
     assert timeline_manager.TimelineManager.get_current_timeline().tracks[
         "video"
     ].clips
+
+
+def test_product_entry_exposes_audited_incomplete_material_state(product):
+    service, project_file = product
+    original_provider = service.director._context_provider
+
+    def mixed_context():
+        context, snapshot = original_provider()
+        missing = DirectorMaterialFact(
+            material_id="source_2222222222222222",
+            media_kind="audio",
+            display_name="missing-dialogue.wav",
+            observation_status="missing",
+        )
+        return (
+            DirectorContextService.build(
+                snapshot,
+                vistora_main.SKILLS,
+                materials=(*context.materials, missing),
+            ),
+            snapshot,
+        )
+
+    service.director._context_provider = mixed_context
+    service.director._adapter = FakeDirectorAdapter(("propose",))
+    response = service.command(_command(
+        service,
+        0,
+        "director_turn",
+        "request_product_incomplete_materials",
+        message="Use the picture and the missing dialogue source.",
+    ))
+    assert response.view.state == "materials_incomplete"
+    assert response.view.allowed_actions == ("director_turn",)
+    assessment = response.view.director["latest_brief"]["material_state"]
+    assert assessment["state"] == "materials_incomplete"
+    assert assessment["unavailable_material_ids"] == [
+        "source_2222222222222222"
+    ]
+    assert project_file.exists()
 
 
 def test_idempotency_stale_guard_and_restart_view(product):

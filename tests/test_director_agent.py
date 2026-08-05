@@ -128,7 +128,11 @@ def _materials(snapshot):
 
 
 def _full_brief(request, **updates):
-    material = request.context.materials[0]
+    material = next(
+        item
+        for item in request.context.materials
+        if item.observation_status == "observed" and item.evidence
+    )
     values = {
         "objective": "Create a concise launch cut.",
         "audience": "Existing product users.",
@@ -284,6 +288,7 @@ def test_clarification_loop_versions_brief_then_creates_review(
     )
     assert second.status == "proposal_ready"
     assert second.brief.readiness == "ready_to_plan"
+    assert second.brief.material_state.state == "materials_complete"
     assert second.brief.brief_version == 2
     assert second.proposal.review.review_state == "current"
     assert second.proposal.review.diff.review_status != "blocked"
@@ -454,7 +459,68 @@ def test_no_materials_and_unsupported_next_stage_are_truthful(
     )
     assert first.status == "needs_clarification"
     assert second.status == "unsupported_next_stage"
+    assert first.brief.material_state.state == "no_materials"
+    assert second.brief.material_state.state == "no_materials"
     assert first.proposal is second.proposal is None
+
+
+def test_incomplete_materials_are_audited_and_block_plan_handoff(
+    director_factory,
+):
+    def provider():
+        snapshot = TimelineSnapshotService.snapshot_current()
+        observed = _materials(snapshot)[0]
+        missing = DirectorMaterialFact(
+            material_id="source_2222222222222222",
+            media_kind="audio",
+            display_name="missing-dialogue.wav",
+            observation_status="missing",
+        )
+        context = DirectorContextService.build(
+            snapshot,
+            dict(vistora_main.SKILLS),
+            materials=(observed, missing),
+        )
+        return context, snapshot
+
+    adapter = FakeAdapter([lambda request: _output(request)])
+    agent, store, project_file, _ = director_factory(
+        adapter, provider=provider
+    )
+    before = project_file.read_bytes()
+    report = agent.converse(
+        session_id="session_material_incomplete",
+        turn_id="turn_material_incomplete_01",
+        user_message="Use the available picture and missing dialogue source.",
+    )
+    assert report.status == "materials_incomplete"
+    assert report.proposal is None
+    assessment = report.brief.material_state
+    assert assessment.state == "materials_incomplete"
+    assert assessment.observed_material_ids == (
+        report.brief.content.material_ids[0],
+    )
+    assert assessment.unavailable_material_ids == (
+        "source_2222222222222222",
+    )
+    assert assessment.snapshot_ref == provider()[0].snapshot_ref
+    assert type(assessment).model_validate_json(
+        assessment.model_dump_json()
+    ) == assessment
+    with pytest.raises(ValidationError, match="unresolved gaps"):
+        type(assessment).model_validate({
+            **assessment.model_dump(mode="python"),
+            "state": "materials_complete",
+        })
+    assert project_file.read_bytes() == before
+    reloaded = store.load()
+    persisted = reloaded.entries[-1].record.report.brief.material_state
+    assert persisted == assessment
+    view = DirectorHistoryQuery.project(reloaded)
+    assert view.latest_status == "materials_incomplete"
+    assert view.latest_brief["material_state"]["state"] == (
+        "materials_incomplete"
+    )
 
 
 def test_malformed_json_and_schema_violation_use_bounded_retry(

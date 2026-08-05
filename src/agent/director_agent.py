@@ -33,6 +33,7 @@ from director import (
     MaterialRequirementsPlan,
     MaterialRequirementsProposal,
     MaterialRequirementsReview,
+    MaterialStateAssessment,
     digest_json,
 )
 from plan_review import (
@@ -393,6 +394,90 @@ class DirectorAgent:
         context: DirectorReadContext,
         unsupported: bool,
     ) -> CreativeBriefVersion:
+        content_digest = digest_json(content.model_dump(mode="json"))
+        observed = tuple(sorted(
+            material.material_id
+            for material in context.materials
+            if material.observation_status == "observed"
+        ))
+        unavailable = tuple(sorted(
+            material.material_id
+            for material in context.materials
+            if material.observation_status != "observed"
+        ))
+        selected = tuple(sorted(content.material_ids))
+        selected_evidence_materials = {
+            evidence.material_id
+            for material in context.materials
+            for evidence in material.evidence
+            if evidence.evidence_id in content.evidence_ids
+        }
+        missing_evidence = tuple(sorted(
+            material_id
+            for material_id in selected
+            if material_id not in selected_evidence_materials
+        ))
+        material_payload = {
+            "snapshot_ref": context.snapshot_ref.model_dump(mode="json"),
+            "brief_content_digest": content_digest,
+            "materials": [
+                item.model_dump(mode="json")
+                for item in sorted(
+                    context.materials, key=lambda item: item.material_id
+                )
+            ],
+        }
+        material_facts_digest = digest_json(material_payload["materials"])
+        if not context.materials:
+            material_state_value = "no_materials"
+            material_reasons = (
+                "The read-only Director context contains no material facts.",
+            )
+        elif (
+            observed
+            and not unavailable
+            and selected
+            and set(selected).issubset(observed)
+            and not missing_evidence
+        ):
+            material_state_value = "materials_complete"
+            material_reasons = (
+                "Every selected material is observed and bound to selected evidence.",
+            )
+        else:
+            material_state_value = "materials_incomplete"
+            gaps = []
+            if unavailable:
+                gaps.append("unavailable facts: " + ", ".join(unavailable))
+            if not selected:
+                gaps.append("no observed materials selected")
+            elif not set(selected).issubset(observed):
+                gaps.append("selected materials are not all observed")
+            if missing_evidence:
+                gaps.append("missing selected evidence: " + ", ".join(missing_evidence))
+            material_reasons = (
+                "Material set is incomplete: " + "; ".join(gaps),
+            )
+        assessment_digest = digest_json({
+            **material_payload,
+            "state": material_state_value,
+            "observed": observed,
+            "unavailable": unavailable,
+            "selected": selected,
+            "missing_evidence": missing_evidence,
+        })
+        material_state = MaterialStateAssessment(
+            assessment_id=f"material_state_{assessment_digest[7:23]}",
+            snapshot_ref=context.snapshot_ref,
+            brief_content_digest=content_digest,
+            material_facts_digest=material_facts_digest,
+            state=material_state_value,
+            observed_material_ids=observed,
+            unavailable_material_ids=unavailable,
+            selected_material_ids=selected,
+            missing_evidence_material_ids=missing_evidence,
+            reasons=material_reasons,
+        )
         missing = [
             field_name
             for field_name in _REQUIRED_BRIEF_FIELDS
@@ -422,29 +507,21 @@ class DirectorAgent:
         elif not content.acceptance_criteria:
             readiness = "needs_clarification"
             reasons.append("Acceptance criteria are missing.")
-        elif not context.materials:
+        elif material_state.state == "no_materials":
             readiness = "ready_for_material_requirements"
             reasons.append(
                 "The creative brief is complete and no observed materials "
                 "exist; a material requirements proposal may be reviewed."
             )
-        elif not content.material_ids:
-            readiness = "needs_clarification"
-            reasons.append(
-                "The brief has not selected any observed source material."
-            )
-        elif not content.evidence_ids:
-            readiness = "needs_clarification"
-            reasons.append(
-                "The brief has not bound any observed source evidence."
-            )
+        elif material_state.state == "materials_incomplete":
+            readiness = "materials_incomplete"
+            reasons.extend(material_state.reasons)
         else:
             readiness = "ready_to_plan"
             reasons.append(
                 "Required creative constraints, observed materials, evidence, "
                 "delivery requirements, and acceptance criteria are present."
             )
-        content_digest = digest_json(content.model_dump(mode="json"))
         if previous is None:
             version = 1
         elif previous.content_digest == content_digest:
@@ -458,6 +535,7 @@ class DirectorAgent:
             content=content,
             readiness=readiness,
             readiness_reasons=tuple(reasons),
+            material_state=material_state,
             updated_at=self._clock(),
         )
 

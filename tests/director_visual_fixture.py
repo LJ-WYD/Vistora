@@ -25,6 +25,9 @@ def _history(state: str, project_id: str) -> DirectorHistoryView:
         "needs_clarification": [
             "Missing creative brief fields: audience, pacing."
         ],
+        "materials_incomplete": [
+            "Observed picture is available, but the required dialogue source is missing."
+        ],
         "proposal_ready": [
             "Required constraints, observed materials, and evidence are present."
         ],
@@ -34,12 +37,12 @@ def _history(state: str, project_id: str) -> DirectorHistoryView:
     }
     material_ids = (
         ["source_1111111111111111"]
-        if state == "proposal_ready"
+        if state in {"proposal_ready", "materials_incomplete"}
         else []
     )
     evidence_ids = (
         ["evidence_visual_source"]
-        if state == "proposal_ready"
+        if state in {"proposal_ready", "materials_incomplete"}
         else []
     )
     error = (
@@ -110,6 +113,31 @@ def _history(state: str, project_id: str) -> DirectorHistoryView:
                 if state == "proposal_ready"
                 else []
             ),
+            "material_state": (
+                {
+                    "schema_version": "1.0.0",
+                    "schema_name": "vistora.director-material-state",
+                    "assessment_id": "material_state_visual",
+                    "snapshot_ref": {
+                        "schema_name": "vistora.timeline-snapshot-reference",
+                        "schema_version": "11.0.0",
+                        "project_id": project_id,
+                        "revision": 0,
+                        "snapshot_id": "snapshot_visual",
+                        "timeline_digest": "sha256:" + ("6" * 64),
+                    },
+                    "brief_content_digest": "sha256:" + ("2" * 64),
+                    "material_facts_digest": "sha256:" + ("7" * 64),
+                    "state": "materials_incomplete",
+                    "observed_material_ids": ["source_1111111111111111"],
+                    "unavailable_material_ids": ["source_2222222222222222"],
+                    "selected_material_ids": ["source_1111111111111111"],
+                    "missing_evidence_material_ids": [],
+                    "reasons": reasons[state],
+                }
+                if state == "materials_incomplete"
+                else None
+            ),
         },
         turns=(
             {
@@ -144,6 +172,7 @@ def main() -> None:
         choices=(
             "needs_materials",
             "needs_clarification",
+            "materials_incomplete",
             "proposal_ready",
             "model_error",
         ),

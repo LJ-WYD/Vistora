@@ -24,7 +24,8 @@ class DirectorHistoryView(DirectorModel):
     material_requirements: tuple[dict[str, Any], ...] = ()
     limitations: tuple[str, ...] = (
         "Director proposals are not user confirmations.",
-        "No-material creative planning or media generation is not implemented.",
+        "Material planning and production use separate confirmed services.",
+        "No online media provider is configured by default.",
         "Execution and rollback remain separate application services.",
     )
 
@@ -73,6 +74,11 @@ class DirectorHistoryQuery:
                 ),
                 "acceptance_criteria": list(
                     report.brief.content.acceptance_criteria
+                ),
+                "material_state": (
+                    report.brief.material_state.model_dump(mode="json")
+                    if report.brief.material_state is not None
+                    else None
                 ),
             }
             turns.append(

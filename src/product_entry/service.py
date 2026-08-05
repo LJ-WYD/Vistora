@@ -330,7 +330,9 @@ class ProductionEntryService:
             )
         if status == "proposal_ready":
             return "proposal_ready", ("director_turn", "persist_review")
-        if status in {"needs_clarification", "needs_materials"}:
+        if status in {
+            "needs_clarification", "needs_materials", "materials_incomplete"
+        }:
             return status, ("director_turn",)
         if status in {"model_error", "stale_context"}:
             return "error", ("director_turn",)

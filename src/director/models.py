@@ -219,10 +219,71 @@ class CreativeBriefInput(DirectorModel):
 Readiness = Literal[
     "needs_clarification",
     "needs_materials",
+    "materials_incomplete",
     "ready_for_material_requirements",
     "ready_to_plan",
     "unsupported_next_stage",
 ]
+
+
+class MaterialStateAssessment(DirectorModel):
+    """Exact, auditable classification of the Director's observed materials."""
+
+    schema_name: Literal["vistora.director-material-state"] = (
+        "vistora.director-material-state"
+    )
+    assessment_id: StableId
+    snapshot_ref: TimelineSnapshotReference
+    brief_content_digest: Sha256Digest
+    material_facts_digest: Sha256Digest
+    state: Literal[
+        "materials_complete", "materials_incomplete", "no_materials"
+    ]
+    observed_material_ids: tuple[StableId, ...] = ()
+    unavailable_material_ids: tuple[StableId, ...] = ()
+    selected_material_ids: tuple[StableId, ...] = ()
+    missing_evidence_material_ids: tuple[StableId, ...] = ()
+    reasons: tuple[str, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def classification_is_exact(self) -> "MaterialStateAssessment":
+        for field_name in (
+            "observed_material_ids",
+            "unavailable_material_ids",
+            "selected_material_ids",
+            "missing_evidence_material_ids",
+        ):
+            values = getattr(self, field_name)
+            if values != tuple(sorted(set(values))):
+                raise ValueError(f"{field_name} must use stable unique ordering")
+        if set(self.observed_material_ids) & set(self.unavailable_material_ids):
+            raise ValueError("Observed and unavailable material sets must be disjoint")
+        if self.state == "no_materials" and (
+            self.observed_material_ids
+            or self.unavailable_material_ids
+            or self.selected_material_ids
+        ):
+            raise ValueError("No-material assessment cannot contain material IDs")
+        if self.state == "materials_complete" and (
+            not self.observed_material_ids
+            or self.unavailable_material_ids
+            or not self.selected_material_ids
+            or self.missing_evidence_material_ids
+            or not set(self.selected_material_ids).issubset(
+                self.observed_material_ids
+            )
+        ):
+            raise ValueError("Complete material assessment has unresolved gaps")
+        if self.state == "materials_incomplete" and not (
+            self.observed_material_ids
+            or self.unavailable_material_ids
+            or self.selected_material_ids
+        ):
+            raise ValueError("Incomplete material assessment needs material context")
+        return self
+
+    def digest(self) -> str:
+        return digest_json(self.model_dump(mode="json"))
 
 
 class CreativeBriefVersion(DirectorModel):
@@ -235,6 +296,7 @@ class CreativeBriefVersion(DirectorModel):
     content: CreativeBriefInput
     readiness: Readiness
     readiness_reasons: tuple[str, ...] = Field(min_length=1)
+    material_state: MaterialStateAssessment | None = None
     updated_at: AwareDatetime
 
     @model_validator(mode="after")
@@ -541,6 +603,8 @@ class DirectorProposalResult(DirectorModel):
 DirectorTurnStatus = Literal[
     "needs_clarification",
     "needs_materials",
+    "materials_incomplete",
+    "ready_for_material_requirements",
     "ready_to_plan",
     "proposal_ready",
     "material_requirements_ready",

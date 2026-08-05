@@ -221,6 +221,7 @@ class ProductEntryView(ProductEntryModel):
         "dialogue",
         "needs_clarification",
         "needs_materials",
+        "materials_incomplete",
         "proposal_ready",
         "material_requirements_ready",
         "material_reviewed",
