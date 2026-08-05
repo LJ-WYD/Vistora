@@ -4,7 +4,7 @@
   "roadmap_id": "vistora-original-optimization-o1-o32",
   "roadmap_digest": "sha256:143850f88a50bf6b43137723cff42c4f1f9132b2a12cceda369c659db5c5d618",
   "definitions_source": "ROADMAP.md",
-  "updated_at": "2026-08-05T08:55:26Z",
+  "updated_at": "2026-08-05T09:11:21Z",
   "change_requests": [
     {
       "change_request_id": "change_request_initial_authoritative_import_20260805",
@@ -249,12 +249,12 @@
     {
       "id": "O23",
       "original_summary": "新增素材生产 Agent",
-      "status": "in_progress",
-      "commits": ["acdab74e8badbe84ff19b9aa6a794d997eec3bf9"],
+      "status": "complete",
+      "commits": ["acdab74e8badbe84ff19b9aa6a794d997eec3bf9", "a0a6de891aaf858f98f533b330557b3c51ac8654"],
       "remote_verified": true,
-      "implementation_paths": ["src/material_production"],
-      "validation_evidence": ["tests/test_material_production.py", "tests/test_reference_workflow.py"],
-      "remaining_scope": ["AI 图片任务类型", "AI 视频任务类型", "AI 配音任务类型", "AI 音乐任务类型", "素材检索", "录制任务", "用户补素材请求", "默认无真实 provider 且不得虚报"]
+      "implementation_paths": ["src/material_production/agent.py", "src/material_production/adapters.py", "src/material_production/service.py", "src/product_entry/factory.py", "src/product_entry/service.py", "src/timeline_preview/static/app.js"],
+      "validation_evidence": ["tests/test_material_production.py", "tests/test_creation_planning.py", "tests/test_product_entry.py", "tests/test_reference_workflow.py", "tests/product_visual_fixture.py"],
+      "remaining_scope": []
     },
     {
       "id": "O24",
