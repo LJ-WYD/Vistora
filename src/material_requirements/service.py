@@ -63,6 +63,22 @@ class MaterialRequirementsService:
         expected_revision: int,
     ):
         self._current(proposal)
+        current = self.store.load(
+            session_id=self.session_id,
+            project_id=self.project_id,
+        )
+        known = [
+            event.proposal
+            for event in current.events
+            if event.proposal is not None
+            and event.proposal.proposal_id == proposal.proposal_id
+        ]
+        if known:
+            if known == [proposal]:
+                return current
+            raise MaterialRequirementsError(
+                "Material proposal ID was replayed with drift"
+            )
         with self.store.exclusive(
             session_id=self.session_id,
             project_id=self.project_id,
@@ -226,4 +242,3 @@ class MaterialRequirementsService:
             proposals=proposals,
             decisions=decisions,
         )
-

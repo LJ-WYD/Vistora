@@ -135,6 +135,80 @@ class DirectorMaterialFact(DirectorModel):
         return self
 
 
+class MaterialShortfallItem(DirectorModel):
+    """A concrete missing-material fact reported by review or execution."""
+
+    shortfall_item_id: StableId
+    requirement_item_id: StableId
+    asset_type: Literal[
+        "video_shot",
+        "audio",
+        "image",
+        "narration",
+        "reference_asset",
+    ]
+    reason: str = Field(min_length=1)
+    narrative_position: str = Field(min_length=1)
+    affected_entity_ids: tuple[StableId, ...] = ()
+    evidence_gap: str = Field(min_length=1)
+    acceptance_criteria: tuple[str, ...] = Field(min_length=1)
+    priority: Literal["required", "high", "medium", "low"]
+
+    @model_validator(mode="after")
+    def item_is_stable(self) -> MaterialShortfallItem:
+        if self.affected_entity_ids != tuple(
+            sorted(set(self.affected_entity_ids))
+        ):
+            raise ValueError("Affected entity IDs must be unique and ordered")
+        if len(self.acceptance_criteria) != len(set(self.acceptance_criteria)):
+            raise ValueError("Shortfall acceptance criteria must be unique")
+        return self
+
+
+class MaterialShortfallReport(DirectorModel):
+    """Exact, browser-safe feedback from plan review or editing execution."""
+
+    schema_name: Literal["vistora.material-shortfall-report"] = (
+        "vistora.material-shortfall-report"
+    )
+    report_id: StableId
+    source_kind: Literal["plan_review", "editing_execution"]
+    project_id: StableId
+    snapshot_ref: TimelineSnapshotReference
+    source_plan_id: StableId
+    source_plan_version: int = Field(ge=1)
+    source_plan_digest: Sha256Digest
+    source_review_id: StableId | None = None
+    source_review_digest: Sha256Digest | None = None
+    source_confirmation_id: StableId | None = None
+    source_execution_id: StableId | None = None
+    items: tuple[MaterialShortfallItem, ...] = Field(min_length=1)
+    created_at: AwareDatetime
+    report_digest: Sha256Digest
+
+    @model_validator(mode="after")
+    def report_is_exact(self) -> MaterialShortfallReport:
+        if self.snapshot_ref.project_id != self.project_id:
+            raise ValueError("Material shortfall crosses project identity")
+        if self.source_kind == "plan_review":
+            if self.source_review_id is None or self.source_review_digest is None:
+                raise ValueError("Review shortfall requires exact review binding")
+            if self.source_confirmation_id or self.source_execution_id:
+                raise ValueError("Review shortfall cannot claim execution binding")
+        elif self.source_confirmation_id is None or self.source_execution_id is None:
+            raise ValueError("Execution shortfall requires confirmation and run binding")
+        item_ids = [item.shortfall_item_id for item in self.items]
+        requirement_ids = [item.requirement_item_id for item in self.items]
+        if item_ids != sorted(item_ids) or len(item_ids) != len(set(item_ids)):
+            raise ValueError("Shortfall item IDs must be unique and ordered")
+        if len(requirement_ids) != len(set(requirement_ids)):
+            raise ValueError("Shortfall requirement IDs must be unique")
+        payload = self.model_dump(mode="json", exclude={"report_digest"})
+        if self.report_digest != digest_json(payload):
+            raise ValueError("Material shortfall report digest mismatched")
+        return self
+
+
 class DirectorReadContext(DirectorModel):
     """Exact detached facts available to one reasoning turn."""
 
@@ -146,6 +220,7 @@ class DirectorReadContext(DirectorModel):
     project_summary: dict[str, Any]
     materials: tuple[DirectorMaterialFact, ...] = ()
     tool_schemas: tuple[DirectorToolSchema, ...] = ()
+    material_shortfall: MaterialShortfallReport | None = None
 
     @model_validator(mode="after")
     def context_is_unambiguous(self) -> DirectorReadContext:
@@ -166,6 +241,11 @@ class DirectorReadContext(DirectorModel):
         ]
         if len(evidence_ids) != len(set(evidence_ids)):
             raise ValueError("Director context evidence IDs must be unique")
+        if self.material_shortfall is not None and (
+            self.material_shortfall.project_id != self.snapshot_ref.project_id
+            or self.material_shortfall.snapshot_ref != self.snapshot_ref
+        ):
+            raise ValueError("Director shortfall is stale or cross-project")
         return self
 
     def digest(self) -> str:
@@ -428,6 +508,9 @@ class MaterialRequirementsPlan(DirectorModel):
     )
     plan_id: StableId
     plan_version: int = Field(ge=1)
+    plan_kind: Literal[
+        "initial_no_material", "supplemental_shortfall"
+    ] = "initial_no_material"
     brief_ref: CreativeBriefReference
     no_material_snapshot_ref: TimelineSnapshotReference
     no_material_fact_digest: Sha256Digest
@@ -437,6 +520,7 @@ class MaterialRequirementsPlan(DirectorModel):
     global_acceptance_criteria: tuple[str, ...] = Field(min_length=1)
     assumptions: tuple[str, ...] = ()
     unresolved_constraints: tuple[str, ...] = ()
+    shortfall_ref: MaterialShortfallReport | None = None
 
     @model_validator(mode="after")
     def plan_is_no_material_and_exact(self) -> MaterialRequirementsPlan:
@@ -447,6 +531,23 @@ class MaterialRequirementsPlan(DirectorModel):
         for item in self.items:
             if not set(item.dependency_ids).issubset(known):
                 raise ValueError("Material requirement dependency is unknown")
+        if self.plan_kind == "initial_no_material":
+            if self.shortfall_ref is not None:
+                raise ValueError("Initial no-material plan cannot bind a shortfall")
+        else:
+            if self.shortfall_ref is None:
+                raise ValueError("Supplemental plan requires a shortfall report")
+            if self.shortfall_ref.snapshot_ref != self.no_material_snapshot_ref:
+                raise ValueError("Supplemental plan snapshot binding drifted")
+            expected = {
+                item.requirement_item_id: item.asset_type
+                for item in self.shortfall_ref.items
+            }
+            actual = {item.item_id: item.asset_type for item in self.items}
+            if actual != expected:
+                raise ValueError(
+                    "Supplemental plan must exactly cover shortfall requirements"
+                )
         return self
 
     def digest(self) -> str:

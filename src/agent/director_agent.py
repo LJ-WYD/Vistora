@@ -507,6 +507,12 @@ class DirectorAgent:
         elif not content.acceptance_criteria:
             readiness = "needs_clarification"
             reasons.append("Acceptance criteria are missing.")
+        elif context.material_shortfall is not None:
+            readiness = "ready_for_material_requirements"
+            reasons.append(
+                "A current review or execution shortfall requires a "
+                "supplemental material requirements proposal."
+            )
         elif material_state.state == "no_materials":
             readiness = "ready_for_material_requirements"
             reasons.append(
@@ -763,14 +769,33 @@ class DirectorAgent:
     ) -> MaterialRequirementsProposal:
         draft = output.material_requirements_draft
         assert draft is not None
-        if context.materials:
+        shortfall = context.material_shortfall
+        if context.materials and shortfall is None:
             raise ValueError(
                 "Material requirements proposal requires no observed materials"
             )
-        previous = [
+        all_previous = [
             entry.record.report.material_requirements
             for entry in ledger.entries
             if entry.record.report.material_requirements is not None
+        ]
+        plan_kind = (
+            "supplemental_shortfall"
+            if shortfall is not None
+            else "initial_no_material"
+        )
+        previous = [
+            candidate
+            for candidate in all_previous
+            if candidate.plan.plan_kind == plan_kind
+            and (
+                shortfall is None
+                or (
+                    candidate.plan.shortfall_ref is not None
+                    and candidate.plan.shortfall_ref.report_id
+                    == shortfall.report_id
+                )
+            )
         ]
         plan_id = (
             previous[-1].plan.plan_id
@@ -778,15 +803,22 @@ class DirectorAgent:
             else self._id_factory("material_requirements_plan")
         )
         version = previous[-1].plan.plan_version + 1 if previous else 1
-        no_material_fact_digest = digest_json(
-            {
-                "snapshot_ref": context.snapshot_ref.model_dump(mode="json"),
-                "material_ids": [],
-            }
+        no_material_fact_digest = (
+            shortfall.report_digest
+            if shortfall is not None
+            else digest_json(
+                {
+                    "snapshot_ref": context.snapshot_ref.model_dump(
+                        mode="json"
+                    ),
+                    "material_ids": [],
+                }
+            )
         )
         plan = MaterialRequirementsPlan(
             plan_id=plan_id,
             plan_version=version,
+            plan_kind=plan_kind,
             brief_ref=CreativeBriefReference.from_brief(brief),
             no_material_snapshot_ref=context.snapshot_ref,
             no_material_fact_digest=no_material_fact_digest,
@@ -796,6 +828,7 @@ class DirectorAgent:
             global_acceptance_criteria=draft.global_acceptance_criteria,
             assumptions=draft.assumptions,
             unresolved_constraints=draft.unresolved_constraints,
+            shortfall_ref=shortfall,
         )
         before = (
             {item.item_id: item for item in previous[-1].plan.items}

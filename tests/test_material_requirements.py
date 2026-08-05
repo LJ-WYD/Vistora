@@ -27,14 +27,19 @@ from creation_planning import (  # noqa: E402
 )
 from core import timeline_manager  # noqa: E402
 from core.timeline import TimelineConfig, TrackConfig  # noqa: E402
+from contracts import SourceEvidenceReference, WholeMaterialLocator  # noqa: E402
 from director import (  # noqa: E402
     CreativeBriefInput,
     DirectorContextService,
     DirectorReasoningOutput,
     DirectorStore,
+    DirectorMaterialFact,
     MaterialRequirementItem,
     MaterialRequirementsDraft,
+    MaterialShortfallItem,
+    MaterialShortfallReport,
     RequirementConstraint,
+    digest_json,
 )
 from material_requirements import (  # noqa: E402
     MaterialRequirementsConcurrencyError,
@@ -54,7 +59,10 @@ from product_entry import (  # noqa: E402
     ProductEntryStore,
     ProductionEntryService,
 )
-from timeline_query import TimelineSnapshotService  # noqa: E402
+from timeline_query import (  # noqa: E402
+    TimelineSnapshotReference,
+    TimelineSnapshotService,
+)
 from workflow import WorkflowApplicationService, WorkflowStore  # noqa: E402
 
 
@@ -356,6 +364,123 @@ def test_no_material_clarification_then_reviewable_requirements(no_material):
     assert project_file.read_bytes() == before
     ledger = director_store.load()
     assert ledger.entries[-1].record.report.material_requirements == proposal
+
+
+def test_current_shortfall_returns_existing_material_flow_to_director_requirements(
+    no_material,
+):
+    _, _, _, project_file, deterministic = no_material
+    snapshot = TimelineSnapshotService.snapshot_current()
+    evidence = SourceEvidenceReference(
+        evidence_id="evidence_existing_reference",
+        material_id="source_1111111111111111",
+        locator=WholeMaterialLocator(),
+        description="Existing accepted reference material.",
+    )
+    material = DirectorMaterialFact(
+        material_id="source_1111111111111111",
+        media_kind="video",
+        display_name="existing-reference.mp4",
+        duration_seconds=3,
+        width=1080,
+        height=1920,
+        has_audio=False,
+        evidence=(evidence,),
+    )
+    report_values = {
+        "report_id": "shortfall_review_missing_outro",
+        "source_kind": "plan_review",
+        "project_id": snapshot.project_id,
+        "snapshot_ref": TimelineSnapshotReference.from_snapshot(snapshot),
+        "source_plan_id": "director_plan_existing",
+        "source_plan_version": 1,
+        "source_plan_digest": "sha256:" + ("a" * 64),
+        "source_review_id": "plan_review_existing",
+        "source_review_digest": "sha256:" + ("b" * 64),
+        "items": (
+            MaterialShortfallItem(
+                shortfall_item_id="shortfall_item_outro",
+                requirement_item_id="material_need_outro",
+                asset_type="video_shot",
+                reason="The review has no grounded closing shot.",
+                narrative_position="Closing beat",
+                evidence_gap="Existing evidence does not show the outcome.",
+                acceptance_criteria=("Show the authentic outcome.",),
+                priority="required",
+            ),
+        ),
+        "created_at": START,
+    }
+    shell = MaterialShortfallReport.model_construct(
+        **report_values,
+        schema_name="vistora.material-shortfall-report",
+        schema_version="1.0.0",
+        report_digest="sha256:" + ("0" * 64),
+    )
+    shortfall = MaterialShortfallReport(
+        **report_values,
+        report_digest=digest_json(
+            shell.model_dump(mode="json", exclude={"report_digest"})
+        ),
+    )
+
+    def context():
+        current = TimelineSnapshotService.snapshot_current()
+        return (
+            DirectorContextService.build(
+                current,
+                vistora_main.SKILLS,
+                materials=(material,),
+                material_shortfall=shortfall,
+            ),
+            current,
+        )
+
+    brief = _full_brief().model_copy(
+        update={
+            "material_ids": (material.material_id,),
+            "evidence_ids": (evidence.evidence_id,),
+        }
+    )
+    supplemental = _draft().model_copy(
+        update={
+            "items": (
+                _draft().items[0].model_copy(
+                    update={
+                        "item_id": "material_need_outro",
+                        "purpose": "Supply the missing grounded closing shot.",
+                        "narrative_position": "Closing beat",
+                        "acceptance_criteria": ("Show the authentic outcome.",),
+                        "dependency_ids": (),
+                    }
+                ),
+            )
+        }
+    )
+    agent = DirectorAgent(
+        adapter=MaterialAdapter([
+            lambda request: _output(
+                request,
+                brief=brief,
+                draft=supplemental,
+            )
+        ]),
+        context_provider=context,
+        registry=vistora_main.SKILLS,
+        store=DirectorStore(project_file.with_name("feedback.director.json")),
+        clock=deterministic.clock,
+        id_factory=deterministic.identifier,
+    )
+    turn = agent.converse(
+        session_id="session_feedback",
+        turn_id="turn_feedback_01",
+        user_message="Address the exact material gap found in review.",
+    )
+    assert turn.status == "material_requirements_ready"
+    assert turn.brief.readiness == "ready_for_material_requirements"
+    assert turn.material_requirements.plan.plan_kind == "supplemental_shortfall"
+    assert turn.material_requirements.plan.shortfall_ref == shortfall
+    assert turn.material_requirements.plan.items[0].item_id == "material_need_outro"
 
 
 def test_material_review_requires_independent_exact_confirmation(no_material):

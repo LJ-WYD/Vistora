@@ -823,6 +823,29 @@ function renderProduct() {
       view.director?.material_requirements ||
       [],
   );
+  const feedback = view.material_feedback;
+  if (feedback && feedback.state !== "empty") {
+    const report = feedback.open_report;
+    ui.productSummary.append(
+      workflowEvent(
+        report
+          ? `Missing-material feedback ${report.report_id}`
+          : "Missing-material feedback history",
+        feedback.state,
+        report
+          ? [
+              `Detected during ${report.source_kind.replaceAll("_", " ")}`,
+              `Bound to plan ${report.source_plan_id}`,
+              ...report.items.map(
+                (item) =>
+                  `${item.priority} · ${item.asset_type} · ${item.reason}`,
+              ),
+              "Director must propose supplemental requirements; confirmation and production remain separate.",
+            ]
+          : ["The accepted supplemental materials resolved the recorded gap."],
+      ),
+    );
+  }
   if (materialProposal) {
     ui.productSummary.append(
       workflowEvent(

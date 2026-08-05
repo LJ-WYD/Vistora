@@ -133,6 +133,14 @@ def test_reference_main_workflow_is_traceable_and_repeatable() -> None:
     assert first.no_material_chain["artifact_accepted"] is True
     assert first.no_material_chain["catalog_revision"] == 1
     assert first.no_material_chain["catalog_material_id"].startswith("source_")
+    assert first.material_feedback_chain == second.material_feedback_chain
+    assert first.material_feedback_chain["source_kind"] == "plan_review"
+    assert (
+        first.material_feedback_chain["supplemental_plan_kind"]
+        == "supplemental_shortfall"
+    )
+    assert first.material_feedback_chain["feedback_state"] == "resolved"
+    assert first.material_feedback_chain["feedback_revision"] == 4
     assert first.trace_document.revision == 7
     assert tuple(
         trace.trace_sequence

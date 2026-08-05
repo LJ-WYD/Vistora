@@ -262,6 +262,7 @@ class ProductEntryView(ProductEntryModel):
     material_requirements: dict[str, Any] | None = None
     creation_planning: dict[str, Any] | None = None
     material_production: dict[str, Any] | None = None
+    material_feedback: dict[str, Any] | None = None
     latest_result: dict[str, Any] | None = None
     allowed_actions: tuple[ProductAction, ...] = ()
     limitations: tuple[str, ...] = (

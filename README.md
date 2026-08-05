@@ -186,16 +186,20 @@ workflow use deterministic adapters with no external model call.
 With complete existing material, a `proposal_ready` result includes an exact
 `DirectorPlan`, proposed execution plan, and current step-8 diff review. An
 incomplete set stops at `materials_incomplete` and stays in Director dialogue;
-it cannot masquerade as either complete or empty. With no material facts, the
+it cannot masquerade as either complete or empty. A separately recorded,
+current review/execution shortfall instead gates a supplemental material
+requirements proposal even when valid material already exists. With no
+material facts, the
 Director first completes the same creative brief and then may produce a
 versioned `MaterialRequirementsPlan`: a reviewable list of required video,
 audio, image, narration, or reference assets and why each is needed. Neither
 result creates a confirmation, calls another Agent, executes tools, generates
 media, exports, or rolls back.
 
-## No-material requirements workflow
+## Initial and supplemental material requirements workflow
 
-`src/material_requirements/` persists the Director's no-material proposal,
+`src/material_requirements/` persists the Director's initial no-material or
+supplemental-shortfall proposal,
 read-only review, explicit confirmation/rejection, revision, and withdrawal in
 a separate hash-chained sidecar. Each requirement records its purpose,
 narrative position, type, duration/format specifications, continuity, required
@@ -203,11 +207,27 @@ and forbidden traits, acceptance criteria, priority, dependencies,
 alternatives, and budget/deadline constraints. Unknown budget or deadline is
 represented explicitly rather than guessed.
 
-The plan is bound to one creative-brief version/digest and the exact empty
-timeline snapshot/fact digest. A requirements revision produces deterministic
+The initial plan is bound to one creative-brief version/digest and the exact
+empty timeline snapshot/fact digest. A supplemental plan instead binds one
+exact `MaterialShortfallReport`, including the project/snapshot, source plan,
+review or confirmed execution, stable missing-requirement IDs, affected
+entities, explicit evidence gaps and acceptance criteria. A requirements
+revision produces deterministic
 added/removed/changed items. Snapshot drift, changed brief/plan/review digest,
 duplicate decision, stale revision, or ledger tampering fails closed. Planned
 items are never exposed as observed materials or source evidence.
+
+`src/material_feedback/` is the append-only O26 feedback-loop ledger. A
+calling review or execution boundary must explicitly record a path-safe
+shortfall; the Director cannot infer one from silence. The ledger then links
+the exact supplemental requirements proposal, its independent confirmation,
+the confirmed production plan/run and accepted catalog entries. Resolution
+requires every reported requirement to map one-to-one to accepted material
+whose requirements-plan, production-plan and run provenance all match. Stale
+snapshots, duplicate or cross-project reports, missing stages, partial catalog
+coverage, tampering and replay fail closed. Only resolved, accepted catalog
+entries become ordinary observed Director evidence; nothing is automatically
+inserted into the timeline.
 
 The `studio` UI shows the requirements checklist and offers separate Review,
 Confirm, Reject, and Withdraw actions. Confirmation only approves what

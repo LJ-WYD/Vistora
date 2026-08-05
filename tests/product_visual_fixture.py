@@ -244,6 +244,37 @@ def _view(state: str) -> ProductEntryView:
             }
             else None
         ),
+        material_feedback=(
+            {
+                "schema_name": "vistora.material-feedback.view",
+                "schema_version": "1.0.0",
+                "project_id": "project_visual_product",
+                "revision": 1,
+                "state": "shortfall_open",
+                "open_report": {
+                    "report_id": "shortfall_visual_review",
+                    "source_kind": "plan_review",
+                    "source_plan_id": "plan_visual_product",
+                    "items": (
+                        {
+                            "requirement_item_id": "material_need_visual",
+                            "asset_type": "video_shot",
+                            "reason": "The reviewed ending lacks a grounded shot.",
+                            "narrative_position": "Closing beat",
+                            "priority": "required",
+                        },
+                    ),
+                },
+                "history": (
+                    {
+                        "report_id": "shortfall_visual_review",
+                        "state": "shortfall_recorded",
+                    },
+                ),
+            }
+            if state == "material_requirements_ready"
+            else None
+        ),
         creation_planning=(
             {
                 "state": (

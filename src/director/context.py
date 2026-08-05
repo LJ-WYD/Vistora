@@ -12,6 +12,7 @@ from .models import (
     DirectorMaterialFact,
     DirectorReadContext,
     DirectorToolSchema,
+    MaterialShortfallReport,
     digest_json,
 )
 
@@ -25,6 +26,7 @@ class DirectorContextService:
         registry: Mapping[str, Any],
         *,
         materials: tuple[DirectorMaterialFact, ...] = (),
+        material_shortfall: MaterialShortfallReport | None = None,
     ) -> DirectorReadContext:
         registry_ref = RegistrySchemaReference.from_registry(registry)
         tool_schemas = []
@@ -130,4 +132,5 @@ class DirectorContextService:
             },
             materials=tuple(sorted(materials, key=lambda item: item.material_id)),
             tool_schemas=tuple(tool_schemas),
+            material_shortfall=material_shortfall,
         )

@@ -55,11 +55,18 @@ from director import (  # noqa: E402
     DirectorTurnReport,
     MaterialRequirementItem,
     MaterialRequirementsDraft,
+    MaterialShortfallItem,
+    MaterialShortfallReport,
     RequirementConstraint,
+    digest_json,
 )
 from material_requirements import (  # noqa: E402
     MaterialRequirementsService,
     MaterialRequirementsStore,
+)
+from material_feedback import (  # noqa: E402
+    MaterialFeedbackService,
+    MaterialFeedbackStore,
 )
 from creation_planning import (  # noqa: E402
     CapabilityRegistryReference,
@@ -87,7 +94,10 @@ from moviepy import ColorClip  # noqa: E402
 from plan_review import (  # noqa: E402
     PlanDiffDocument,
 )
-from timeline_query import TimelineSnapshotService  # noqa: E402
+from timeline_query import (  # noqa: E402
+    TimelineSnapshotReference,
+    TimelineSnapshotService,
+)
 from traceability.models import TimelineTraceDocument  # noqa: E402
 from traceability.query import TraceabilityQuery  # noqa: E402
 from traceability.store import TraceabilityStore  # noqa: E402
@@ -147,6 +157,7 @@ class ReferenceWorkflowReport:
     output_metadata: dict[str, Any]
     timeline_state_removed: bool
     no_material_chain: dict[str, Any]
+    material_feedback_chain: dict[str, Any]
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -188,6 +199,7 @@ class ReferenceWorkflowReport:
             "output_metadata": self.output_metadata,
             "timeline_state_removed": self.timeline_state_removed,
             "no_material_chain": self.no_material_chain,
+            "material_feedback_chain": self.material_feedback_chain,
         }
 
 
@@ -672,6 +684,9 @@ def _isolated_timeline(work_dir: Path) -> Iterator[Path]:
         project_file.with_name("reference.director.json")
     ).path.unlink(missing_ok=True)
     DirectorStore(
+        project_file.with_name("reference.feedback.director.json")
+    ).path.unlink(missing_ok=True)
+    DirectorStore(
         project_file.with_name("reference.no-material.director.json")
     ).path.unlink(missing_ok=True)
     MaterialRequirementsStore(
@@ -684,6 +699,9 @@ def _isolated_timeline(work_dir: Path) -> Iterator[Path]:
         project_file
     ).path.unlink(missing_ok=True)
     MaterialCatalogStore.for_project_file(
+        project_file
+    ).path.unlink(missing_ok=True)
+    MaterialFeedbackStore.for_project_file(
         project_file
     ).path.unlink(missing_ok=True)
     shutil.rmtree(workspace / "material_staging", ignore_errors=True)
@@ -964,6 +982,339 @@ def run_reference_workflow(
                 (catalog_entry,),
             )[0]
 
+            shortfall_values = {
+                "report_id": "shortfall_reference_review",
+                "source_kind": "plan_review",
+                "project_id": preview_snapshot.project_id,
+                "snapshot_ref": (
+                    TimelineSnapshotReference.from_snapshot(preview_snapshot)
+                ),
+                "source_plan_id": (
+                    requirements_report.material_requirements.plan.plan_id
+                ),
+                "source_plan_version": (
+                    requirements_report.material_requirements.plan.plan_version
+                ),
+                "source_plan_digest": (
+                    requirements_report.material_requirements.plan.digest()
+                ),
+                "source_review_id": (
+                    requirements_report.material_requirements.review.review_id
+                ),
+                "source_review_digest": (
+                    requirements_report.material_requirements.review.review_digest
+                ),
+                "items": (
+                    MaterialShortfallItem(
+                        shortfall_item_id="shortfall_reference_broll",
+                        requirement_item_id="reference_supplemental_broll",
+                        asset_type="video_shot",
+                        reason=(
+                            "Review found no grounded alternate shot for the "
+                            "closing beat."
+                        ),
+                        narrative_position="Closing beat",
+                        evidence_gap=(
+                            "The accepted source covers only the primary shot."
+                        ),
+                        acceptance_criteria=(
+                            "The accepted alternate probes as 320x180 at 24 fps.",
+                        ),
+                        priority="high",
+                    ),
+                ),
+                "created_at": no_material_clock(),
+            }
+            shortfall_shell = MaterialShortfallReport.model_construct(
+                **shortfall_values,
+                schema_name="vistora.material-shortfall-report",
+                schema_version="1.0.0",
+                report_digest="sha256:" + ("0" * 64),
+            )
+            shortfall = MaterialShortfallReport(
+                **shortfall_values,
+                report_digest=digest_json(
+                    shortfall_shell.model_dump(
+                        mode="json", exclude={"report_digest"}
+                    )
+                ),
+            )
+            feedback = MaterialFeedbackService(
+                store=MaterialFeedbackStore.for_project_file(project_file),
+                project_id=preview_snapshot.project_id,
+                clock=no_material_clock,
+                id_factory=no_material_id,
+            )
+            feedback_ledger = feedback.record(shortfall, expected_revision=0)
+
+            class SupplementalDirectorAdapter:
+                def complete(self, request):
+                    unknown = RequirementConstraint(status="unknown")
+                    return DirectorReasoningOutput(
+                        response_kind="propose_material_requirements",
+                        assistant_message=(
+                            "The exact review shortfall is ready as a "
+                            "supplemental material requirement."
+                        ),
+                        context_snapshot_ref=request.context.snapshot_ref,
+                        registry_ref=request.context.registry_ref,
+                        brief=CreativeBriefInput(
+                            objective="Create the deterministic reference clip.",
+                            audience="Vistora regression reviewers.",
+                            platform="Automated local validation.",
+                            target_duration_seconds=1.5,
+                            style="Deterministic single-shot reference.",
+                            narrative="Present one concise grounded source range.",
+                            pacing="One concise shot.",
+                            must_haves=("Use verified sources only.",),
+                            must_not_haves=("Do not fabricate evidence.",),
+                            delivery_requirements=(
+                                "Provide H.264-compatible source media.",
+                            ),
+                            material_ids=(material.material_id,),
+                            evidence_ids=(material.evidence[0].evidence_id,),
+                            acceptance_criteria=(
+                                "Every source is explicitly accepted.",
+                            ),
+                        ),
+                        material_requirements_draft=MaterialRequirementsDraft(
+                            rationale=(
+                                "Resolve only the explicit review shortfall."
+                            ),
+                            items=(
+                                MaterialRequirementItem(
+                                    item_id="reference_supplemental_broll",
+                                    asset_type="video_shot",
+                                    purpose="Supply the missing alternate shot.",
+                                    narrative_position="Closing beat",
+                                    duration_seconds=2,
+                                    aspect_ratio="16:9",
+                                    width=320,
+                                    height=180,
+                                    fps=24,
+                                    acceptance_criteria=(
+                                        "The accepted alternate probes as "
+                                        "320x180 at 24 fps.",
+                                    ),
+                                    priority="high",
+                                    budget_constraint=unknown,
+                                    deadline_constraint=unknown,
+                                ),
+                            ),
+                            global_acceptance_criteria=(
+                                "The new asset maps to the reported gap.",
+                            ),
+                        ),
+                    ).model_dump(mode="json")
+
+            def supplemental_context():
+                current = TimelineSnapshotService.snapshot_current()
+                return (
+                    DirectorContextService.build(
+                        current,
+                        vistora_main.PRODUCTION_REGISTRY,
+                        materials=(material,),
+                        material_shortfall=feedback.latest_open_report(),
+                    ),
+                    current,
+                )
+
+            supplemental_director = DirectorAgent(
+                adapter=SupplementalDirectorAdapter(),
+                context_provider=supplemental_context,
+                registry=vistora_main.PRODUCTION_REGISTRY,
+                store=DirectorStore(
+                    project_file.with_name("reference.feedback.director.json")
+                ),
+                clock=no_material_clock,
+                id_factory=no_material_id,
+            )
+            supplemental_report = supplemental_director.converse(
+                session_id="session_reference_feedback",
+                turn_id="turn_reference_feedback",
+                user_message="Resolve the exact gap reported by review.",
+            )
+            supplemental_proposal = supplemental_report.material_requirements
+            if supplemental_proposal is None:
+                raise AssertionError("Director did not propose supplemental material")
+            feedback_ledger = feedback.link_requirements(
+                shortfall.report_id,
+                supplemental_proposal,
+                expected_revision=feedback_ledger.revision,
+            )
+            material_revision = material_service.store.load(
+                session_id="session_reference_no_material",
+                project_id=preview_snapshot.project_id,
+            ).revision
+            supplemental_material_ledger = material_service.record(
+                supplemental_proposal,
+                expected_revision=material_revision,
+            )
+            supplemental_confirmation, _ = material_service.decide(
+                supplemental_proposal.review.review_id,
+                decision="confirmed",
+                confirmed_by="user_reference",
+                expected_revision=supplemental_material_ledger.revision,
+            )
+
+            class SupplementalPlanningAdapter:
+                def complete(self, request):
+                    unknown = ProductionEstimate(
+                        status="unknown",
+                        rationale="Deterministic local fixture has no cost.",
+                    )
+                    return CreationPlanningReasoningOutput(
+                        outcome="proposal",
+                        message="Supplemental production plan is reviewable.",
+                        material_confirmation_ref=request.material_confirmation_ref,
+                        capability_registry_ref=request.capability_registry_ref,
+                        plan_draft=MaterialProductionPlanDraft(
+                            rationale="Produce only the confirmed missing shot.",
+                            tasks=(
+                                MaterialProductionTask(
+                                    task_id="reference_supplemental_task",
+                                    requirement_item_id=(
+                                        "reference_supplemental_broll"
+                                    ),
+                                    title="Produce deterministic alternate",
+                                    purpose="Resolve the review shortfall.",
+                                    production_method="generate",
+                                    status="planned",
+                                    capability_ids=("video_generation",),
+                                    prompt_spec=PromptSpecification(
+                                        subject="A deterministic alternate frame.",
+                                        scene="A synthetic 320x180 test canvas.",
+                                        camera="Locked frame.",
+                                        action="No movement.",
+                                        lighting="Uniform generated color.",
+                                        style="Deterministic regression fixture.",
+                                        negative_constraints=(
+                                            "No nondeterministic content.",
+                                        ),
+                                    ),
+                                    duration_seconds=2,
+                                    width=320,
+                                    height=180,
+                                    aspect_ratio="16:9",
+                                    fps=24,
+                                    seed=25,
+                                    batch_id="reference_supplemental_batch",
+                                    cost_estimate=unknown,
+                                    time_estimate=unknown,
+                                    quality_gates=("Probe as valid H.264 video.",),
+                                    retry_strategy=("Retry the local fixture.",),
+                                    alternative_strategy="Manual verified import.",
+                                    delivery=DeliveryFileSpecification(
+                                        media_kind="video",
+                                        container_or_extension="mp4",
+                                        mime_type="video/mp4",
+                                        filename_pattern="supplemental.mp4",
+                                    ),
+                                ),
+                            ),
+                            delivery_summary=("One supplemental shot.",),
+                            global_quality_gates=(
+                                "Artifact maps to the shortfall item.",
+                            ),
+                        ),
+                    ).model_dump(mode="json")
+
+            supplemental_planner = CreationPlanningAgent(
+                adapter=SupplementalPlanningAdapter(),
+                service=creation_service,
+                capability_provider=lambda: capability_ref,
+                clock=no_material_clock,
+                id_factory=no_material_id,
+            )
+            supplemental_planning = supplemental_planner.plan(
+                supplemental_planner.prepare_request(
+                    request_id="creation_request_reference_feedback",
+                    material_confirmation_id=(
+                        supplemental_confirmation.confirmation_id
+                    ),
+                )
+            )
+            if supplemental_planning.proposal is None:
+                raise AssertionError(
+                    "Supplemental production plan is unavailable: "
+                    f"{supplemental_planning.status} / "
+                    f"{supplemental_planning.message} / "
+                    f"{supplemental_planning.error_code}"
+                )
+            creation_revision = creation_service.store.load(
+                session_id="session_reference_no_material",
+                project_id=preview_snapshot.project_id,
+            ).revision
+            supplemental_production_confirmation, _ = creation_service.decide(
+                supplemental_planning.proposal.review.review_id,
+                decision="confirmed",
+                confirmed_by="user_reference",
+                expected_revision=creation_revision,
+            )
+            supplemental_run = production_orchestrator.start(
+                production_orchestrator.prepare_request(
+                    request_id="production_request_reference_feedback",
+                    production_confirmation_id=(
+                        supplemental_production_confirmation.confirmation_id
+                    ),
+                    requested_by="user_reference",
+                )
+            )
+            feedback_ledger = feedback.link_production(
+                shortfall.report_id,
+                requirements_confirmation_id=(
+                    supplemental_confirmation.confirmation_id
+                ),
+                production_plan_id=(
+                    supplemental_planning.proposal.plan.production_plan_id
+                ),
+                production_plan_digest=(
+                    supplemental_planning.proposal.plan.digest()
+                ),
+                production_confirmation_id=(
+                    supplemental_production_confirmation.confirmation_id
+                ),
+                production_run_id=supplemental_run["run_id"],
+                expected_revision=feedback_ledger.revision,
+            )
+            supplemental_artifact = next(
+                item
+                for item in production_orchestrator.view().artifacts
+                if item["run_id"] == supplemental_run["run_id"]
+            )
+            _, supplemental_catalog_entry = (
+                production_orchestrator.decide_artifact(
+                    supplemental_artifact["artifact_id"],
+                    decision="accepted",
+                    decided_by="user_reference",
+                    reason="Accepted deterministic shortfall fixture.",
+                )
+            )
+            if supplemental_catalog_entry is None:
+                raise AssertionError("Supplemental material was not cataloged")
+            feedback_ledger = feedback.resolve(
+                shortfall.report_id,
+                catalog=catalog_store.load(project_id=preview_snapshot.project_id),
+                production_run_id=supplemental_run["run_id"],
+                expected_revision=feedback_ledger.revision,
+            )
+            material_feedback_chain = {
+                "shortfall_report_id": shortfall.report_id,
+                "source_kind": shortfall.source_kind,
+                "supplemental_plan_id": supplemental_proposal.plan.plan_id,
+                "supplemental_plan_kind": supplemental_proposal.plan.plan_kind,
+                "requirements_confirmation_id": (
+                    supplemental_confirmation.confirmation_id
+                ),
+                "production_plan_id": (
+                    supplemental_planning.proposal.plan.production_plan_id
+                ),
+                "production_run_id": supplemental_run["run_id"],
+                "accepted_material_id": supplemental_catalog_entry.material_id,
+                "feedback_revision": feedback_ledger.revision,
+                "feedback_state": feedback.view().state,
+            }
+
             def director_context():
                 current = TimelineSnapshotService.snapshot_current()
                 return (
@@ -1162,6 +1513,7 @@ def run_reference_workflow(
             output_metadata=output_metadata,
             timeline_state_removed=timeline_state_removed,
             no_material_chain=no_material_chain,
+            material_feedback_chain=material_feedback_chain,
         )
     finally:
         os.chdir(previous_cwd)

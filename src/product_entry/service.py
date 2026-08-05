@@ -15,6 +15,7 @@ from creation_planning import (
 )
 from director import DirectorHistoryQuery, DirectorStore
 from material_requirements import MaterialRequirementsService
+from material_feedback import MaterialFeedbackService
 from material_production import MaterialProductionAgent, MaterialProductionOrchestrator
 from workflow import WorkflowApplicationService, WorkflowHistoryQuery
 
@@ -65,6 +66,7 @@ class ProductionEntryService:
         creation_planning: CreationPlanningService | None = None,
         material_production: MaterialProductionOrchestrator | None = None,
         material_production_agent: MaterialProductionAgent | None = None,
+        material_feedback: MaterialFeedbackService | None = None,
         clock: Clock = _utc_now,
         id_factory: IdFactory = _random_id,
     ) -> None:
@@ -79,6 +81,7 @@ class ProductionEntryService:
         self.creation_planning_agent = creation_planning_agent
         self.creation_planning = creation_planning
         self.material_production = material_production
+        self.material_feedback = material_feedback
         self.material_production_agent = material_production_agent or (
             MaterialProductionAgent(
                 material_production,
@@ -124,6 +127,11 @@ class ProductionEntryService:
             if self.material_production is not None
             else None
         )
+        feedback_view = (
+            self.material_feedback.view().model_dump(mode="json")
+            if self.material_feedback is not None
+            else None
+        )
         state, allowed = self._state(
             ledger,
             director,
@@ -145,6 +153,7 @@ class ProductionEntryService:
             material_requirements=material_view,
             creation_planning=creation_view,
             material_production=production_view,
+            material_feedback=feedback_view,
             latest_result=latest,
             allowed_actions=allowed,
         )
@@ -446,11 +455,27 @@ class ProductionEntryService:
                 proposal,
                 expected_revision=ledger.revision,
             )
+            feedback_revision = None
+            if (
+                self.material_feedback is not None
+                and proposal.plan.plan_kind == "supplemental_shortfall"
+                and proposal.plan.shortfall_ref is not None
+            ):
+                feedback_ledger = self.material_feedback.store.load(
+                    project_id=self.project_id
+                )
+                linked = self.material_feedback.link_requirements(
+                    proposal.plan.shortfall_ref.report_id,
+                    proposal,
+                    expected_revision=feedback_ledger.revision,
+                )
+                feedback_revision = linked.revision
             return "reviewed", proposal.review.review_id, {
                 "proposal_id": proposal.proposal_id,
                 "review_id": proposal.review.review_id,
                 "plan_digest": proposal.plan.digest(),
                 "material_ledger_revision": updated.revision,
+                "material_feedback_revision": feedback_revision,
             }
         if command.action in {"confirm_materials", "reject_materials"}:
             if self.material_requirements is None:
@@ -585,6 +610,26 @@ class ProductionEntryService:
             report = self.material_production_agent.execute(request)
             if report.disposition == "rejected":
                 raise ProductEntryError(report.error.message)
+            if self.material_feedback is not None:
+                open_report = self.material_feedback.latest_open_report()
+                if open_report is not None:
+                    confirmed = self.creation_planning.confirmed(
+                        command.target_id or ""
+                    )
+                    feedback_ledger = self.material_feedback.store.load(
+                        project_id=self.project_id
+                    )
+                    self.material_feedback.link_production(
+                        open_report.report_id,
+                        requirements_confirmation_id=(
+                            confirmed.confirmation.material_confirmation_ref.confirmation_id
+                        ),
+                        production_plan_id=confirmed.proposal.plan.production_plan_id,
+                        production_plan_digest=confirmed.proposal.plan.digest(),
+                        production_confirmation_id=confirmed.confirmation.confirmation_id,
+                        production_run_id=report.run_id or "",
+                        expected_revision=feedback_ledger.revision,
+                    )
             status = self._production_status(report.status)
             return status, report.run_id, {
                 "agent_report_id": report.report_id,
@@ -690,6 +735,21 @@ class ProductionEntryService:
                 raise ProductEntryError(
                     "Exact succeeded run has no accepted catalog material"
                 )
+            if self.material_feedback is not None:
+                open_report = self.material_feedback.latest_open_report()
+                if open_report is not None:
+                    feedback_ledger = self.material_feedback.store.load(
+                        project_id=self.project_id
+                    )
+                    catalog = self.material_production.catalog.load(
+                        project_id=self.project_id
+                    )
+                    self.material_feedback.resolve(
+                        open_report.report_id,
+                        catalog=catalog,
+                        production_run_id=command.target_id or "",
+                        expected_revision=feedback_ledger.revision,
+                    )
             return "returned_to_director", command.target_id, {
                 "accepted_material_ids": material_ids,
                 "message": (

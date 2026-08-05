@@ -275,7 +275,7 @@ The Agent rejects malformed or extra model fields, requested tool calls, secrets
 
 The Director cannot create a user confirmation, import or call the Editing Agent or workflow service, dispatch a registered skill, write timeline/media, render/export, roll back, or decide how a confirmed material requirement is produced. `proposal_ready` and `material_requirements_ready` mean ready for separate review only. Production planning belongs to the constrained Creation Planning Agent; generation, AI packaging, and richer atomic editing remain outside the implemented boundary.
 
-### No-material requirements boundary
+### Initial and supplemental material requirements boundary
 
 When the read context contains no observed materials, missing creative fields
 still produce `needs_clarification`. Once the objective, audience, platform,
@@ -300,6 +300,26 @@ decisions, stale revision, unknown dependency, conflicting constraints, and
 tampering. It performs no generation, import, media write, timeline mutation,
 or Agent invocation. The production UI exposes only its path-safe checklist
 and explicit review/decision actions.
+
+O26 adds `src/material_feedback/` without changing those confirmation gates.
+`MaterialShortfallReport` is a frozen, digest-bound fact from either an exact
+plan review or an exact confirmed editing execution. It records the current
+snapshot, source plan/version/digest, review or confirmation/execution IDs,
+stable missing requirement IDs, affected entity IDs, evidence gaps, reasons
+and acceptance criteria. It contains no source path and does not claim that a
+planned asset exists.
+
+An open current report is projected into `DirectorReadContext`. Only then may
+the Director issue a `supplemental_shortfall` `MaterialRequirementsPlan`, whose
+items must exactly cover the report. The separate requirements and production
+confirmations remain mandatory. A versioned hash-chained
+`*.material-feedback.json` ledger records four legal transitions:
+`shortfall_recorded -> requirements_linked -> production_linked -> resolved`.
+Resolution verifies one-to-one accepted catalog material and exact
+requirements-plan, production-plan and production-run provenance. Stale,
+duplicate, cross-project, incomplete and tampered chains fail closed. The
+product view exposes only the browser-safe state; it cannot create evidence,
+confirm, invoke a provider or mutate the timeline.
 
 ### Creation-planning boundary
 

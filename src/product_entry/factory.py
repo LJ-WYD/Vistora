@@ -28,6 +28,7 @@ from material_requirements import (
     MaterialRequirementsService,
     MaterialRequirementsStore,
 )
+from material_feedback import MaterialFeedbackService, MaterialFeedbackStore
 from material_production import (
     MaterialCatalogStore,
     MaterialProductionAgent,
@@ -140,6 +141,12 @@ def build_current_product_entry(
     catalog_store = MaterialCatalogStore.for_project_file(
         timeline_manager.PROJECT_FILE
     )
+    material_feedback = MaterialFeedbackService(
+        store=MaterialFeedbackStore.for_project_file(
+            timeline_manager.PROJECT_FILE
+        ),
+        project_id=initial.project_id,
+    )
 
     def context_provider():
         snapshot = TimelineSnapshotService.snapshot_current()
@@ -152,6 +159,7 @@ def build_current_product_entry(
                     snapshot,
                     catalog.entries,
                 ),
+                material_shortfall=material_feedback.latest_open_report(),
             ),
             snapshot,
         )
@@ -219,6 +227,7 @@ def build_current_product_entry(
         creation_planning=creation_planning,
         material_production=production,
         material_production_agent=MaterialProductionAgent(production),
+        material_feedback=material_feedback,
     )
 
 
