@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import math
 import hashlib
+import json
 import uuid
 from collections.abc import Callable, Iterable
 
 from core.timeline import (
+    AppliedAudioDucking,
     AppliedLoudnessNormalization,
     AudioEnvelopePoint,
     ClipAudioSettings,
@@ -2310,6 +2312,7 @@ class TimelineEditEngine:
         fade_out_seconds: float | None,
         playback_rate: float | None,
         normalization: AppliedLoudnessNormalization | None,
+        content_role: str | None = None,
     ):
         key, track, clip = self._clip(track_reference, clip_id)
         if track.kind == "video" and not clip.keep_audio:
@@ -2321,6 +2324,7 @@ class TimelineEditEngine:
             )
         updates = clip.audio.model_dump(mode="python")
         for field, value in (
+            ("content_role", content_role),
             ("gain_db", gain_db),
             ("muted", muted),
             ("pan", pan),
@@ -2346,6 +2350,162 @@ class TimelineEditEngine:
             primary_track=track,
             direct=(clip.id,),
             modified=(clip.id,),
+        )
+
+    def apply_audio_ducking(
+        self,
+        *,
+        action: str,
+        ducking_id: str,
+        key_track_ids: tuple[str, ...],
+        target_track_ids: tuple[str, ...],
+        reduction_db: float,
+        attack_seconds: float,
+        release_seconds: float,
+    ):
+        """Bake one confirmed structural key/bed duck pass into clip envelopes."""
+
+        target_tracks = [self._resolve_track(item) for item in target_track_ids]
+        if any(track.kind != "audio" for _, track in target_tracks):
+            raise TimelineEditError("Ducking targets must be exact audio tracks")
+        prefix = f"duck_{ducking_id}_"
+        if action == "remove":
+            modified: list[str] = []
+            for _, track in target_tracks:
+                for clip in track.clips:
+                    if clip.audio.ducking is None or clip.audio.ducking.ducking_id != ducking_id:
+                        continue
+                    points = tuple(
+                        point for point in clip.audio.envelope
+                        if not point.point_id.startswith(prefix)
+                    )
+                    clip.audio = clip.audio.model_copy(
+                        update={"envelope": points, "ducking": None}
+                    )
+                    modified.append(clip.id)
+            if not modified:
+                raise TimelineEditError("The requested ducking pass is not applied")
+            key, track = target_tracks[0]
+            return self._finish(
+                operation="apply_audio_ducking",
+                primary_key=key,
+                primary_track=track,
+                direct=modified,
+                modified=modified,
+            )
+
+        key_tracks = [
+            self._resolve_track(item, allow_locked=True)
+            for item in key_track_ids
+        ]
+        key_windows: list[tuple[float, float, str]] = []
+        key_payload: list[dict[str, object]] = []
+        for _, track in key_tracks:
+            if track.kind not in {"audio", "video"}:
+                raise TimelineEditError("Ducking keys must expose an audio component")
+            for clip in sorted(track.clips, key=lambda item: (item.timeline_start, item.id)):
+                active = track.kind == "audio" or clip.keep_audio
+                if not active or track.muted or track.mix.muted or clip.audio.muted:
+                    continue
+                if clip.audio.content_role not in {"dialogue", "voiceover"}:
+                    raise TimelineEditError(
+                        "Ducking key clips must be explicitly dialogue or voiceover"
+                    )
+                start, end = clip.timeline_start, clip_end(clip)
+                key_windows.append((start, end, clip.id))
+                key_payload.append({
+                    "track_id": track.id,
+                    "clip_id": clip.id,
+                    "start": start,
+                    "end": end,
+                    "role": clip.audio.content_role,
+                })
+        if not key_windows:
+            raise TimelineEditError("Ducking keys contain no active declared speech")
+        key_digest = hashlib.sha256(
+            json.dumps(key_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        ordered_windows = sorted((start, end) for start, end, _ in key_windows)
+        merged: list[list[float]] = []
+        bridge = attack_seconds + release_seconds
+        for start, end in ordered_windows:
+            if merged and start <= merged[-1][1] + bridge + TIME_EPSILON:
+                merged[-1][1] = max(merged[-1][1], end)
+            else:
+                merged.append([start, end])
+
+        modified: list[str] = []
+        counter = 0
+        for _, track in target_tracks:
+            for clip in sorted(track.clips, key=lambda item: (item.timeline_start, item.id)):
+                if clip.audio.content_role not in {
+                    "background_music", "sound_effect", "ambience"
+                }:
+                    raise TimelineEditError(
+                        "Ducking targets must be declared music, sound effects, or ambience"
+                    )
+                if clip.audio.envelope and (
+                    clip.audio.ducking is None
+                    or clip.audio.ducking.ducking_id != ducking_id
+                    or any(
+                        not point.point_id.startswith(prefix)
+                        for point in clip.audio.envelope
+                    )
+                ):
+                    raise TimelineEditError(
+                        "Ducking does not overwrite a manual or different envelope"
+                    )
+                start, end = clip.timeline_start, clip_end(clip)
+                points: list[AudioEnvelopePoint] = []
+                for key_start, key_end in merged:
+                    active_start = max(start, key_start)
+                    active_end = min(end, key_end)
+                    if active_end <= active_start + TIME_EPSILON:
+                        continue
+                    attack_start = max(start, active_start - attack_seconds)
+                    release_end = min(end, active_end + release_seconds)
+                    shape = [(attack_start, 0.0), (active_start, reduction_db)]
+                    if active_end > active_start + TIME_EPSILON:
+                        shape.append((active_end, reduction_db))
+                    if release_end > active_end + TIME_EPSILON:
+                        shape.append((release_end, 0.0))
+                    for absolute_time, gain in shape:
+                        offset = max(0.0, absolute_time - start)
+                        if points and abs(points[-1].offset_seconds - offset) <= TIME_EPSILON:
+                            points[-1] = points[-1].model_copy(update={"gain_db": gain})
+                            continue
+                        counter += 1
+                        points.append(AudioEnvelopePoint(
+                            point_id=f"{prefix}{counter:04d}",
+                            offset_seconds=offset,
+                            gain_db=gain,
+                        ))
+                if not points:
+                    continue
+                clip.audio = clip.audio.model_copy(update={
+                    "envelope": tuple(points),
+                    "ducking": AppliedAudioDucking(
+                        ducking_id=ducking_id,
+                        key_track_ids=key_track_ids,
+                        key_timeline_digest=key_digest,
+                        reduction_db=reduction_db,
+                        attack_seconds=attack_seconds,
+                        release_seconds=release_seconds,
+                    ),
+                })
+                modified.append(clip.id)
+        if not modified:
+            raise TimelineEditError("Ducking keys do not overlap any target clip")
+        key, track = target_tracks[0]
+        return self._finish(
+            operation="apply_audio_ducking",
+            primary_key=key,
+            primary_track=track,
+            direct=modified,
+            modified=modified,
+            warnings=(
+                "Ducking is a confirmed structural occupancy pass, not signal detection.",
+            ),
         )
 
     def set_track_mix(

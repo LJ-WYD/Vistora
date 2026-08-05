@@ -128,7 +128,7 @@ def test_word_title_and_static_graphic_contracts_are_strict_and_legacy_safe() ->
     timeline = _timeline()
     assert TimelineConfig.model_validate_json(timeline.model_dump_json()) == timeline
     snapshot = TimelineSnapshotService.snapshot(timeline)
-    assert snapshot.schema_version == "9.0.0"
+    assert snapshot.schema_version == "10.0.0"
     assert snapshot.subtitle_tracks[0].cues[0].word_count == 2
     assert snapshot.subtitle_tracks[1].cues[0].cue_kind == "title"
     detached_title_sidecar = PreviewApplication(lambda: snapshot).subtitle_export(
@@ -200,7 +200,7 @@ def test_graphic_gateway_requires_confirmation_validates_alpha_and_replays(
     _graphic(image, alpha=False)
     _graphic(sticker, alpha=True)
     registry = build_production_registry()
-    assert registry.reference.registry_revision == 11 and len(registry) == 42
+    assert registry.reference.registry_revision == 12 and len(registry) == 43
     descriptor = registry.descriptor("VideoInsertGraphicSkill")
     assert descriptor.preview_supported is True
     assert descriptor.transactionality == "atomic_project_state"

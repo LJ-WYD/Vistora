@@ -229,6 +229,7 @@
                 </p>
                 <div class="field-grid">
                   <label><span>Clip gain (dB)</span><input id="audio-gain" type="number" min="-60" max="24" step="0.1"></label>
+                  <label><span>Content role</span><select id="audio-content-role"><option value="unspecified">Unspecified</option><option value="dialogue">Dialogue</option><option value="voiceover">Voice-over</option><option value="background_music">Background music</option><option value="sound_effect">Sound effect</option><option value="ambience">Ambience</option></select></label>
                   <label><span>Pan (-1 to 1)</span><input id="audio-pan" type="number" min="-1" max="1" step="0.01"></label>
                   <label><span>Fade in</span><input id="audio-fade-in" type="number" min="0" step="0.01"></label>
                   <label><span>Fade out</span><input id="audio-fade-out" type="number" min="0" step="0.01"></label>
@@ -239,6 +240,11 @@
                   <label><span>Envelope point ID</span><input id="audio-point-id" type="text" maxlength="160"></label>
                   <label><span>Point time (clip-local)</span><input id="audio-point-time" type="number" min="0" step="0.01"></label>
                   <label><span>Point gain (dB)</span><input id="audio-point-gain" type="number" min="-60" max="24" step="0.1"></label>
+                  <label><span>Ducking pass ID</span><input id="audio-ducking-id" type="text" maxlength="80" value="duck_main"></label>
+                  <label><span>Speech key tracks</span><select id="audio-ducking-keys" multiple size="3" aria-label="Speech key tracks"></select></label>
+                  <label><span>Ducking reduction (dB)</span><input id="audio-ducking-reduction" type="number" min="-36" max="-1" step="0.5" value="-12"></label>
+                  <label><span>Attack</span><input id="audio-ducking-attack" type="number" min="0.01" max="2" step="0.01" value="0.15"></label>
+                  <label><span>Release</span><input id="audio-ducking-release" type="number" min="0.01" max="5" step="0.01" value="0.35"></label>
                 </div>
                 <p id="audio-analysis-status" class="form-message" aria-live="polite">No loudness analysis has been run.</p>
                 <div class="editor-actions">
@@ -249,6 +255,8 @@
                   <button id="clear-envelope" class="button" type="button">Clear envelope</button>
                   <button id="analyze-loudness" class="button" type="button">Analyze loudness</button>
                   <button id="apply-loudness" class="button confirm" type="button" disabled>Stage analyzed gain</button>
+                  <button id="stage-ducking" class="button" type="button">Stage ducking</button>
+                  <button id="remove-ducking" class="button" type="button">Remove ducking</button>
                 </div>
               </fieldset>
               <fieldset id="visual-edit-panel" class="audio-edit-panel visual-edit-panel">

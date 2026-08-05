@@ -159,7 +159,7 @@
     {
       "id": "O14",
       "original_summary": "补齐基础音频、自动闪避与响度能力",
-      "status": "partial",
+      "status": "in_progress",
       "commits": ["5c9b73e8e4f0f96c764315aea80797dbdbd72856"],
       "remote_verified": true,
       "implementation_paths": ["src/audio_analysis", "src/skills/audio_timeline_edits.py"],

@@ -182,6 +182,14 @@ class SetClipAudioPropertiesInput(TrackTargetModel):
     """Exact clip-local audio controls; never expands to linked members."""
 
     clip_id: StableClipId
+    content_role: Literal[
+        "unspecified",
+        "dialogue",
+        "voiceover",
+        "background_music",
+        "sound_effect",
+        "ambience",
+    ] | None = None
     gain_db: float | None = Field(
         default=None, ge=-60, le=24, allow_inf_nan=False
     )
@@ -204,6 +212,7 @@ class SetClipAudioPropertiesInput(TrackTargetModel):
             value is None
             for value in (
                 self.gain_db,
+                self.content_role,
                 self.muted,
                 self.pan,
                 self.fade_in_seconds,
@@ -213,6 +222,40 @@ class SetClipAudioPropertiesInput(TrackTargetModel):
             )
         ):
             raise ValueError("At least one audio property is required")
+        return self
+
+
+class ApplyAudioDuckingInput(TimelineEditModel):
+    """Explicit structural dialogue-over-bed ducking application/removal."""
+
+    schema_name: Literal["vistora.apply-audio-ducking-input"] = (
+        "vistora.apply-audio-ducking-input"
+    )
+    action: Literal["apply", "remove"]
+    ducking_id: Annotated[
+        str,
+        Field(min_length=3, max_length=80, pattern=r"^[A-Za-z][A-Za-z0-9._:-]*$"),
+    ]
+    key_track_ids: tuple[StableTrackId, ...] = ()
+    target_track_ids: tuple[StableTrackId, ...] = Field(min_length=1)
+    reduction_db: float = Field(-12, ge=-36, le=-1, allow_inf_nan=False)
+    attack_seconds: float = Field(0.2, gt=0, le=2, allow_inf_nan=False)
+    release_seconds: float = Field(0.5, gt=0, le=5, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def exact_stable_tracks(self) -> "ApplyAudioDuckingInput":
+        for label, values in (
+            ("key", self.key_track_ids),
+            ("target", self.target_track_ids),
+        ):
+            if values != tuple(sorted(set(values))):
+                raise ValueError(f"Ducking {label} tracks must be stable and unique")
+        if self.action == "apply" and not self.key_track_ids:
+            raise ValueError("Ducking apply requires at least one key track")
+        if self.action == "remove" and self.key_track_ids:
+            raise ValueError("Ducking removal does not accept key tracks")
+        if set(self.key_track_ids) & set(self.target_track_ids):
+            raise ValueError("Ducking key and target tracks must be disjoint")
         return self
 
 
@@ -405,6 +448,7 @@ class TimelineEditOutcome(TimelineEditModel):
         "set_clip_audio",
         "set_track_mix",
         "set_volume_envelope",
+        "apply_audio_ducking",
         "set_clip_transform",
         "set_clip_color",
         "copy_clip_visual",

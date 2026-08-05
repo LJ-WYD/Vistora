@@ -14,6 +14,7 @@ from contracts import (
     ManualClipSplit,
     ManualClipUpdate,
     ManualClipAudio,
+    ManualAudioDucking,
     ManualClipVisual,
     ManualCopyClipVisual,
     ManualEditConfirmationRecord,
@@ -331,6 +332,17 @@ class VideoApplyManualEditsSkill(BaseSkill):
                     pan=edit.pan,
                 )
                 continue
+            if isinstance(edit, ManualAudioDucking):
+                engine.apply_audio_ducking(
+                    action=edit.action,
+                    ducking_id=edit.ducking_id,
+                    key_track_ids=edit.key_track_ids,
+                    target_track_ids=edit.target_track_ids,
+                    reduction_db=edit.reduction_db,
+                    attack_seconds=edit.attack_seconds,
+                    release_seconds=edit.release_seconds,
+                )
+                continue
             if isinstance(edit, ManualTrackManage):
                 _, track = engine._resolve_track(
                     edit.track_id,
@@ -415,6 +427,7 @@ class VideoApplyManualEditsSkill(BaseSkill):
                     fade_in_seconds=edit.fade_in_seconds,
                     fade_out_seconds=edit.fade_out_seconds,
                     playback_rate=edit.playback_rate,
+                    content_role=edit.content_role,
                     normalization=edit.normalization_evidence,
                 )
             elif isinstance(edit, ManualClipVisual):

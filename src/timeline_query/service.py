@@ -15,6 +15,7 @@ from core.timeline import ClipConfig, TimelineConfig
 from core.timeline_manager import TimelineManager as _TimelineManager
 
 from .models import (
+    AudioDuckingSnapshot,
     ClipColorSnapshot,
     ClipSnapshot,
     VisualAutomationSnapshot,
@@ -165,6 +166,7 @@ def _clip_snapshot(clip: ClipConfig, order_index: int) -> ClipSnapshot:
         rotate_degrees=clip.rotate,
         link_group_id=clip.link_group_id,
         audio_gain_db=clip.audio.gain_db,
+        audio_content_role=clip.audio.content_role,
         audio_muted=clip.audio.muted,
         audio_pan=clip.audio.pan,
         audio_fade_in_seconds=clip.audio.fade_in_seconds,
@@ -176,6 +178,15 @@ def _clip_snapshot(clip: ClipConfig, order_index: int) -> ClipSnapshot:
         loudness_analysis_id=(
             clip.audio.normalization.analysis_id
             if clip.audio.normalization is not None
+            else None
+        ),
+        audio_ducking=(
+            AudioDuckingSnapshot.model_validate(
+                clip.audio.ducking.model_dump(
+                    mode="python", exclude={"schema_name", "schema_version"}
+                )
+            )
+            if clip.audio.ducking is not None
             else None
         ),
         transform=ClipTransformSnapshot.model_validate(

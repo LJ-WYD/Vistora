@@ -1,6 +1,7 @@
 """Stable, read-only timeline snapshots for consumers such as future UIs."""
 
 from .models import (
+    AudioDuckingSnapshot,
     ClipColorSnapshot,
     TIMELINE_SNAPSHOT_VERSION,
     ClipProvenanceSummary,
@@ -35,6 +36,7 @@ __all__ = [
     "ClipProvenanceSummary",
     "ClipColorSnapshot",
     "ClipSnapshot",
+    "AudioDuckingSnapshot",
     "ClipTraceQueryResult",
     "ClipTransformSnapshot",
     "EvidenceSummary",

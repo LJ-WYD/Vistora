@@ -13,6 +13,7 @@ from contracts import (
     ManualClipLink,
     ManualClipSplit,
     ManualClipAudio,
+    ManualAudioDucking,
     ManualClipVisual,
     ManualCopyClipVisual,
     ManualEditConfirmationRecord,
@@ -449,6 +450,21 @@ class ManualTraceRecorder:
         before_masks = _masks(before_snapshot)
         after_masks = _masks(after_snapshot)
         for edit in proposal.edits:
+            if isinstance(edit, ManualAudioDucking):
+                target_ids = set(edit.target_track_ids)
+                target_keys = {
+                    track.track_key for track in before_snapshot.tracks
+                    if track.track_id in target_ids
+                }
+                changed = any(
+                    track_key in target_keys
+                    and before_clips.get((track_key, clip_id))
+                    != after_clips.get((track_key, clip_id))
+                    for track_key, clip_id in before_clips.keys() | after_clips.keys()
+                )
+                if not changed:
+                    raise ValueError("Manual ducking trace has no exact target state change")
+                continue
             if isinstance(edit, ManualVisualAutomationEdit):
                 target_ids = {edit.clip_id}
                 target_ids.update(item.clip_id for item in edit.targets)
@@ -602,6 +618,19 @@ class ManualTraceRecorder:
         effect_rows: list[tuple[Any, str, str, str, str]] = []
         seen_effects: set[tuple[str, str, str]] = set()
         for edit in proposal.edits:
+            if isinstance(edit, ManualAudioDucking):
+                target_keys = {
+                    track.track_key for track in before_snapshot.tracks
+                    if track.track_id in set(edit.target_track_ids)
+                }
+                for track_key, clip_id in sorted(before_clips.keys() | after_clips.keys()):
+                    if track_key not in target_keys:
+                        continue
+                    old = before_clips.get((track_key, clip_id))
+                    new = after_clips.get((track_key, clip_id))
+                    if old != new:
+                        effect_rows.append((edit, "modifies", track_key, clip_id, "direct"))
+                continue
             if isinstance(edit, ManualVisualAutomationEdit):
                 target_ids = {edit.clip_id}
                 target_ids.update(item.clip_id for item in edit.targets)

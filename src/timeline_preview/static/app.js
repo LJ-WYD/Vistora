@@ -48,6 +48,7 @@ const ui = {
   stageUnlink: document.querySelector("#stage-unlink"),
   stageTrack: document.querySelector("#stage-track"),
   audioGain: document.querySelector("#audio-gain"),
+  audioContentRole: document.querySelector("#audio-content-role"),
   audioPan: document.querySelector("#audio-pan"),
   audioFadeIn: document.querySelector("#audio-fade-in"),
   audioFadeOut: document.querySelector("#audio-fade-out"),
@@ -58,6 +59,11 @@ const ui = {
   audioPointId: document.querySelector("#audio-point-id"),
   audioPointTime: document.querySelector("#audio-point-time"),
   audioPointGain: document.querySelector("#audio-point-gain"),
+  audioDuckingId: document.querySelector("#audio-ducking-id"),
+  audioDuckingKeys: document.querySelector("#audio-ducking-keys"),
+  audioDuckingReduction: document.querySelector("#audio-ducking-reduction"),
+  audioDuckingAttack: document.querySelector("#audio-ducking-attack"),
+  audioDuckingRelease: document.querySelector("#audio-ducking-release"),
   audioAnalysisStatus: document.querySelector("#audio-analysis-status"),
   stageAudio: document.querySelector("#stage-audio"),
   stageTrackMix: document.querySelector("#stage-track-mix"),
@@ -66,6 +72,8 @@ const ui = {
   clearEnvelope: document.querySelector("#clear-envelope"),
   analyzeLoudness: document.querySelector("#analyze-loudness"),
   applyLoudness: document.querySelector("#apply-loudness"),
+  stageDucking: document.querySelector("#stage-ducking"),
+  removeDucking: document.querySelector("#remove-ducking"),
   visualPositionX: document.querySelector("#visual-position-x"),
   visualPositionY: document.querySelector("#visual-position-y"),
   visualScaleX: document.querySelector("#visual-scale-x"),
@@ -1567,6 +1575,8 @@ function showManualEditor(track, clip) {
   ui.editTrackLocked.checked = track.locked;
   const audioDraft = existingDraftForClip(clip.clip_id, ["clip_audio"]);
   ui.audioGain.value = String(audioDraft?.gain_db ?? clip.audio_gain_db ?? 0);
+  ui.audioContentRole.value =
+    audioDraft?.content_role ?? clip.audio_content_role ?? "unspecified";
   ui.audioPan.value = String(audioDraft?.pan ?? clip.audio_pan ?? 0);
   ui.audioFadeIn.value = String(
     audioDraft?.fade_in_seconds ?? clip.audio_fade_in_seconds ?? 0,
@@ -1589,6 +1599,23 @@ function showManualEditor(track, clip) {
   ui.audioPointId.value = newStableId("envelope");
   ui.audioPointTime.value = "0";
   ui.audioPointGain.value = "0";
+  ui.audioDuckingKeys.replaceChildren();
+  for (const candidate of state.snapshot.tracks) {
+    const exposesAudio = candidate.kind === "audio" ||
+      candidate.clips.some((item) => item.keep_audio);
+    if (!exposesAudio || candidate.track_id === track.track_id) continue;
+    const option = document.createElement("option");
+    option.value = candidate.track_id;
+    option.textContent = `${candidate.track_id} · ${candidate.role}`;
+    option.selected = candidate.clips.some((item) =>
+      ["dialogue", "voiceover"].includes(item.audio_content_role),
+    );
+    ui.audioDuckingKeys.append(option);
+  }
+  ui.audioDuckingId.value = clip.audio_ducking?.ducking_id || "duck_main";
+  ui.audioDuckingReduction.value = String(clip.audio_ducking?.reduction_db ?? -12);
+  ui.audioDuckingAttack.value = String(clip.audio_ducking?.attack_seconds ?? 0.15);
+  ui.audioDuckingRelease.value = String(clip.audio_ducking?.release_seconds ?? 0.35);
   state.loudnessEvidence = null;
   ui.applyLoudness.disabled = true;
   ui.audioAnalysisStatus.textContent =
@@ -1602,6 +1629,8 @@ function showManualEditor(track, clip) {
     ui.deleteEnvelope,
     ui.clearEnvelope,
     ui.analyzeLoudness,
+    ui.stageDucking,
+    ui.removeDucking,
   ]) {
     control.disabled = track.locked;
   }
@@ -1612,6 +1641,10 @@ function showManualEditor(track, clip) {
   ui.deleteEnvelope.disabled = track.locked || !hasAudioComponent;
   ui.clearEnvelope.disabled = track.locked || !hasAudioComponent;
   ui.analyzeLoudness.disabled = track.locked || !hasAudioComponent;
+  ui.stageDucking.disabled = track.locked || track.kind !== "audio" ||
+    ui.audioDuckingKeys.options.length === 0;
+  ui.removeDucking.disabled = track.locked || track.kind !== "audio" ||
+    !clip.audio_ducking;
   const visualDraft = existingDraftForClip(clip.clip_id, ["clip_visual"]);
   const transform = visualDraft?.transform || clip.transform;
   const color = visualDraft?.color || clip.color;
@@ -2285,6 +2318,9 @@ function stageEdit(edit) {
     if (value.kind === "volume_envelope") {
       return `envelope:${value.track_id}/${value.clip_id}/${value.point_id || value.action}`;
     }
+    if (value.kind === "audio_ducking") {
+      return `ducking:${value.action}/${value.ducking_id}/${value.target_track_ids.join(",")}`;
+    }
     if (value.kind === "subtitle_track") {
       return `subtitle_track:${value.track_id}`;
     }
@@ -2446,7 +2482,8 @@ function showDetails(track, clip) {
       "Clip audio",
       ["image", "sticker"].includes(clip.visual_kind)
         ? "Silent static graphic"
-        : `${clip.audio_gain_db ?? 0} dB · pan ${clip.audio_pan ?? 0} · ` +
+        : `${clip.audio_content_role || "unspecified"} · ` +
+          `${clip.audio_gain_db ?? 0} dB · pan ${clip.audio_pan ?? 0} · ` +
           `${clip.audio_muted || !clip.keep_audio ? "muted" : "active"}`,
     ),
     detailRow(
@@ -2463,6 +2500,12 @@ function showDetails(track, clip) {
     detailRow(
       "Loudness evidence",
       clip.loudness_analysis_id || "Not applied",
+    ),
+    detailRow(
+      "Automatic ducking",
+      clip.audio_ducking
+        ? `${clip.audio_ducking.ducking_id} · ${clip.audio_ducking.reduction_db} dB · key ${clip.audio_ducking.key_track_ids.join(", ")}`
+        : "Not applied",
     ),
     detailRow(
       "Picture transform",
@@ -4192,6 +4235,7 @@ ui.stageAudio.addEventListener("click", () => {
       track_id: state.selected.track.track_id,
       clip_id: clip.clip_id,
       gain_db: readFiniteInput(ui.audioGain, "Clip gain"),
+      content_role: ui.audioContentRole.value,
       muted: ui.audioMuted.checked,
       pan: readFiniteInput(ui.audioPan, "Clip pan"),
       fade_in_seconds: readFiniteInput(ui.audioFadeIn, "Fade in"),
@@ -4205,6 +4249,46 @@ ui.stageAudio.addEventListener("click", () => {
     ui.editFormMessage.textContent = error.message || String(error);
   }
 });
+
+function stageDuckingAction(action) {
+  if (!state.selected || state.selected.track.locked) return;
+  try {
+    const track = state.selected.track;
+    if (track.kind !== "audio") {
+      throw new Error("Ducking targets must be an explicit audio track.");
+    }
+    const duckingId = ui.audioDuckingId.value.trim();
+    const keyTrackIds = [...ui.audioDuckingKeys.selectedOptions]
+      .map((option) => option.value).sort();
+    const edit = {
+      schema_version: "1.0.0",
+      operation_id: newStableId("manual_ducking"),
+      kind: "audio_ducking",
+      action,
+      ducking_id: duckingId,
+      key_track_ids: action === "apply" ? keyTrackIds : [],
+      target_track_ids: [track.track_id],
+      reduction_db: readFiniteInput(ui.audioDuckingReduction, "Ducking reduction"),
+      attack_seconds: readFiniteInput(ui.audioDuckingAttack, "Ducking attack"),
+      release_seconds: readFiniteInput(ui.audioDuckingRelease, "Ducking release"),
+    };
+    if (!duckingId) throw new Error("Ducking pass ID is required.");
+    if (action === "apply" && keyTrackIds.length === 0) {
+      throw new Error("Select at least one declared speech key track.");
+    }
+    stageEdit(edit);
+    ui.editFormMessage.classList.remove("error");
+    ui.editFormMessage.textContent =
+      `${action === "apply" ? "Ducking" : "Ducking removal"} staged. ` +
+      "No timeline write has occurred.";
+  } catch (error) {
+    ui.editFormMessage.classList.add("error");
+    ui.editFormMessage.textContent = error.message || String(error);
+  }
+}
+
+ui.stageDucking.addEventListener("click", () => stageDuckingAction("apply"));
+ui.removeDucking.addEventListener("click", () => stageDuckingAction("remove"));
 
 ui.stageTrackMix.addEventListener("click", () => {
   if (!state.selected || state.selected.track.locked) return;

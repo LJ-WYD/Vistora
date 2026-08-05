@@ -13,6 +13,7 @@ from contracts import (
     ManualClipRemove,
     ManualClipLink,
     ManualClipSplit,
+    ManualAudioDucking,
     ManualEditConfirmationRecord,
     ManualEditProposal,
     ManualTrackManage,
@@ -340,6 +341,18 @@ class ManualEditTrace(TraceModel):
                 for relation in operation_relations
                 if relation.effect_kind == "direct"
             )
+            if isinstance(edit, ManualAudioDucking):
+                target_tracks = set(edit.target_track_ids)
+                if not direct or any(
+                    relation.entity.entity_kind != "clip"
+                    or relation.entity.track_id not in target_tracks
+                    or relation.relation_type != "modifies"
+                    for relation in direct
+                ):
+                    raise ValueError(
+                        "Manual ducking trace differs from its exact target tracks"
+                    )
+                continue
             if isinstance(edit, (ManualTrackManage, ManualTrackMix)):
                 if (
                     len(direct) != 1

@@ -53,6 +53,32 @@ class AppliedLoudnessNormalization(BaseModel):
     applied_gain_db: float = Field(ge=-60, le=24, allow_inf_nan=False)
 
 
+class AppliedAudioDucking(BaseModel):
+    """Auditable result of one explicitly confirmed structural ducking pass."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    schema_name: Literal["vistora.applied-audio-ducking"] = (
+        "vistora.applied-audio-ducking"
+    )
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    ducking_id: str = Field(
+        min_length=3,
+        max_length=80,
+        pattern=r"^[A-Za-z][A-Za-z0-9._:-]*$",
+    )
+    key_track_ids: tuple[str, ...] = Field(min_length=1)
+    key_timeline_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reduction_db: float = Field(ge=-36, le=-1, allow_inf_nan=False)
+    attack_seconds: float = Field(gt=0, le=2, allow_inf_nan=False)
+    release_seconds: float = Field(gt=0, le=5, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def stable_keys(self) -> "AppliedAudioDucking":
+        if self.key_track_ids != tuple(sorted(set(self.key_track_ids))):
+            raise ValueError("Ducking key track IDs must be stable and unique")
+        return self
+
+
 class ClipAudioSettings(BaseModel):
     """Versioned non-destructive audio controls for one clip component."""
 
@@ -61,6 +87,14 @@ class ClipAudioSettings(BaseModel):
         "vistora.clip-audio-settings"
     )
     schema_version: Literal["1.0.0"] = "1.0.0"
+    content_role: Literal[
+        "unspecified",
+        "dialogue",
+        "voiceover",
+        "background_music",
+        "sound_effect",
+        "ambience",
+    ] = "unspecified"
     gain_db: float = Field(0, ge=-60, le=24, allow_inf_nan=False)
     muted: bool = False
     pan: float = Field(0, ge=-1, le=1, allow_inf_nan=False)
@@ -68,6 +102,7 @@ class ClipAudioSettings(BaseModel):
     fade_out_seconds: float = Field(0, ge=0, allow_inf_nan=False)
     envelope: tuple[AudioEnvelopePoint, ...] = ()
     normalization: AppliedLoudnessNormalization | None = None
+    ducking: AppliedAudioDucking | None = None
 
     @model_validator(mode="after")
     def stable_envelope(self) -> "ClipAudioSettings":

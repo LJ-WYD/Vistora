@@ -8,6 +8,7 @@ from .engine import (
 )
 from .models import (
     AddTransitionInput,
+    ApplyAudioDuckingInput,
     ClipReference,
     CopyTransitionInput,
     InsertOverwriteClipInput,
@@ -33,6 +34,8 @@ from .transaction import TimelineEditTransaction
 __all__ = [
     "TIME_EPSILON",
     "AddTransitionInput",
+    "ApplyAudioDuckingInput",
+    "AppliedAudioDucking",
     "AppliedLoudnessNormalization",
     "AudioEnvelopePoint",
     "ClipAudioSettings",
@@ -78,6 +81,7 @@ __all__ = [
     "clip_end",
 ]
 from core.timeline import (
+    AppliedAudioDucking,
     AppliedLoudnessNormalization,
     AudioEnvelopePoint,
     ClipAudioSettings,

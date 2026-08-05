@@ -17,6 +17,7 @@ from pydantic import BaseModel, ValidationError
 
 from contracts import PlanReference
 from timeline_edit import (
+    AppliedAudioDucking,
     AudioEnvelopePoint,
     ClipAudioSettings,
     ClipColorAdjustment,
@@ -58,6 +59,7 @@ from .models import (
     PlanDiffRequest,
     PlanDiffSummary,
     PlanStepPreview,
+    PreviewAudioDuckingState,
     PreviewClipState,
     PreviewMaterialFact,
     PreviewProjectSettings,
@@ -129,12 +131,22 @@ def _clip_state(
         rotate_degrees=clip.rotate_degrees,
         link_group_id=clip.link_group_id,
         audio_gain_db=clip.audio_gain_db,
+        audio_content_role=clip.audio_content_role,
         audio_muted=clip.audio_muted,
         audio_pan=clip.audio_pan,
         audio_fade_in_seconds=clip.audio_fade_in_seconds,
         audio_fade_out_seconds=clip.audio_fade_out_seconds,
         audio_envelope=clip.audio_envelope,
         loudness_analysis_id=clip.loudness_analysis_id,
+        audio_ducking=(
+            PreviewAudioDuckingState.model_validate(
+                clip.audio_ducking.model_dump(
+                    mode="json", exclude={"schema_name", "schema_version"}
+                )
+            )
+            if clip.audio_ducking is not None
+            else None
+        ),
         transform=clip.transform.model_dump(mode="python"),
         color=clip.color.model_dump(mode="python"),
         visual_automations=tuple(
@@ -301,6 +313,7 @@ def _timeline_from_snapshot(snapshot: TimelineSnapshot) -> TimelineConfig:
                     link_group_id=clip.link_group_id,
                     audio=ClipAudioSettings(
                         gain_db=clip.audio_gain_db,
+                        content_role=clip.audio_content_role,
                         muted=clip.audio_muted,
                         pan=clip.audio_pan,
                         fade_in_seconds=clip.audio_fade_in_seconds,
@@ -312,6 +325,16 @@ def _timeline_from_snapshot(snapshot: TimelineSnapshot) -> TimelineConfig:
                                 gain_db=point[2],
                             )
                             for point in clip.audio_envelope
+                        ),
+                        ducking=(
+                            AppliedAudioDucking.model_validate(
+                                clip.audio_ducking.model_dump(
+                                    mode="python",
+                                    exclude={"schema_name", "schema_version"},
+                                )
+                            )
+                            if clip.audio_ducking is not None
+                            else None
                         ),
                     ),
                     transform=ClipTransform.model_validate(
@@ -510,6 +533,7 @@ def _preview_state(
         rotate_degrees=clip.rotate,
         link_group_id=clip.link_group_id,
         audio_gain_db=clip.audio.gain_db,
+        audio_content_role=clip.audio.content_role,
         audio_muted=clip.audio.muted,
         audio_pan=clip.audio.pan,
         audio_fade_in_seconds=clip.audio.fade_in_seconds,
@@ -521,6 +545,15 @@ def _preview_state(
         loudness_analysis_id=(
             clip.audio.normalization.analysis_id
             if clip.audio.normalization is not None
+            else None
+        ),
+        audio_ducking=(
+            PreviewAudioDuckingState.model_validate(
+                clip.audio.ducking.model_dump(
+                    mode="json", exclude={"schema_name", "schema_version"}
+                )
+            )
+            if clip.audio.ducking is not None
             else None
         ),
         transform=clip.transform.model_dump(
@@ -799,6 +832,7 @@ class PlanDiffEngine:
                 "TimelineManageTrackSkill",
                 "TimelineSetClipLinkSkill",
                 "AudioSetClipPropertiesSkill",
+                "AudioApplyDuckingSkill",
                 "AudioSetTrackMixSkill",
                 "AudioSetVolumeEnvelopeSkill",
                 "VideoSetClipTransformSkill",
@@ -847,6 +881,7 @@ class PlanDiffEngine:
                             link_group_id=clip.link_group_id,
                             audio=ClipAudioSettings(
                                 gain_db=clip.audio_gain_db,
+                                content_role=clip.audio_content_role,
                                 muted=clip.audio_muted,
                                 pan=clip.audio_pan,
                                 fade_in_seconds=clip.audio_fade_in_seconds,
@@ -858,6 +893,16 @@ class PlanDiffEngine:
                                         gain_db=point[2],
                                     )
                                     for point in clip.audio_envelope
+                                ),
+                                ducking=(
+                                    AppliedAudioDucking.model_validate(
+                                        clip.audio_ducking.model_dump(
+                                            mode="python",
+                                            exclude={"schema_name", "schema_version"},
+                                        )
+                                    )
+                                    if clip.audio_ducking is not None
+                                    else None
                                 ),
                             ),
                             transform=ClipTransform.model_validate(
@@ -1597,7 +1642,18 @@ class PlanDiffEngine:
                     fade_in_seconds=params.fade_in_seconds,
                     fade_out_seconds=params.fade_out_seconds,
                     playback_rate=params.playback_rate,
+                    content_role=params.content_role,
                     normalization=params.normalization_evidence,
+                )
+            elif name == "AudioApplyDuckingSkill":
+                updated, outcome = engine.apply_audio_ducking(
+                    action=params.action,
+                    ducking_id=params.ducking_id,
+                    key_track_ids=params.key_track_ids,
+                    target_track_ids=params.target_track_ids,
+                    reduction_db=params.reduction_db,
+                    attack_seconds=params.attack_seconds,
+                    release_seconds=params.release_seconds,
                 )
             elif name == "VideoSetClipTransformSkill":
                 updated, outcome = engine.set_clip_transform(
@@ -1963,6 +2019,9 @@ class PlanDiffEngine:
             elif old.color != new.color:
                 category = "clip_color"
                 reason = "The edit changes bounded deterministic SDR color values."
+            elif old.audio_ducking != new.audio_ducking:
+                category = "audio_ducking"
+                reason = "The edit applies or removes a confirmed structural ducking envelope."
             elif old.audio_envelope != new.audio_envelope:
                 category = "audio_envelope"
                 reason = "The edit changes the linear clip gain envelope."
@@ -1970,6 +2029,7 @@ class PlanDiffEngine:
                 getattr(old, field) != getattr(new, field)
                 for field in (
                     "audio_gain_db",
+                    "audio_content_role",
                     "audio_muted",
                     "audio_pan",
                     "audio_fade_in_seconds",

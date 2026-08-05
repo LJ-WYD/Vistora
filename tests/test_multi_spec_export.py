@@ -158,7 +158,7 @@ def test_gateway_exports_atomically_replays_and_redacts_paths(
 
     monkeypatch.setattr(TimelineRenderer, "render", fake_render)
     registry = build_production_registry()
-    assert registry.reference.registry_revision == 11 and len(registry) == 42
+    assert registry.reference.registry_revision == 12 and len(registry) == 43
     request = AtomicToolRequestEnvelope(
         request_id="request_multi_spec_export",
         execution_id="execution_multi_spec_export",

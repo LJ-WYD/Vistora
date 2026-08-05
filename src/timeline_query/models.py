@@ -7,8 +7,8 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-TIMELINE_SNAPSHOT_VERSION = "9.0.0"
-SnapshotVersion = Literal["2.0.0", "3.0.0", "4.0.0", "5.0.0", "6.0.0", "7.0.0", "8.0.0", "9.0.0"]
+TIMELINE_SNAPSHOT_VERSION = "10.0.0"
+SnapshotVersion = Literal["2.0.0", "3.0.0", "4.0.0", "5.0.0", "6.0.0", "7.0.0", "8.0.0", "9.0.0", "10.0.0"]
 SnapshotId = Annotated[
     str,
     Field(
@@ -208,6 +208,19 @@ class ClipCompositeSnapshot(ReadModel):
     blend_mode: Literal["normal", "multiply", "screen"] = "normal"
 
 
+class AudioDuckingSnapshot(ReadModel):
+    schema_name: Literal["vistora.audio-ducking-snapshot"] = (
+        "vistora.audio-ducking-snapshot"
+    )
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    ducking_id: SnapshotId
+    key_track_ids: tuple[SnapshotId, ...]
+    key_timeline_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reduction_db: FiniteFloat
+    attack_seconds: FiniteFloat
+    release_seconds: FiniteFloat
+
+
 class ClipSnapshot(ReadModel):
     """Detached view of one clip and its declared timing."""
 
@@ -230,12 +243,17 @@ class ClipSnapshot(ReadModel):
     rotate_degrees: int
     link_group_id: SnapshotId | None = None
     audio_gain_db: FiniteFloat = 0
+    audio_content_role: Literal[
+        "unspecified", "dialogue", "voiceover", "background_music",
+        "sound_effect", "ambience",
+    ] = "unspecified"
     audio_muted: bool = False
     audio_pan: FiniteFloat = 0
     audio_fade_in_seconds: FiniteFloat = 0
     audio_fade_out_seconds: FiniteFloat = 0
     audio_envelope: tuple[tuple[str, FiniteFloat, FiniteFloat], ...] = ()
     loudness_analysis_id: SnapshotId | None = None
+    audio_ducking: AudioDuckingSnapshot | None = None
     transform: ClipTransformSnapshot
     color: ClipColorSnapshot
     visual_automations: tuple[VisualAutomationSnapshot, ...] = ()

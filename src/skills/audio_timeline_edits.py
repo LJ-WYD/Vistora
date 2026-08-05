@@ -12,6 +12,7 @@ from audio_analysis import (
 )
 from core import timeline_manager
 from timeline_edit import (
+    ApplyAudioDuckingInput,
     SetClipAudioPropertiesInput,
     SetTrackMixPropertiesInput,
     SetVolumeEnvelopeInput,
@@ -69,6 +70,7 @@ class AudioSetClipPropertiesSkill(BaseSkill):
             lambda engine: engine.set_clip_audio(
                 params.track_reference,
                 params.clip_id,
+                content_role=params.content_role,
                 gain_db=params.gain_db,
                 muted=params.muted,
                 pan=params.pan,
@@ -76,6 +78,28 @@ class AudioSetClipPropertiesSkill(BaseSkill):
                 fade_out_seconds=params.fade_out_seconds,
                 playback_rate=params.playback_rate,
                 normalization=evidence,
+            )
+        )
+
+
+class AudioApplyDuckingSkill(BaseSkill):
+    name = "AudioApplyDuckingSkill"
+    description = (
+        "Apply or remove one deterministic, explicitly confirmed structural "
+        "dialogue-over-music/effects ducking envelope across exact audio tracks."
+    )
+    input_model = ApplyAudioDuckingInput
+
+    def run(self, params: ApplyAudioDuckingInput) -> dict[str, Any]:
+        return TimelineEditTransaction.apply(
+            lambda engine: engine.apply_audio_ducking(
+                action=params.action,
+                ducking_id=params.ducking_id,
+                key_track_ids=params.key_track_ids,
+                target_track_ids=params.target_track_ids,
+                reduction_db=params.reduction_db,
+                attack_seconds=params.attack_seconds,
+                release_seconds=params.release_seconds,
             )
         )
 

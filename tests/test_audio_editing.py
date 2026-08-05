@@ -37,6 +37,7 @@ from contracts import (  # noqa: E402
     DirectorOperation,
     DirectorPlan,
     ManualClipAudio,
+    ManualAudioDucking,
     ManualEditConfirmationRecord,
     ManualEditProposal,
     ManualTrackMix,
@@ -45,6 +46,7 @@ from contracts import (  # noqa: E402
 )
 from core import timeline_manager  # noqa: E402
 from core.timeline import (  # noqa: E402
+    AppliedAudioDucking,
     AppliedLoudnessNormalization,
     AudioEnvelopePoint,
     ClipAudioSettings,
@@ -87,14 +89,17 @@ def _preview_server(application: PreviewApplication):
         thread.join(timeout=2)
 
 
-def _wave(path: Path, *, frequency: float, amplitude: float = 0.25) -> None:
+def _wave(
+    path: Path, *, frequency: float, amplitude: float = 0.25,
+    duration_seconds: float = 1,
+) -> None:
     sample_rate = 48_000
     with wave.open(str(path), "wb") as output:
         output.setnchannels(1)
         output.setsampwidth(2)
         output.setframerate(sample_rate)
         frames = bytearray()
-        for index in range(sample_rate):
+        for index in range(round(sample_rate * duration_seconds)):
             value = int(
                 32767 * amplitude * math.sin(2 * math.pi * frequency * index / sample_rate)
             )
@@ -158,6 +163,80 @@ def test_audio_models_are_frozen_strict_and_legacy_defaults_are_equivalent() -> 
     assert clip.volume == 0.5
     assert clip.audio == ClipAudioSettings()
     assert legacy.tracks["audio"].mix == TrackMixSettings()
+
+
+def _ducking_timeline() -> TimelineConfig:
+    return TimelineConfig(
+        tracks={
+            "voice": TrackConfig(
+                id="audio_voice", kind="audio", order=0,
+                clips=[ClipConfig(
+                    id="voice_clip", source="voice.wav", trim_out=1,
+                    timeline_start=1,
+                    audio=ClipAudioSettings(content_role="dialogue"),
+                )],
+            ),
+            "music": TrackConfig(
+                id="audio_music", kind="audio", order=1,
+                clips=[ClipConfig(
+                    id="music_clip", source="music.wav", trim_out=3,
+                    audio=ClipAudioSettings(content_role="background_music"),
+                )],
+            ),
+        }
+    )
+
+
+def test_content_roles_and_structural_ducking_are_strict_deterministic_and_reversible() -> None:
+    first, outcome = TimelineEditEngine(_ducking_timeline()).apply_audio_ducking(
+        action="apply",
+        ducking_id="duck_main",
+        key_track_ids=("audio_voice",),
+        target_track_ids=("audio_music",),
+        reduction_db=-12,
+        attack_seconds=0.25,
+        release_seconds=0.5,
+    )
+    second, _ = TimelineEditEngine(_ducking_timeline()).apply_audio_ducking(
+        action="apply",
+        ducking_id="duck_main",
+        key_track_ids=("audio_voice",),
+        target_track_ids=("audio_music",),
+        reduction_db=-12,
+        attack_seconds=0.25,
+        release_seconds=0.5,
+    )
+    audio = first.tracks["music"].clips[0].audio
+    assert outcome.operation == "apply_audio_ducking"
+    assert audio == second.tracks["music"].clips[0].audio
+    assert tuple((point.offset_seconds, point.gain_db) for point in audio.envelope) == (
+        (0.75, 0.0), (1.0, -12.0), (2.0, -12.0), (2.5, 0.0),
+    )
+    assert isinstance(audio.ducking, AppliedAudioDucking)
+    restored, _ = TimelineEditEngine(first).apply_audio_ducking(
+        action="remove",
+        ducking_id="duck_main",
+        key_track_ids=(),
+        target_track_ids=("audio_music",),
+        reduction_db=-12,
+        attack_seconds=0.25,
+        release_seconds=0.5,
+    )
+    assert restored.tracks["music"].clips[0].audio.envelope == ()
+    assert restored.tracks["music"].clips[0].audio.ducking is None
+    with pytest.raises(TimelineEditError, match="explicitly dialogue"):
+        invalid = _ducking_timeline()
+        invalid.tracks["voice"].clips[0].audio = ClipAudioSettings()
+        TimelineEditEngine(invalid).apply_audio_ducking(
+            action="apply", ducking_id="duck_bad",
+            key_track_ids=("audio_voice",), target_track_ids=("audio_music",),
+            reduction_db=-12, attack_seconds=0.25, release_seconds=0.5,
+        )
+    with pytest.raises(ValidationError):
+        ManualAudioDucking(
+            operation_id="manual_duck", action="apply", ducking_id="duck_main",
+            key_track_ids=("audio_music",), target_track_ids=("audio_music",),
+        )
 
 
 def test_clip_track_and_envelope_edits_are_exact_and_locked_tracks_fail() -> None:
@@ -272,7 +351,7 @@ def test_registry_gateway_requires_exact_gate_and_applies_analysis_evidence(
     monkeypatch.setattr(timeline_manager, "PROJECT_FILE", str(project))
     monkeypatch.setattr(timeline_manager, "WORKSPACE_DIR", str(project.parent))
     registry = build_production_registry()
-    assert registry.reference.registry_revision == 11
+    assert registry.reference.registry_revision == 12
     assert registry.descriptor("AudioAnalyzeLoudnessSkill").mutation is False
     assert registry.descriptor("AudioSetClipPropertiesSkill").transactionality == "atomic_project_state"
     analysis = LoudnessAnalysisService().analyze(
@@ -430,6 +509,64 @@ def test_advanced_multitrack_render_is_stereo_48k_and_limited(tmp_path: Path) ->
     assert measured.true_peak_dbfs <= 0.5
 
 
+def test_structural_ducking_changes_exported_audio_energy(tmp_path: Path) -> None:
+    video = tmp_path / "black.mp4"
+    music = tmp_path / "music.wav"
+    silence = tmp_path / "speech-window.wav"
+    output = tmp_path / "ducked.mp4"
+    _wave(music, frequency=440, amplitude=0.35, duration_seconds=3)
+    _wave(silence, frequency=220, amplitude=0, duration_seconds=1)
+    subprocess.run([
+        "ffmpeg", "-nostdin", "-y", "-loglevel", "error",
+        "-f", "lavfi", "-i", "color=c=black:s=320x180:r=24:d=3",
+        "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(video),
+    ], check=True)
+    timeline = TimelineConfig(
+        width=320, height=180, fps=24,
+        tracks={
+            "video": TrackConfig(
+                id="video", kind="video", order=0,
+                clips=[ClipConfig(id="video_clip", source=str(video), trim_out=3, keep_audio=False)],
+            ),
+            "music": TrackConfig(
+                id="audio_music", kind="audio", order=1,
+                clips=[ClipConfig(
+                    id="music_clip", source=str(music), trim_out=3,
+                    audio=ClipAudioSettings(content_role="background_music"),
+                )],
+            ),
+            "voice": TrackConfig(
+                id="audio_voice", kind="audio", order=2,
+                clips=[ClipConfig(
+                    id="voice_clip", source=str(silence), trim_out=1,
+                    timeline_start=1,
+                    audio=ClipAudioSettings(content_role="dialogue"),
+                )],
+            ),
+        },
+    )
+    ducked, _ = TimelineEditEngine(timeline).apply_audio_ducking(
+        action="apply", ducking_id="duck_render",
+        key_track_ids=("audio_voice",), target_track_ids=("audio_music",),
+        reduction_db=-12, attack_seconds=0.1, release_seconds=0.1,
+    )
+    TimelineRenderer(ducked).render(str(output))
+
+    def mean_volume(start: float, end: float) -> float:
+        probe = subprocess.run([
+            "ffmpeg", "-nostdin", "-hide_banner", "-ss", str(start),
+            "-to", str(end), "-i", str(output), "-vn",
+            "-af", "volumedetect", "-f", "null", "-",
+        ], capture_output=True, text=True, check=True)
+        marker = "mean_volume:"
+        line = next(item for item in probe.stderr.splitlines() if marker in item)
+        return float(line.split(marker, 1)[1].split("dB", 1)[0].strip())
+
+    outside = mean_volume(0.2, 0.7)
+    inside = mean_volume(1.2, 1.7)
+    assert outside - inside >= 10
+
+
 def test_snapshot_detaches_audio_state() -> None:
     timeline = _timeline()
     timeline.tracks["dialogue"].mix = TrackMixSettings(gain_db=-4)
@@ -506,6 +643,83 @@ def test_plan_review_simulates_audio_changes_without_mutation() -> None:
     }
     assert timeline.model_dump_json() == before
     assert TimelineSnapshotService.snapshot(timeline) == snapshot
+
+
+def test_plan_review_simulates_ducking_without_mutation() -> None:
+    timeline = _ducking_timeline()
+    snapshot = TimelineSnapshotService.snapshot(timeline)
+    operation = DirectorOperation(
+        operation_id="operation_audio_duck",
+        tool_name="AudioApplyDuckingSkill",
+        arguments={
+            "action": "apply", "ducking_id": "duck_review",
+            "key_track_ids": ["audio_voice"],
+            "target_track_ids": ["audio_music"],
+            "reduction_db": -10, "attack_seconds": 0.2,
+            "release_seconds": 0.4,
+        },
+        rationale="Keep speech intelligible over the declared music bed.",
+        expected_effect="Apply a bounded deterministic gain envelope.",
+    )
+    plan = DirectorPlan(
+        plan_id="plan_ducking_review", plan_version=1,
+        objective="Review structural audio ducking.",
+        operations=(operation,), created_at=NOW,
+    )
+    proposed = ProposedEditingExecutionPlan.from_director_plan(
+        proposal_execution_id="proposal_ducking_review",
+        project_id=snapshot.project_id, director_plan=plan,
+    )
+    registry = build_production_registry()
+    request = PlanDiffRequest(
+        request_id="request_ducking_review",
+        snapshot_ref=TimelineSnapshotReference.from_snapshot(snapshot),
+        director_plan=plan,
+        proposed_execution=proposed,
+        registry_ref=RegistrySchemaReference.from_registry(registry),
+    )
+    before = timeline.model_dump_json()
+    first = PlanDiffEngine.generate(request, snapshot, registry)
+    second = PlanDiffEngine.generate(request, snapshot, registry)
+    assert first.digest() == second.digest()
+    assert first.review_status == "warning"
+    assert any(change.category == "audio_ducking" for change in first.changes)
+    assert timeline.model_dump_json() == before
+
+
+def test_manual_ducking_draft_does_not_write_before_exact_confirmation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / ".workspace" / "current_timeline.json"
+    project.parent.mkdir()
+    project.write_text(_ducking_timeline().model_dump_json(indent=2), encoding="utf-8")
+    monkeypatch.setattr(timeline_manager, "PROJECT_FILE", str(project))
+    monkeypatch.setattr(timeline_manager, "WORKSPACE_DIR", str(project.parent))
+    snapshot = TimelineSnapshotService.snapshot_current()
+    proposal = ManualEditProposal(
+        proposal_id="manual_ducking_proposal", authored_by="local_user",
+        base_project_id=snapshot.project_id, base_revision=snapshot.revision,
+        base_timeline_digest=snapshot.timeline_digest, created_at=NOW,
+        edits=(ManualAudioDucking(
+            operation_id="manual_ducking", action="apply",
+            ducking_id="duck_manual", key_track_ids=("audio_voice",),
+            target_track_ids=("audio_music",), reduction_db=-9,
+            attack_seconds=0.2, release_seconds=0.4,
+        ),),
+    )
+    application = ManualEditApplicationService(
+        TimelineSnapshotService.snapshot_current, build_production_registry()
+    )
+    before = project.read_bytes()
+    _, review = application.review(proposal.model_dump(mode="json"))
+    assert review.changes and project.read_bytes() == before
+    confirmation = ManualEditConfirmationRecord.for_proposal(
+        confirmation_id="manual_ducking_confirmed", proposal=proposal,
+        confirmed_by="local_user", recorded_at=NOW,
+    )
+    application.apply(proposal, confirmation)
+    saved = TimelineConfig.model_validate_json(project.read_text(encoding="utf-8"))
+    assert saved.tracks["music"].clips[0].audio.ducking.ducking_id == "duck_manual"
 
 
 def test_manual_audio_draft_requires_exact_confirmation_and_persists(
@@ -606,6 +820,13 @@ def test_loudness_http_route_is_read_only_and_path_redacted(
         manual_edits_enabled=True,
     )
     with _preview_server(application) as base_url:
+        with urllib.request.urlopen(base_url, timeout=10) as response:
+            html = response.read().decode("utf-8")
+        with urllib.request.urlopen(f"{base_url}/app.js", timeout=10) as response:
+            script = response.read().decode("utf-8")
+        assert "audio-ducking-id" in html
+        assert "stageDuckingAction" in script
+        assert str(tmp_path) not in html + script
         body = json.dumps(
             {
                 "track_id": "audio_dialogue",

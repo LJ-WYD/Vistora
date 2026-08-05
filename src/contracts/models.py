@@ -503,6 +503,10 @@ class ManualClipAudio(ContractModel):
     fade_in_seconds: float | None = Field(default=None, ge=0)
     fade_out_seconds: float | None = Field(default=None, ge=0)
     playback_rate: float | None = Field(default=None, gt=0, le=16)
+    content_role: Literal[
+        "unspecified", "dialogue", "voiceover", "background_music",
+        "sound_effect", "ambience",
+    ] | None = None
     normalization_evidence: AppliedLoudnessNormalization | None = None
 
     @model_validator(mode="after")
@@ -516,10 +520,41 @@ class ManualClipAudio(ContractModel):
                 self.fade_in_seconds,
                 self.fade_out_seconds,
                 self.playback_rate,
+                self.content_role,
                 self.normalization_evidence,
             )
         ):
             raise ValueError("Manual clip audio edit requires a property")
+        return self
+
+
+class ManualAudioDucking(ContractModel):
+    """User-authored structural ducking request over explicit audio tracks."""
+
+    operation_id: StableId
+    kind: Literal["audio_ducking"] = "audio_ducking"
+    action: Literal["apply", "remove"]
+    ducking_id: StableId
+    key_track_ids: tuple[StableId, ...] = ()
+    target_track_ids: tuple[StableId, ...] = Field(min_length=1)
+    reduction_db: float = Field(default=-12, ge=-36, le=-1)
+    attack_seconds: float = Field(default=0.15, gt=0, le=2)
+    release_seconds: float = Field(default=0.35, gt=0, le=5)
+
+    @model_validator(mode="after")
+    def exact_tracks(self) -> "ManualAudioDucking":
+        for label, values in (
+            ("key", self.key_track_ids),
+            ("target", self.target_track_ids),
+        ):
+            if values != tuple(sorted(set(values))):
+                raise ValueError(f"Ducking {label} tracks must be stable and unique")
+        if self.action == "apply" and not self.key_track_ids:
+            raise ValueError("Ducking apply requires at least one key track")
+        if self.action == "remove" and self.key_track_ids:
+            raise ValueError("Ducking removal does not accept key tracks")
+        if set(self.key_track_ids) & set(self.target_track_ids):
+            raise ValueError("Ducking key and target tracks must be disjoint")
         return self
 
 
@@ -873,6 +908,7 @@ ManualEditOperation = Annotated[
     | ManualClipLink
     | ManualTrackManage
     | ManualClipAudio
+    | ManualAudioDucking
     | ManualClipVisual
     | ManualCopyClipVisual
     | ManualTrackMix

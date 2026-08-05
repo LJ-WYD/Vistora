@@ -396,6 +396,16 @@ post-speed timeline seconds. The existing `speed_factor` remains the shared
 video/embedded-audio rate; independent audio rate is accepted only for an
 audio-track clip.
 
+Audio clips also carry an explicit semantic role: `dialogue`, `voiceover`,
+`background_music`, `sound_effect`, `ambience`, or the legacy-safe
+`unspecified`. `AudioApplyDuckingSkill` uses only exact confirmed speech-key
+and target track IDs. It deterministically bakes attack/reduction/release
+points over declared dialogue/voice-over timeline occupancy, records the key
+timeline digest, and can remove only its own generated points. It never
+guesses from signal energy and never overwrites a manual or different
+envelope. Loudness remains a separate read-only analysis followed by explicit
+confirmed gain application.
+
 Final multitrack export converts active sources to stereo, applies legacy and
 dB gain, mute, equal-power pan, fades and linear envelope automation, then
 mixes without hidden normalization. A deterministic `0.95` peak limiter and
@@ -410,7 +420,7 @@ track/cue/style contracts use stable IDs, millisecond timing, deterministic
 order, explicit overlap policy, language/speaker metadata, enabled/locked
 state, and a controlled logical-font style. Subtitle cues are never modeled
 as video clips. Legacy projects with no subtitle field load and render as
-before; the read-only snapshot is version `9.0.0` and includes detached subtitle
+before; the read-only snapshot is version `10.0.0` and includes detached subtitle
 track/cue counts, cue kind, and optional word-level timing state.
 
 `SubtitleManageTrackSkill`, `SubtitleEditCueSkill`,
@@ -475,7 +485,7 @@ processing, not a color-managed HDR, LUT, or secondary-grade pipeline.
 video clip IDs, reject locked/non-video targets, copy only to explicitly named
 clips, never spread through linked audio, and use the shared atomic timeline
 transaction. Detached review, confirmation/workflow, Editing Agent, trace,
-rollback, snapshot v9, Director context, and the manual draft UI carry the
+rollback, snapshot v10, Director context, and the manual draft UI carry the
 same visual state and digest. Browser video/CSS preview is labeled an
 approximation; final FFmpeg export is authoritative. Thumbnail analysis can
 request original or applied mode, and its cache key binds the complete visual
@@ -592,7 +602,7 @@ never propagate through linked audio, and use the shared atomic project-state
 transaction. Split and trim rebase mask curves deterministically, copy issues
 new mask/curve/keyframe IDs, and remove emits truthful mask tombstones.
 Detached plan/manual review, explicit confirmation, gateway execution,
-snapshot v9, provenance, and rollback share the same state.
+snapshot v10, provenance, and rollback share the same state.
 
 Final FFmpeg export generates its alpha expression only from validated mask
 fields and composites masked clips in deterministic track order. The browser

@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict
 
 from audio_analysis import LoudnessAnalysisResult
 from skills.audio_timeline_edits import (
+    AudioApplyDuckingSkill,
     AudioAnalyzeLoudnessSkill,
     AudioSetClipPropertiesSkill,
     AudioSetTrackMixSkill,
@@ -291,7 +292,7 @@ def build_production_registry(
     )
     return AtomicSkillRegistry(
         registry_id="registry_atomic_skills",
-        registry_revision=11,
+        registry_revision=12,
         entries=(
             _entry(
                 VideoAddClipSkill(),
@@ -405,6 +406,7 @@ def build_production_registry(
                     required_capabilities=(),
                 )
                 for skill in (
+                    AudioApplyDuckingSkill(),
                     AudioSetClipPropertiesSkill(),
                     AudioSetTrackMixSkill(),
                     AudioSetVolumeEnvelopeSkill(),

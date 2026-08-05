@@ -177,6 +177,7 @@ It constructs a fresh immutable `AtomicSkillRegistry` containing:
 - `TimelineManageTrackSkill`
 - `TimelineSetClipLinkSkill`
 - `AudioAnalyzeLoudnessSkill`
+- `AudioApplyDuckingSkill`
 - `AudioSetClipPropertiesSkill`
 - `AudioSetTrackMixSkill`
 - `AudioSetVolumeEnvelopeSkill`
@@ -472,12 +473,12 @@ separate first-class subtitle domain:
 
 `src/timeline_query/` is the stable library boundary for future timeline/player visualization. `TimelineSnapshotService.snapshot` accepts a `TimelineConfig`, legacy timeline dictionary, or `TimelineProjectDocument`; `snapshot_current` delegates only to `TimelineManager.get_current_timeline`. Neither method saves, resets, renders, executes a skill, probes media, or writes files.
 
-The returned `vistora.timeline-snapshot` schema is version `9.0.0`. Its frozen, recursively detached read models expose:
+The returned `vistora.timeline-snapshot` schema is version `10.0.0`. Its frozen, recursively detached read models expose:
 
 - snapshot, project, revision, source-schema, migration, and timeline-digest identity;
 - output width, height, and frame rate;
 - every configured track with its mapping key, stable ID, video/audio kind, role, unique order, enabled/muted/locked state, gain/mix mute/pan, clips, count, and derived duration;
-- every clip with its configured ID, explicit video/image/sticker kind, optional explicit link-group ID, source reference, trim, placement, speed-adjusted duration, legacy audio flags/volume, dB gain, mute, pan, fades, stable linear envelope, applied loudness evidence ID, reversal/legacy rotation, frozen transform/color state, frozen visual automation/keyframes, bounded masks/mask keyframes/compositing state, and deterministic visual/automation/mask digests;
+- every clip with its configured ID, explicit video/image/sticker kind, optional explicit link-group ID, source reference, trim, placement, speed-adjusted duration, legacy audio flags/volume, explicit audio content role, dB gain, mute, pan, fades, stable linear envelope, applied loudness/ducking evidence, reversal/legacy rotation, frozen transform/color state, frozen visual automation/keyframes, bounded masks/mask keyframes/compositing state, and deterministic visual/automation/mask digests;
 - every subtitle/text track and subtitle/title cue with stable IDs, language/speaker metadata, timing, optional stable word ranges/confidence, enable/lock/overlap state, safe style data, counts, and derived duration;
 - every transition with stable exact-cut identities, media/kind, bounded duration/alignment, controlled parameters, enabled state and reciprocal audio policy, without any source path;
 - a detached `vistora.clip-provenance-summary` for each clip, reporting recorded origin, latest change origin, mapping health, confirmed plan/operation/step/request/result identity, execution status, and browser-safe evidence locators;
@@ -636,6 +637,7 @@ The implemented mutation ownership is:
 | `TimelineManageTrackSkill` | Adds/updates/removes an empty video/audio track or changes deterministic track order; locked tracks reject clip mutation. | None. |
 | `TimelineSetClipLinkSkill` | Links/unlinks explicit exact clip references with a stable group ID; never infers membership. | None. |
 | `AudioAnalyzeLoudnessSkill` | None; returns cached, versioned integrated-LUFS/true-peak evidence bound to exact clip state and source hash. | Read-only decode only. |
+| `AudioApplyDuckingSkill` | Atomically applies or removes a named structural speech-over-bed envelope over explicit target tracks, bound to exact declared speech-key track occupancy. | None; it does not analyze signal content or overwrite unrelated envelopes. |
 | `AudioSetClipPropertiesSkill` | Atomically sets bounded clip gain/mute/pan/fades or audio-track playback rate; analyzed gain requires exact evidence. | None. |
 | `AudioSetTrackMixSkill` | Atomically sets bounded gain/mute/pan on one exact unlocked audio track. | None. |
 | `AudioSetVolumeEnvelopeSkill` | Atomically upserts/deletes/clears stable linear clip gain-envelope points. | None. |
@@ -874,8 +876,9 @@ automatic A/V linking, linked multi-source ingest, ASR/translation, color,
 keyframes, tracking, AI providers, or effects. Later transition support did
 not change these multi-track migration guarantees.
 
-The audio-editing extension added four registry entries: a read-only cached
-loudness analyzer plus transactional clip-audio, track-mix, and linear-envelope
+The audio-editing extension provides five registry entries: a read-only cached
+loudness analyzer plus transactional clip-audio, track-mix, linear-envelope,
+and structural ducking
 skills. Clip and track audio contracts are frozen/versioned and optional, so
 legacy `volume`, `keep_audio`, and timeline JSON retain their meaning.
 Analysis and gain application are separate: application requires the exact
@@ -883,6 +886,14 @@ clip-state digest and source hash measured by the analyzer. Snapshot, Director
 context, detached review, manual draft/confirmation, workflow trace, rollback
 checkpoints, and the inspector expose the state without moving mutation
 authority out of the registry/gateway boundary.
+
+Clip audio roles distinguish dialogue/voice-over, background music, sound
+effects, ambience, and unspecified legacy content. Structural ducking is a
+confirmed deterministic occupancy pass: declared speech ranges generate a
+bounded attack/reduction/release envelope on explicit music/effect/ambience
+targets. The pass stores its exact key-timeline digest and removes only its
+own points. It is intentionally not signal detection, side-chain compression,
+or a replacement for manual envelopes.
 
 The renderer applies dB gain, mute, pan, fades and linear automation before
 mixing, then uses a fixed peak limiter and 48 kHz stereo output. The extended
@@ -899,7 +910,7 @@ contract.
 The subtitle extension added four production registry entries for
 subtitle track management, exact cue editing, deterministic SRT/WebVTT
 import, and atomic sidecar export. Optional frozen subtitle tracks/cues/styles
-extend compatible timeline-v2 JSON; snapshot v9 retains and exposes detached subtitle
+extend compatible timeline-v2 JSON; snapshot v10 retains and exposes detached subtitle
 state. The detached review engine and manual proposal service simulate cue
 and track changes before confirmation, and confirmed workflow/EditingAgent
 dispatch records subtitle entity relations and tombstones through the same

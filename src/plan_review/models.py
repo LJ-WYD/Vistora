@@ -294,6 +294,15 @@ class PlanDiffRequest(ReviewModel):
         return digest_json(self.model_dump(mode="json"))
 
 
+class PreviewAudioDuckingState(ReviewModel):
+    ducking_id: StableId
+    key_track_ids: tuple[StableId, ...]
+    key_timeline_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reduction_db: FiniteFloat
+    attack_seconds: FiniteFloat
+    release_seconds: FiniteFloat
+
+
 class PreviewClipState(ReviewModel):
     clip_id: str = Field(min_length=1)
     visual_kind: Literal["video", "image", "sticker"] = "video"
@@ -316,12 +325,17 @@ class PreviewClipState(ReviewModel):
     rotate_degrees: int
     link_group_id: StableId | None = None
     audio_gain_db: FiniteFloat = 0
+    audio_content_role: Literal[
+        "unspecified", "dialogue", "voiceover", "background_music",
+        "sound_effect", "ambience",
+    ] = "unspecified"
     audio_muted: bool = False
     audio_pan: FiniteFloat = 0
     audio_fade_in_seconds: FiniteFloat = 0
     audio_fade_out_seconds: FiniteFloat = 0
     audio_envelope: tuple[tuple[str, FiniteFloat, FiniteFloat], ...] = ()
     loudness_analysis_id: StableId | None = None
+    audio_ducking: PreviewAudioDuckingState | None = None
     transform: ClipTransformSnapshot = Field(default_factory=ClipTransformSnapshot)
     color: ClipColorSnapshot = Field(default_factory=ClipColorSnapshot)
     visual_automations: tuple[dict[str, Any], ...] = ()
@@ -426,6 +440,7 @@ class PlanChange(ReviewModel):
         "clip_linkage",
         "clip_audio",
         "audio_envelope",
+        "audio_ducking",
         "track_mix",
         "audio_analysis",
         "track_management",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import shutil
 import struct
 import sys
 import wave
@@ -18,7 +19,6 @@ sys.path.insert(0, str(SRC))
 from atomic_runtime import build_production_registry  # noqa: E402
 from core import timeline_manager  # noqa: E402
 from core.timeline import (  # noqa: E402
-    AudioEnvelopePoint,
     ClipAudioSettings,
     ClipConfig,
     TimelineConfig,
@@ -27,6 +27,7 @@ from core.timeline import (  # noqa: E402
 )
 from timeline_preview import PreviewApplication, create_preview_server  # noqa: E402
 from timeline_query import TimelineSnapshotService  # noqa: E402
+from timeline_edit import TimelineEditEngine  # noqa: E402
 
 
 def _tone(path: Path) -> None:
@@ -47,32 +48,31 @@ def _tone(path: Path) -> None:
 
 
 def _timeline(state: str, source: Path) -> TimelineConfig:
-    clips = [] if state == "empty" else [
+    selected_source = (
+        str(source) if state == "populated" else str(source.with_name("missing.wav"))
+    )
+    dialogue_clips = [] if state == "empty" else [
         ClipConfig(
-            id="clip_audio_visual",
-            source=(str(source) if state == "populated" else str(source.with_name("missing.wav"))),
-            trim_out=2,
+            id="clip_dialogue_visual",
+            source=selected_source,
+            trim_out=1,
+            timeline_start=0.5,
             audio=ClipAudioSettings(
+                content_role="dialogue",
                 gain_db=-3,
                 pan=0.2,
                 fade_in_seconds=0.15,
                 fade_out_seconds=0.2,
-                envelope=(
-                    AudioEnvelopePoint(
-                        point_id="envelope_visual_start",
-                        offset_seconds=0,
-                        gain_db=-12,
-                    ),
-                    AudioEnvelopePoint(
-                        point_id="envelope_visual_end",
-                        offset_seconds=2,
-                        gain_db=0,
-                    ),
-                ),
             ),
         )
     ]
-    return TimelineConfig(
+    music_clips = [] if state == "empty" else [
+        ClipConfig(
+            id="clip_music_visual", source=selected_source, trim_out=2,
+            audio=ClipAudioSettings(content_role="background_music"),
+        )
+    ]
+    timeline = TimelineConfig(
         width=640,
         height=360,
         fps=24,
@@ -84,16 +84,26 @@ def _timeline(state: str, source: Path) -> TimelineConfig:
                 role="dialogue",
                 order=1,
                 mix=TrackMixSettings(gain_db=-2, pan=-0.1),
-                clips=clips,
+                clips=dialogue_clips,
             ),
             "music": TrackConfig(
                 id="audio_music",
                 kind="audio",
                 role="music",
                 order=2,
+                clips=music_clips,
             ),
         },
     )
+    if state == "empty":
+        return timeline
+    updated, _ = TimelineEditEngine(timeline).apply_audio_ducking(
+        action="apply", ducking_id="duck_fixture",
+        key_track_ids=("audio_dialogue",),
+        target_track_ids=("audio_music",), reduction_db=-10,
+        attack_seconds=0.15, release_seconds=0.35,
+    )
+    return updated
 
 
 def main() -> None:
@@ -104,6 +114,8 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8775)
     args = parser.parse_args()
     root = ROOT / "tests" / "test_data" / f"audio_visual_{args.state}"
+    if root.exists():
+        shutil.rmtree(root)
     root.mkdir(parents=True, exist_ok=True)
     source = root / "tone.wav"
     _tone(source)

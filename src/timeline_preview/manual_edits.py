@@ -21,6 +21,7 @@ from contracts import (
     ManualClipSplit,
     ManualClipUpdate,
     ManualClipAudio,
+    ManualAudioDucking,
     ManualClipVisual,
     ManualCopyClipVisual,
     ManualEditChange,
@@ -39,6 +40,7 @@ from contracts import (
     PlanReference,
 )
 from core.timeline import (
+    AppliedAudioDucking,
     AudioEnvelopePoint,
     ClipAudioSettings,
     ClipColorAdjustment,
@@ -100,12 +102,17 @@ def _clip_state(clip: Any, order_index: int) -> dict[str, Any]:
         "source_id": clip.source.source_id,
         "source_name": clip.source.display_name,
         "audio_gain_db": clip.audio_gain_db,
+        "audio_content_role": clip.audio_content_role,
         "audio_muted": clip.audio_muted,
         "audio_pan": clip.audio_pan,
         "audio_fade_in_seconds": clip.audio_fade_in_seconds,
         "audio_fade_out_seconds": clip.audio_fade_out_seconds,
         "audio_envelope": clip.audio_envelope,
         "loudness_analysis_id": clip.loudness_analysis_id,
+        "audio_ducking": (
+            clip.audio_ducking.model_dump(mode="json")
+            if clip.audio_ducking is not None else None
+        ),
         "transform": clip.transform.model_dump(mode="json"),
         "color": clip.color.model_dump(mode="json"),
         "visual_digest": clip.visual_digest,
@@ -388,6 +395,7 @@ def _timeline_from_snapshot(snapshot: TimelineSnapshot) -> TimelineConfig:
                         link_group_id=clip.link_group_id,
                         audio=ClipAudioSettings(
                             gain_db=clip.audio_gain_db,
+                            content_role=clip.audio_content_role,
                             muted=clip.audio_muted,
                             pan=clip.audio_pan,
                             fade_in_seconds=clip.audio_fade_in_seconds,
@@ -399,6 +407,15 @@ def _timeline_from_snapshot(snapshot: TimelineSnapshot) -> TimelineConfig:
                                     gain_db=point[2],
                                 )
                                 for point in clip.audio_envelope
+                            ),
+                            ducking=(
+                                AppliedAudioDucking.model_validate(
+                                    clip.audio_ducking.model_dump(
+                                        mode="python",
+                                        exclude={"schema_name", "schema_version"},
+                                    )
+                                )
+                                if clip.audio_ducking is not None else None
                             ),
                         ),
                         transform=ClipTransform.model_validate(
@@ -873,6 +890,33 @@ def review_manual_edit_proposal(
                     )
                 )
                 continue
+            if isinstance(edit, ManualAudioDucking):
+                updated, outcome = engine.apply_audio_ducking(
+                    action=edit.action,
+                    ducking_id=edit.ducking_id,
+                    key_track_ids=edit.key_track_ids,
+                    target_track_ids=edit.target_track_ids,
+                    reduction_db=edit.reduction_db,
+                    attack_seconds=edit.attack_seconds,
+                    release_seconds=edit.release_seconds,
+                )
+                after = _state_map(updated)
+                for key in sorted(before.keys() | after.keys()):
+                    old, new = before.get(key), after.get(key)
+                    if old == new:
+                        continue
+                    changes.append(ManualEditChange(
+                        operation_id=edit.operation_id,
+                        target_kind="clip",
+                        track_key=key[0],
+                        track_id=(new or old)[0],
+                        clip_id=key[1],
+                        action="update",
+                        effect_kind="direct",
+                        before=old[1],
+                        after=new[1],
+                    ))
+                continue
             if isinstance(edit, ManualTrackManage):
                 key, track = engine._resolve_track(
                     edit.track_id,
@@ -974,6 +1018,7 @@ def review_manual_edit_proposal(
                     fade_in_seconds=edit.fade_in_seconds,
                     fade_out_seconds=edit.fade_out_seconds,
                     playback_rate=edit.playback_rate,
+                    content_role=edit.content_role,
                     normalization=edit.normalization_evidence,
                 )
                 outcomes.append(outcome)
