@@ -4,7 +4,7 @@
   "roadmap_id": "vistora-original-optimization-o1-o32",
   "roadmap_digest": "sha256:143850f88a50bf6b43137723cff42c4f1f9132b2a12cceda369c659db5c5d618",
   "definitions_source": "ROADMAP.md",
-  "updated_at": "2026-08-05T10:12:54Z",
+  "updated_at": "2026-08-05T10:26:49Z",
   "change_requests": [
     {
       "change_request_id": "change_request_initial_authoritative_import_20260805",
@@ -299,12 +299,12 @@
     {
       "id": "O28",
       "original_summary": "接入高价值 AI 包装能力",
-      "status": "in_progress",
-      "commits": [],
-      "remote_verified": false,
-      "implementation_paths": [],
-      "validation_evidence": [],
-      "remaining_scope": ["背景替换", "对象移除", "局部重绘", "风格化", "补帧", "生成式转场", "生成式 B-roll", "AI 配音", "AI 音乐", "AI 音效", "provider-neutral fake/manual 验证闭环"]
+      "status": "complete",
+      "commits": ["22dfe4f79b71d1468cc6a3991d3a559cc18b8e57"],
+      "remote_verified": true,
+      "implementation_paths": ["src/effect_workflow/capabilities.py", "src/effect_workflow/execution.py", "src/product_entry", "src/timeline_preview/static/app.js", "README.md", "ARCHITECTURE.md"],
+      "validation_evidence": ["tests/test_effect_capabilities.py", "tests/test_effect_workflow.py", "tests/test_product_entry.py", "tests/test_timeline_preview.py", "tests/test_reference_workflow.py", "tests/run_validation.py", "tests/product_visual_fixture.py", "scripts/validate_roadmap.py"],
+      "remaining_scope": []
     },
     {
       "id": "O29",
