@@ -108,9 +108,7 @@ def _material_facts(
         facts.append(
             DirectorMaterialFact(
                 material_id=entry.material_id,
-                media_kind=(
-                    "audio" if entry.media_kind == "audio" else "video"
-                ),
+                media_kind=entry.media_kind,
                 display_name=entry.display_name,
                 source_reference=entry.source_uri,
                 duration_seconds=entry.duration_seconds,

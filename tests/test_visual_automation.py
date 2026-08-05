@@ -165,7 +165,7 @@ def test_snapshot_is_detached_versioned_and_digest_bound() -> None:
     first = TimelineSnapshotService.snapshot(timeline)
     second = TimelineSnapshotService.snapshot(timeline)
     clip = first.tracks[0].clips[0]
-    assert first == second and first.schema_version == "8.0.0"
+    assert first == second and first.schema_version == "9.0.0"
     assert clip.visual_automations[0].property_path == "transform.position_x"
     assert clip.automation_digest == automation_digest(
         timeline.tracks["video"].clips[0].visual_automations

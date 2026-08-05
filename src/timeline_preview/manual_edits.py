@@ -59,6 +59,7 @@ from core.timeline import (
     SubtitleCue,
     SubtitleStyle,
     SubtitleTrackConfig,
+    SubtitleWord,
 )
 from subtitles import SubtitleEditCueInput, SubtitleEditEngine, SubtitleEditError, SubtitleManageTrackInput
 from timeline_edit import TimelineEditEngine, TimelineEditError
@@ -366,6 +367,7 @@ def _timeline_from_snapshot(snapshot: TimelineSnapshot) -> TimelineConfig:
                     ClipConfig(
                         id=clip.clip_id,
                         source=clip.source.value,
+                        visual_kind=clip.visual_kind,
                         trim_in=clip.trim_in_seconds,
                         trim_out=clip.trim_out_seconds,
                         timeline_start=clip.timeline_start_seconds,
@@ -493,6 +495,7 @@ def _timeline_from_snapshot(snapshot: TimelineSnapshot) -> TimelineConfig:
             cues=tuple(
                 SubtitleCue(
                     cue_id=cue.cue_id,
+                    cue_kind=cue.cue_kind,
                     start_seconds=cue.start_seconds,
                     end_seconds=cue.end_seconds,
                     text=cue.text,
@@ -501,6 +504,16 @@ def _timeline_from_snapshot(snapshot: TimelineSnapshot) -> TimelineConfig:
                     enabled=cue.enabled,
                     settings=cue.settings,
                     style=(SubtitleStyle.model_validate(cue.style.model_dump(mode="python", exclude={"schema_name"})) if cue.style is not None else None),
+                    words=tuple(
+                        SubtitleWord(
+                            word_id=word.word_id,
+                            start_seconds=word.start_seconds,
+                            end_seconds=word.end_seconds,
+                            text=word.text,
+                            confidence=word.confidence,
+                        )
+                        for word in cue.words
+                    ),
                 )
                 for cue in track.cues
             ),

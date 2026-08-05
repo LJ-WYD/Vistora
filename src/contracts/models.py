@@ -22,6 +22,7 @@ from core.timeline import (
     ClipTransform,
     SubtitleCue,
     SubtitleStyle,
+    SubtitleWord,
     TimelineConfig,
     TimelineTransition,
     VisualAutomation,
@@ -650,7 +651,7 @@ class ManualSubtitleCue(ContractModel):
     kind: Literal["subtitle_cue"] = "subtitle_cue"
     action: Literal[
         "add", "batch_add", "update", "split", "merge", "move", "trim",
-        "ripple_shift", "delete", "set_style",
+        "ripple_shift", "delete", "set_style", "set_words",
     ]
     track_id: StableId
     cue_id: StableId | None = None
@@ -669,6 +670,8 @@ class ManualSubtitleCue(ContractModel):
     anchor_seconds: float | None = Field(default=None, ge=0)
     delta_seconds: float | None = None
     style: SubtitleStyle | None = None
+    cue_kind: Literal["subtitle", "title"] | None = None
+    words: tuple[SubtitleWord, ...] | None = None
 
     @model_validator(mode="after")
     def action_fields(self) -> "ManualSubtitleCue":
@@ -676,7 +679,7 @@ class ManualSubtitleCue(ContractModel):
             raise ValueError("Manual subtitle add requires one cue")
         if self.action == "batch_add" and not self.cues:
             raise ValueError("Manual subtitle batch add requires cues")
-        if self.action in {"update", "split", "move", "trim", "delete", "set_style"} and self.cue_id is None:
+        if self.action in {"update", "split", "move", "trim", "delete", "set_style", "set_words"} and self.cue_id is None:
             raise ValueError(f"Manual subtitle {self.action} requires cue_id")
         if self.action == "split" and (self.split_at_seconds is None or self.right_cue_id is None):
             raise ValueError("Manual subtitle split requires point and output ID")
@@ -690,6 +693,8 @@ class ManualSubtitleCue(ContractModel):
             raise ValueError("Manual subtitle ripple requires anchor and delta")
         if self.action == "set_style" and self.style is None:
             raise ValueError("Manual subtitle style edit requires style")
+        if self.action == "set_words" and self.words is None:
+            raise ValueError("Manual subtitle word edit requires an explicit word tuple")
         return self
 
 

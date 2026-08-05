@@ -4,7 +4,7 @@
   "roadmap_id": "vistora-original-optimization-o1-o32",
   "roadmap_digest": "sha256:143850f88a50bf6b43137723cff42c4f1f9132b2a12cceda369c659db5c5d618",
   "definitions_source": "ROADMAP.md",
-  "updated_at": "2026-08-05T06:45:54Z",
+  "updated_at": "2026-08-05T06:49:00Z",
   "change_requests": [
     {
       "change_request_id": "change_request_initial_authoritative_import_20260805",
@@ -149,7 +149,7 @@
     {
       "id": "O13",
       "original_summary": "补齐字幕、文字、标题、图片与贴纸能力",
-      "status": "partial",
+      "status": "in_progress",
       "commits": ["a16d06049c45784a005e1681bac6f9773692f7f9"],
       "remote_verified": true,
       "implementation_paths": ["src/subtitles", "src/skills/subtitle_timeline_edits.py"],

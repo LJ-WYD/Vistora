@@ -40,7 +40,12 @@ from product_entry import (
 )
 from timeline_query import TimelineSnapshot, TimelineSnapshotService
 from traceability.store import TraceabilityStore
-from core.timeline import SubtitleCue, SubtitleStyle, SubtitleTrackConfig
+from core.timeline import (
+    SubtitleCue,
+    SubtitleStyle,
+    SubtitleTrackConfig,
+    SubtitleWord,
+)
 from subtitles import SubtitleCodecError, export_subtitles, parse_subtitles
 from workflow import (
     WorkflowApplicationError,
@@ -76,6 +81,10 @@ MEDIA_TYPES = {
     ".mp4": "video/mp4",
     ".ogv": "video/ogg",
     ".webm": "video/webm",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
 }
 SOURCE_ID_PATTERN = re.compile(r"^source_[0-9a-f]{16}$")
 LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
@@ -354,6 +363,7 @@ class PreviewApplication:
             cues = tuple(
                 SubtitleCue(
                     cue_id=cue.cue_id,
+                    cue_kind=cue.cue_kind,
                     start_seconds=cue.start_seconds,
                     end_seconds=cue.end_seconds,
                     text=cue.text,
@@ -368,6 +378,16 @@ class PreviewApplication:
                             mode="python",
                             exclude={"schema_name", "schema_version"},
                         ))
+                    ),
+                    words=tuple(
+                        SubtitleWord(
+                            word_id=word.word_id,
+                            start_seconds=word.start_seconds,
+                            end_seconds=word.end_seconds,
+                            text=word.text,
+                            confidence=word.confidence,
+                        )
+                        for word in cue.words
                     ),
                 )
                 for cue in track.cues

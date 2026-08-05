@@ -251,7 +251,7 @@ def test_snapshot_v6_is_stable_detached_and_path_safe() -> None:
     first = TimelineSnapshotService.snapshot(timeline)
     second = TimelineSnapshotService.snapshot(timeline)
     assert first == second
-    assert first.schema_version == "8.0.0"
+    assert first.schema_version == "9.0.0"
     assert first.transition_count == 1
     transition = first.transitions[0]
     assert transition.transition_id == "transition_video"

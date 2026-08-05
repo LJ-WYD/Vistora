@@ -32,6 +32,7 @@ from .models import (
     SubtitleCueSnapshot,
     SubtitleStyleSnapshot,
     SubtitleTrackSnapshot,
+    SubtitleWordSnapshot,
 )
 
 if TYPE_CHECKING:
@@ -134,6 +135,7 @@ def _clip_snapshot(clip: ClipConfig, order_index: int) -> ClipSnapshot:
     )
     return ClipSnapshot(
         clip_id=clip_id,
+        visual_kind=clip.visual_kind,
         order_index=order_index,
         source=MediaSourceReference(
             source_id=f"source_{source_digest[:16]}",
@@ -355,6 +357,7 @@ class TimelineSnapshotService:
                     cues=tuple(
                         SubtitleCueSnapshot(
                             cue_id=cue.cue_id,
+                            cue_kind=cue.cue_kind,
                             order_index=cue_index,
                             start_seconds=cue.start_seconds,
                             end_seconds=cue.end_seconds,
@@ -374,6 +377,17 @@ class TimelineSnapshotService:
                                 if cue.style is not None
                                 else None
                             ),
+                            words=tuple(
+                                SubtitleWordSnapshot(
+                                    word_id=word.word_id,
+                                    start_seconds=word.start_seconds,
+                                    end_seconds=word.end_seconds,
+                                    text=word.text,
+                                    confidence=word.confidence,
+                                )
+                                for word in cue.words
+                            ),
+                            word_count=len(cue.words),
                         )
                         for cue_index, cue in enumerate(track.cues)
                     ),

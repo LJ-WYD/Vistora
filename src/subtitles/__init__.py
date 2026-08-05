@@ -1,6 +1,6 @@
 """Versioned subtitle models, codecs, editing, and rendering."""
 
-from core.timeline import SubtitleCue, SubtitleStyle, SubtitleTrackConfig
+from core.timeline import SubtitleCue, SubtitleStyle, SubtitleTrackConfig, SubtitleWord
 
 from .codec import SubtitleCodecError, export_subtitles, load_subtitles, parse_subtitles
 from .engine import SubtitleEditEngine, SubtitleEditError
@@ -19,6 +19,6 @@ __all__ = [
     "SubtitleCodecError", "SubtitleEditCueInput", "SubtitleEditEngine", "SubtitleEditError",
     "SubtitleEditOutcome", "SubtitleEditTransaction", "SubtitleExportInput", "SubtitleImportInput",
     "SubtitleManageTrackInput", "SubtitleRenderError", "SubtitleRipplePolicy", "build_ass",
-    "SubtitleCue", "SubtitleStyle", "SubtitleTrackConfig", "burn_subtitles", "export_sidecar",
+    "SubtitleCue", "SubtitleStyle", "SubtitleTrackConfig", "SubtitleWord", "burn_subtitles", "export_sidecar",
     "export_subtitles", "load_subtitles", "parse_subtitles",
 ]

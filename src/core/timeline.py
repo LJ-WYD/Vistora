@@ -129,6 +129,31 @@ class SubtitleStyle(BaseModel):
         return self
 
 
+class SubtitleWord(BaseModel):
+    """One exact, optional word-level timing item within a cue."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+    schema_name: Literal["vistora.subtitle-word"] = "vistora.subtitle-word"
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    word_id: str = Field(
+        min_length=3,
+        max_length=160,
+        pattern=r"^[A-Za-z][A-Za-z0-9._:-]*$",
+    )
+    start_seconds: float = Field(ge=0, allow_inf_nan=False)
+    end_seconds: float = Field(gt=0, allow_inf_nan=False)
+    text: str = Field(min_length=1, max_length=256)
+    confidence: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def positive_range(self) -> "SubtitleWord":
+        if self.end_seconds <= self.start_seconds + 1e-6:
+            raise ValueError("Subtitle word must have positive duration")
+        if "\x00" in self.text:
+            raise ValueError("Subtitle word contains a null character")
+        return self
+
+
 class SubtitleCue(BaseModel):
     """One immutable, precisely timed subtitle cue."""
 
@@ -140,6 +165,7 @@ class SubtitleCue(BaseModel):
         max_length=160,
         pattern=r"^[A-Za-z][A-Za-z0-9._:-]*$",
     )
+    cue_kind: Literal["subtitle", "title"] = "subtitle"
     start_seconds: float = Field(ge=0, allow_inf_nan=False)
     end_seconds: float = Field(gt=0, allow_inf_nan=False)
     text: str = Field(min_length=1, max_length=4096)
@@ -148,6 +174,7 @@ class SubtitleCue(BaseModel):
     enabled: bool = True
     settings: tuple[str, ...] = ()
     style: SubtitleStyle | None = None
+    words: tuple[SubtitleWord, ...] = ()
 
     @field_validator("text")
     @classmethod
@@ -176,6 +203,26 @@ class SubtitleCue(BaseModel):
             raise ValueError("Subtitle cue settings must use unique keys")
         if self.settings != tuple(sorted(self.settings)):
             raise ValueError("Subtitle cue settings must use stable ordering")
+        word_ids = tuple(word.word_id for word in self.words)
+        if len(word_ids) != len(set(word_ids)):
+            raise ValueError("Subtitle word IDs must be unique within a cue")
+        expected_words = tuple(
+            sorted(
+                self.words,
+                key=lambda word: (word.start_seconds, word.end_seconds, word.word_id),
+            )
+        )
+        if self.words != expected_words:
+            raise ValueError("Subtitle words must use deterministic time ordering")
+        for previous, current in zip(self.words, self.words[1:]):
+            if current.start_seconds < previous.end_seconds - 1e-6:
+                raise ValueError("Subtitle word timings cannot overlap")
+        if any(
+            word.start_seconds < self.start_seconds - 1e-6
+            or word.end_seconds > self.end_seconds + 1e-6
+            for word in self.words
+        ):
+            raise ValueError("Subtitle word timing must stay inside its cue")
         return self
 
 
@@ -205,6 +252,14 @@ class SubtitleTrackConfig(BaseModel):
         ids = [cue.cue_id for cue in self.cues]
         if len(ids) != len(set(ids)):
             raise ValueError("Subtitle cue IDs must be unique within a track")
+        word_ids = [word.word_id for cue in self.cues for word in cue.words]
+        if len(word_ids) != len(set(word_ids)):
+            raise ValueError("Subtitle word IDs must be unique within a track")
+        expected_kind = "title" if self.kind == "text" else "subtitle"
+        if any(cue.cue_kind != expected_kind for cue in self.cues):
+            raise ValueError(
+                f"{self.kind} tracks require {expected_kind} cue semantics"
+            )
         expected = tuple(
             sorted(self.cues, key=lambda cue: (cue.start_seconds, cue.end_seconds, cue.cue_id))
         )
@@ -641,6 +696,7 @@ class ClipConfig(BaseModel):
 
     id: str = Field(..., description="Stable clip ID.")
     source: str = Field(..., description="Configured source.")
+    visual_kind: Literal["video", "image", "sticker"] = "video"
     trim_in: float = 0.0
     trim_out: float
     timeline_start: float = 0.0
@@ -675,6 +731,13 @@ class ClipConfig(BaseModel):
         )
         if duration <= 0:
             return self
+        if self.visual_kind in {"image", "sticker"}:
+            if self.keep_audio or self.reverse or self.freeze_frame is not None:
+                raise ValueError(
+                    "Static image/sticker clips are silent and cannot reverse or freeze"
+                )
+            if abs(self.speed_factor - 1.0) > 1e-9:
+                raise ValueError("Static image/sticker clips require playback speed 1")
         if self.freeze_frame is not None:
             if not (
                 self.trim_in <= self.freeze_frame.source_time_seconds
@@ -848,6 +911,13 @@ class TimelineConfig(BaseModel):
         ]
         if len(clip_ids) != len(set(clip_ids)):
             raise ValueError("clip IDs must be unique across all tracks")
+        if any(
+            clip.visual_kind != "video"
+            for track in self.tracks.values()
+            if track.kind != "video"
+            for clip in track.clips
+        ):
+            raise ValueError("Image and sticker clips require a video track")
         subtitle_ids = [track.track_id for track in self.subtitle_tracks.values()]
         if len(subtitle_ids) != len(set(subtitle_ids)):
             raise ValueError("subtitle track IDs must be unique")
@@ -902,6 +972,13 @@ class TimelineConfig(BaseModel):
                 )
             if transition.media_type == "video" and track.kind != "video":
                 raise ValueError("video transition requires a video track")
+            if transition.kind != "cut" and any(
+                clip.visual_kind != "video"
+                for clip in (clips[from_indices[0]], clips[to_indices[0]])
+            ):
+                raise ValueError(
+                    "Non-cut transitions involving static graphics are unsupported"
+                )
             if transition.kind != "cut" and (
                 outgoing.freeze_frame is not None
                 or incoming.freeze_frame is not None
@@ -1021,6 +1098,7 @@ class TimelineRenderer:
                 and not clip.masks
                 and clip.composite == ClipCompositeSettings()
                 and clip.freeze_frame is None
+                and clip.visual_kind == "video"
                 for clip in video_track.clips
             )
         ):
@@ -1066,6 +1144,7 @@ class TimelineRenderer:
                 or bool(clip.masks)
                 or clip.composite != ClipCompositeSettings()
                 or clip.freeze_frame is not None
+                or clip.visual_kind != "video"
                 for track in video_tracks
                 for clip in track.clips
             )
@@ -1258,12 +1337,20 @@ class TimelineRenderer:
             ("audio", track, clip) for track, clip in audio_items
         ]
         command = ["ffmpeg", "-nostdin", "-y", "-loglevel", "error"]
-        for _, _, clip in all_items:
+        for kind, _, clip in all_items:
             if not os.path.isfile(clip.source):
                 raise FileNotFoundError(
                     f"Configured media is unavailable: {clip.source}"
                 )
-            command.extend(["-i", clip.source])
+            if kind == "video" and clip.visual_kind in {"image", "sticker"}:
+                command.extend([
+                    "-loop", "1",
+                    "-framerate", str(self.config.fps),
+                    "-t", f"{effective_clip_duration(clip):.12g}",
+                    "-i", clip.source,
+                ])
+            else:
+                command.extend(["-i", clip.source])
 
         def has_audio(path: str) -> bool:
             probe = subprocess.run(
@@ -1396,7 +1483,12 @@ class TimelineRenderer:
             if kind == "video":
                 from visuals.render import clip_visual_filter_chain
 
-                if clip.freeze_frame is not None:
+                if clip.visual_kind in {"image", "sticker"}:
+                    chain = [
+                        f"[{index}:v]trim=duration={effective_clip_duration(clip):.12g}",
+                        "setpts=PTS-STARTPTS",
+                    ]
+                elif clip.freeze_frame is not None:
                     frame_window = max(1.0 / self.config.fps, 0.001)
                     chain = [
                         f"[{index}:v]trim=start={clip.freeze_frame.source_time_seconds:.12g}:"
@@ -1429,6 +1521,7 @@ class TimelineRenderer:
                 video_labels.append((f"[video_{index}]", overlay_expression))
                 if (
                     clip.keep_audio
+                    and clip.visual_kind == "video"
                     and clip.freeze_frame is None
                     and not track.muted
                     and not clip.audio.muted

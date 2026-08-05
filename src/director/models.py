@@ -97,7 +97,7 @@ class DirectorMaterialFact(DirectorModel):
         str,
         Field(pattern=r"^source_[0-9a-f]{16}$"),
     ]
-    media_kind: Literal["video", "audio"]
+    media_kind: Literal["video", "audio", "image"]
     display_name: str = Field(min_length=1)
     source_reference: str | None = Field(
         default=None,

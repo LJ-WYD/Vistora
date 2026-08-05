@@ -32,6 +32,7 @@ from skills.video_apply_manual_edits import VideoApplyManualEditsSkill
 from skills.video_clear_timeline import VideoClearTimelineSkill
 from skills.video_export import VideoExportSkill
 from skills.video_export_variants import VideoExportVariantsSkill
+from skills.video_graphics import VideoInsertGraphicSkill
 from skills.video_modify_clip import VideoModifyClipSkill
 from skills.video_restore_timeline_checkpoint import (
     VideoRestoreTimelineCheckpointSkill,
@@ -290,7 +291,7 @@ def build_production_registry(
     )
     return AtomicSkillRegistry(
         registry_id="registry_atomic_skills",
-        registry_revision=10,
+        registry_revision=11,
         entries=(
             _entry(
                 VideoAddClipSkill(),
@@ -331,6 +332,16 @@ def build_production_registry(
                 preview_supported=True,
                 rollback_support="none",
                 required_capabilities=("media_render",),
+            ),
+            _entry(
+                VideoInsertGraphicSkill(),
+                CoreTimelineEditResult,
+                side_effects=("files", "timeline"),
+                transactionality="atomic_project_state",
+                retry_safety="gateway_replay_only",
+                preview_supported=True,
+                rollback_support="checkpoint_restore",
+                required_capabilities=("local_media_read",),
             ),
             _entry(
                 VideoTimelapseSkill(),

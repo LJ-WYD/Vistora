@@ -6,6 +6,7 @@ const ui = {
   summaryStats: document.querySelector("#summary-stats"),
   previewTitle: document.querySelector("#preview-title"),
   previewVideo: document.querySelector("#preview-video"),
+  previewImage: document.querySelector("#preview-image"),
   previewStatus: document.querySelector("#preview-status"),
   monitor: document.querySelector(".monitor"),
   subtitleOverlay: document.querySelector("#subtitle-overlay"),
@@ -158,6 +159,7 @@ const ui = {
   copyTransition: document.querySelector("#copy-transition"),
   subtitleEditor: document.querySelector("#subtitle-editor"),
   subtitleTrackSelect: document.querySelector("#subtitle-track-select"),
+  subtitleTrackKind: document.querySelector("#subtitle-track-kind"),
   subtitleTrackLanguage: document.querySelector("#subtitle-track-language"),
   subtitleTrackOrder: document.querySelector("#subtitle-track-order"),
   subtitleTrackEnabled: document.querySelector("#subtitle-track-enabled"),
@@ -170,7 +172,9 @@ const ui = {
   subtitleEnd: document.querySelector("#subtitle-end"),
   subtitleLanguage: document.querySelector("#subtitle-language"),
   subtitleSpeaker: document.querySelector("#subtitle-speaker"),
+  subtitleCueKind: document.querySelector("#subtitle-cue-kind"),
   subtitleText: document.querySelector("#subtitle-text"),
+  subtitleWords: document.querySelector("#subtitle-words"),
   subtitleSplitAt: document.querySelector("#subtitle-split-at"),
   subtitleFont: document.querySelector("#subtitle-font"),
   subtitleFontSize: document.querySelector("#subtitle-font-size"),
@@ -1387,11 +1391,13 @@ function showSubtitleEditor(track = null, cue = null) {
     ui.subtitleTrackSelect.append(option);
   }
   if (track) {
+    ui.subtitleTrackKind.value = track.kind;
     ui.subtitleTrackLanguage.value = track.language;
     ui.subtitleTrackOrder.value = String(track.order_index);
     ui.subtitleTrackEnabled.checked = track.enabled;
     ui.subtitleTrackLocked.checked = track.locked;
   } else {
+    ui.subtitleTrackKind.value = "subtitle";
     ui.subtitleTrackLanguage.value = "und";
     ui.subtitleTrackOrder.value = String(state.snapshot.subtitle_track_count || 0);
     ui.subtitleTrackEnabled.checked = true;
@@ -1404,6 +1410,18 @@ function showSubtitleEditor(track = null, cue = null) {
     cue ? (cue.start_seconds + cue.end_seconds) / 2 : state.playheadSeconds + 1,
   );
   ui.subtitleText.value = cue?.text || "";
+  ui.subtitleCueKind.value = cue?.cue_kind || (track?.kind === "text" ? "title" : "subtitle");
+  ui.subtitleWords.value = cue?.words?.length
+    ? JSON.stringify(cue.words.map((word) => ({
+        schema_name: "vistora.subtitle-word",
+        schema_version: "1.0.0",
+        word_id: word.word_id,
+        start_seconds: word.start_seconds,
+        end_seconds: word.end_seconds,
+        text: word.text,
+        confidence: word.confidence,
+      })), null, 2)
+    : "";
   ui.subtitleLanguage.value = cue?.language || track?.language || "und";
   ui.subtitleSpeaker.value = cue?.speaker || "";
   populateSubtitleStyle(cue?.style || track?.style);
@@ -1431,12 +1449,19 @@ function showSubtitleEditor(track = null, cue = null) {
 function showSubtitleDetails(track, cue) {
   ui.clipDetails.replaceChildren(
     detailRow("Cue ID", cue.cue_id),
+    detailRow("Cue kind", cue.cue_kind),
     detailRow("Track", `${track.track_id} · ${track.kind} · ${track.role}`),
     detailRow("Timeline", `${formatSeconds(cue.start_seconds)} → ${formatSeconds(cue.end_seconds)}`),
     detailRow("Duration", formatSeconds(cue.duration_seconds)),
     detailRow("Language", cue.language),
     detailRow("Speaker", cue.speaker || "Not specified"),
     detailRow("Text", cue.text),
+    detailRow(
+      "Word timing",
+      cue.word_count
+        ? `${cue.word_count} timed words · ${cue.words.map((word) => word.text).join(" ")}`
+        : "No word-level timing",
+    ),
     detailRow("State", `${cue.enabled ? "enabled" : "disabled"} · ${track.locked ? "track locked" : "editable draft"}`),
     detailRow("Style", `${cue.style?.font_family || track.style.font_family} · ${cue.style?.font_size || track.style.font_size}px · ${cue.style?.position || track.style.position}`),
     detailRow("Preview", "Browser overlay is approximate; burned export is authoritative."),
@@ -2389,7 +2414,7 @@ function showDetails(track, clip) {
     detailRow("Link group", clip.link_group_id || "Not linked"),
     detailRow(
       "Media type",
-      availability?.content_type || `${track.kind} · unavailable`,
+      `${clip.visual_kind || track.kind} · ${availability?.content_type || "unavailable"}`,
     ),
     detailRow(
       "Timeline",
@@ -2419,8 +2444,10 @@ function showDetails(track, clip) {
     ),
     detailRow(
       "Clip audio",
-      `${clip.audio_gain_db ?? 0} dB · pan ${clip.audio_pan ?? 0} · ` +
-        `${clip.audio_muted ? "muted" : "active"}`,
+      ["image", "sticker"].includes(clip.visual_kind)
+        ? "Silent static graphic"
+        : `${clip.audio_gain_db ?? 0} dB · pan ${clip.audio_pan ?? 0} · ` +
+          `${clip.audio_muted || !clip.keep_audio ? "muted" : "active"}`,
     ),
     detailRow(
       "Fades / envelope",
@@ -2466,7 +2493,12 @@ function showDetails(track, clip) {
         ? `Allowlisted · ${availability.content_type}`
         : "Unavailable or outside allowlisted roots",
     ),
-    detailRow("Visualization", analysisStatusLabel(analysis)),
+    detailRow(
+      "Visualization",
+      ["image", "sticker"].includes(clip.visual_kind)
+        ? "Allowlisted static graphic preview"
+        : analysisStatusLabel(analysis),
+    ),
     ...provenanceDetailRows(clip.provenance),
   );
 }
@@ -2499,7 +2531,9 @@ function clearPreview(message) {
   ui.previewVideo.pause();
   ui.previewVideo.removeAttribute("src");
   ui.previewVideo.load();
-  ui.monitor.classList.remove("has-media");
+  ui.previewImage.removeAttribute("src");
+  ui.previewImage.hidden = true;
+  ui.monitor.classList.remove("has-media", "has-image");
   ui.previewTitle.textContent = "Preview unavailable";
   ui.previewStatus.textContent = message;
   approximateVisualPreview(null);
@@ -2535,12 +2569,30 @@ function selectClip(track, clip, element) {
     return;
   }
 
+  if (["image", "sticker"].includes(clip.visual_kind)) {
+    ui.previewVideo.pause();
+    ui.previewVideo.removeAttribute("src");
+    ui.previewVideo.load();
+    ui.previewImage.src = availability.url;
+    ui.previewImage.hidden = false;
+    ui.monitor.classList.remove("has-media");
+    ui.monitor.classList.add("has-image");
+    approximateVisualPreview(clip);
+    ui.previewTransition.disabled = true;
+    ui.previewStatus.textContent =
+      `${clip.visual_kind === "sticker" ? "Sticker" : "Image"} preview uses the allowlisted source; ` +
+      "the timeline duration is deterministic and final export is authoritative.";
+    return;
+  }
+
   const desiredSource = new URL(availability.url, window.location.href).href;
   if (ui.previewVideo.src !== desiredSource) {
     ui.previewVideo.src = availability.url;
     ui.previewVideo.load();
   }
   ui.monitor.classList.add("has-media");
+  ui.monitor.classList.remove("has-image");
+  ui.previewImage.hidden = true;
   approximateVisualPreview(clip);
   ui.previewTransition.disabled = ui.stageTransition.disabled;
   ui.previewStatus.textContent =
@@ -2690,6 +2742,17 @@ function audioWaveform(result, clip) {
 }
 
 function clipVisualization(track, clip) {
+  if (track.kind === "video" && ["image", "sticker"].includes(clip.visual_kind)) {
+    const availability = state.media[clip.source.source_id];
+    if (!availability?.available) return analysisPlaceholder(null);
+    const image = document.createElement("img");
+    image.className = "static-graphic-thumbnail";
+    image.alt = "";
+    image.draggable = false;
+    image.loading = "lazy";
+    image.src = availability.url;
+    return image;
+  }
   const result = analysisFor(track, clip);
   if (track.kind === "video") {
     return videoThumbnailStrip(result);
@@ -2943,16 +3006,17 @@ function renderTimeline() {
       const block = document.createElement("button");
       block.type = "button";
       block.className = "clip subtitle";
+      block.classList.toggle("title", cue.cue_kind === "title");
       block.style.left = `${cue.start_seconds * state.pixelsPerSecond}px`;
       block.style.width = `${Math.max(28, cue.duration_seconds * state.pixelsPerSecond)}px`;
       block.dataset.clipId = cue.cue_id;
       block.dataset.trackKey = track.track_key;
       block.dataset.trackId = track.track_id;
       block.title = `${cue.cue_id}\n${formatSeconds(cue.start_seconds)} → ${formatSeconds(cue.end_seconds)}\n${cue.text}`;
-      block.setAttribute("aria-label", `${cue.cue_id}, subtitle cue, ${cue.text}`);
+      block.setAttribute("aria-label", `${cue.cue_id}, ${cue.cue_kind} cue, ${cue.text}`);
       block.append(
-        textElement("strong", "", cue.text),
-        textElement("span", "", `${formatSeconds(cue.start_seconds)} → ${formatSeconds(cue.end_seconds)}`),
+        textElement("strong", "", `${cue.cue_kind === "title" ? "TITLE · " : ""}${cue.text}`),
+        textElement("span", "", `${formatSeconds(cue.start_seconds)} → ${formatSeconds(cue.end_seconds)}${cue.word_count ? ` · ${cue.word_count} words` : ""}`),
       );
       if (
         state.selectedSubtitle?.track.track_id === track.track_id &&
@@ -3227,10 +3291,51 @@ function subtitleCuePayload() {
   const text = ui.subtitleText.value.trim();
   if (end <= start) throw new Error("Subtitle end must be after start.");
   if (!text) throw new Error("Subtitle text cannot be empty.");
+  let words = [];
+  const rawWords = ui.subtitleWords.value.trim();
+  if (rawWords) {
+    try {
+      words = JSON.parse(rawWords);
+    } catch {
+      throw new Error("Word timings must be valid JSON.");
+    }
+    if (!Array.isArray(words)) throw new Error("Word timings must be a JSON array.");
+    let previousEnd = start;
+    const identifiers = new Set();
+    words = words.map((word, index) => {
+      if (!word || typeof word !== "object" || Array.isArray(word)) {
+        throw new Error(`Word timing ${index + 1} must be an object.`);
+      }
+      const wordStart = Number(word.start_seconds);
+      const wordEnd = Number(word.end_seconds);
+      const wordText = String(word.text || "").trim();
+      const wordId = String(word.word_id || "").trim();
+      if (!/^[A-Za-z][A-Za-z0-9._:-]*$/.test(wordId) || identifiers.has(wordId)) {
+        throw new Error(`Word timing ${index + 1} needs a unique stable word_id.`);
+      }
+      if (!Number.isFinite(wordStart) || !Number.isFinite(wordEnd) ||
+          wordStart < start || wordEnd > end || wordEnd <= wordStart || wordStart < previousEnd) {
+        throw new Error(`Word timing ${index + 1} is outside the cue or overlaps.`);
+      }
+      if (!wordText) throw new Error(`Word timing ${index + 1} text cannot be empty.`);
+      identifiers.add(wordId);
+      previousEnd = wordEnd;
+      return {
+        schema_name: "vistora.subtitle-word",
+        schema_version: "1.0.0",
+        word_id: wordId,
+        start_seconds: wordStart,
+        end_seconds: wordEnd,
+        text: wordText,
+        confidence: word.confidence == null ? null : Number(word.confidence),
+      };
+    });
+  }
   return {
     schema_name: "vistora.subtitle-cue",
     schema_version: "1.0.0",
     cue_id: ui.subtitleCueId.value.trim(),
+    cue_kind: ui.subtitleCueKind.value,
     start_seconds: start,
     end_seconds: end,
     text,
@@ -3239,6 +3344,7 @@ function subtitleCuePayload() {
     enabled: true,
     settings: [],
     style: null,
+    words,
   };
 }
 
@@ -3253,15 +3359,16 @@ ui.subtitleTrackSelect.addEventListener("change", () => {
 });
 
 ui.subtitleCreateTrack.addEventListener("click", () => {
-  const trackId = newStableId("subtitle");
+  const trackKind = ui.subtitleTrackKind.value;
+  const trackId = newStableId(trackKind);
   stageEdit({
     schema_version: "1.0.0",
     operation_id: newStableId("manual_subtitle_track"),
     kind: "subtitle_track",
     action: "create",
     track_id: trackId,
-    track_kind: "subtitle",
-    role: "captions",
+    track_kind: trackKind,
+    role: trackKind === "text" ? "titles" : "captions",
     language: ui.subtitleTrackLanguage.value.trim() || "und",
     order: Number(ui.subtitleTrackOrder.value || 0),
     enabled: true,
@@ -3269,7 +3376,7 @@ ui.subtitleCreateTrack.addEventListener("click", () => {
     allow_overlaps: false,
     style: subtitleStyleFromUi(),
   });
-  subtitleMessage(`Subtitle track ${trackId} staged. Apply it before adding cues.`);
+  subtitleMessage(`${trackKind === "text" ? "Title" : "Subtitle"} track ${trackId} staged. Apply it before adding cues.`);
 });
 
 ui.subtitleStageTrack.addEventListener("click", () => {
@@ -3340,6 +3447,8 @@ ui.subtitleUpdateCue.addEventListener("click", () => {
       speaker: value.speaker,
       start_seconds: value.start_seconds,
       end_seconds: value.end_seconds,
+      cue_kind: value.cue_kind,
+      words: value.words,
     });
     subtitleMessage("Cue text and timing staged for review.");
   } catch (error) { subtitleMessage(error.message || String(error), true); }

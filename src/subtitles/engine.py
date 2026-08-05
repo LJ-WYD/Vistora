@@ -125,7 +125,18 @@ class SubtitleEditEngine:
                     end = candidate.end_seconds + params.delta_seconds
                     if start < -EPSILON:
                         raise SubtitleEditError("Subtitle ripple would move a cue before zero")
-                    shifted.append(candidate.model_copy(update={"start_seconds": max(0.0, start), "end_seconds": end}))
+                    word_delta = params.delta_seconds
+                    shifted.append(candidate.model_copy(update={
+                        "start_seconds": max(0.0, start),
+                        "end_seconds": end,
+                        "words": tuple(
+                            word.model_copy(update={
+                                "start_seconds": word.start_seconds + word_delta,
+                                "end_seconds": word.end_seconds + word_delta,
+                            })
+                            for word in candidate.words
+                        ),
+                    }))
                     direct.append(candidate.cue_id)
                     modified.append(candidate.cue_id)
                 else:
@@ -150,6 +161,9 @@ class SubtitleEditEngine:
                 "cue_id": merged_id,
                 "end_seconds": ordered[-1].end_seconds,
                 "text": "\n".join(cue.text for cue in ordered),
+                "words": tuple(
+                    word for cue in ordered for word in cue.words
+                ),
             })
             cues = [cue for cue in cues if cue.cue_id not in params.merge_cue_ids]
             cues.append(merged)
@@ -172,8 +186,29 @@ class SubtitleEditEngine:
                     raise SubtitleEditError("Subtitle split point must be inside the cue")
                 if params.right_cue_id in by_id:
                     raise SubtitleEditError("Subtitle split output ID already exists")
-                left = cue.model_copy(update={"end_seconds": params.split_at_seconds})
-                right = cue.model_copy(update={"cue_id": params.right_cue_id, "start_seconds": params.split_at_seconds})
+                if any(
+                    word.start_seconds < params.split_at_seconds - EPSILON
+                    and word.end_seconds > params.split_at_seconds + EPSILON
+                    for word in cue.words
+                ):
+                    raise SubtitleEditError(
+                        "Subtitle split cannot cut through a timed word"
+                    )
+                left = cue.model_copy(update={
+                    "end_seconds": params.split_at_seconds,
+                    "words": tuple(
+                        word for word in cue.words
+                        if word.end_seconds <= params.split_at_seconds + EPSILON
+                    ),
+                })
+                right = cue.model_copy(update={
+                    "cue_id": params.right_cue_id,
+                    "start_seconds": params.split_at_seconds,
+                    "words": tuple(
+                        word for word in cue.words
+                        if word.start_seconds >= params.split_at_seconds - EPSILON
+                    ),
+                })
                 cues[cues.index(cue)] = left
                 cues.append(right)
                 direct.append(params.right_cue_id)
@@ -182,12 +217,51 @@ class SubtitleEditEngine:
             elif params.action == "move":
                 assert params.timeline_start_seconds is not None
                 duration = cue.end_seconds - cue.start_seconds
-                updated = cue.model_copy(update={"start_seconds": params.timeline_start_seconds, "end_seconds": params.timeline_start_seconds + duration})
+                delta = params.timeline_start_seconds - cue.start_seconds
+                updated = cue.model_copy(update={
+                    "start_seconds": params.timeline_start_seconds,
+                    "end_seconds": params.timeline_start_seconds + duration,
+                    "words": tuple(
+                        word.model_copy(update={
+                            "start_seconds": word.start_seconds + delta,
+                            "end_seconds": word.end_seconds + delta,
+                        })
+                        for word in cue.words
+                    ),
+                })
                 cues[cues.index(cue)] = updated
                 modified.append(cue_id)
             elif params.action == "trim":
                 assert params.start_seconds is not None and params.end_seconds is not None
-                updated = cue.model_copy(update={"start_seconds": params.start_seconds, "end_seconds": params.end_seconds})
+                if any(
+                    (
+                        word.start_seconds < params.start_seconds - EPSILON
+                        < word.end_seconds
+                    )
+                    or (
+                        word.start_seconds < params.end_seconds - EPSILON
+                        < word.end_seconds
+                    )
+                    for word in cue.words
+                ):
+                    raise SubtitleEditError(
+                        "Subtitle trim cannot cut through a timed word"
+                    )
+                updated = cue.model_copy(update={
+                    "start_seconds": params.start_seconds,
+                    "end_seconds": params.end_seconds,
+                    "words": tuple(
+                        word for word in cue.words
+                        if word.start_seconds >= params.start_seconds - EPSILON
+                        and word.end_seconds <= params.end_seconds + EPSILON
+                    ),
+                })
+                cues[cues.index(cue)] = updated
+                modified.append(cue_id)
+            elif params.action == "set_words":
+                updated = cue.model_copy(update={"words": params.words or ()})
+                if updated == cue:
+                    raise SubtitleEditError("Subtitle word update changes no fields")
                 cues[cues.index(cue)] = updated
                 modified.append(cue_id)
             else:
@@ -196,6 +270,7 @@ class SubtitleEditEngine:
                     ("text", params.text), ("language", params.language), ("speaker", params.speaker),
                     ("enabled", params.enabled), ("start_seconds", params.start_seconds),
                     ("end_seconds", params.end_seconds), ("style", params.style),
+                    ("cue_kind", params.cue_kind), ("words", params.words),
                 ):
                     if value is not None:
                         updates[field] = value
@@ -241,7 +316,17 @@ class SubtitleEditEngine:
                     end = cue.end_seconds + delta_seconds
                     if start < -EPSILON:
                         raise SubtitleEditError("Subtitle ripple would move a cue before zero")
-                    cues.append(cue.model_copy(update={"start_seconds": max(0.0, start), "end_seconds": end}))
+                    cues.append(cue.model_copy(update={
+                        "start_seconds": max(0.0, start),
+                        "end_seconds": end,
+                        "words": tuple(
+                            word.model_copy(update={
+                                "start_seconds": word.start_seconds + delta_seconds,
+                                "end_seconds": word.end_seconds + delta_seconds,
+                            })
+                            for word in cue.words
+                        ),
+                    }))
                     changed.append(cue.cue_id)
                 else:
                     cues.append(cue)

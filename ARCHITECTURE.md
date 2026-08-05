@@ -458,9 +458,9 @@ Rollback is a second workflow, never an automatic failure handler. The service r
 `src/core/timeline.py` defines the compatible media timeline models plus a
 separate first-class subtitle domain:
 
-- `ClipConfig`: stable clip ID, source, trim, timeline placement, optional explicit link-group ID, legacy audio flags/volume, frozen versioned clip-audio settings, speed, declarative reverse, optional versioned video-only freeze-frame state, legacy rotation, neutral-by-default frozen visual transform/color properties, optional frozen visual-automation curves, an ordered bounded mask stack, and a bounded compositing declaration.
+- `ClipConfig`: stable clip ID, source, explicit `video|image|sticker` visual kind, trim/declared static duration, timeline placement, optional explicit link-group ID, legacy audio flags/volume, frozen versioned clip-audio settings, speed, declarative reverse, optional versioned video-only freeze-frame state, legacy rotation, neutral-by-default frozen visual transform/color properties, optional frozen visual-automation curves, an ordered bounded mask stack, and a bounded compositing declaration. Static graphics are silent speed-1 visual clips and never masquerade as timed video sources.
 - `TrackConfig`: stable track ID, video/audio kind, role, unique order, enabled/muted/locked state, frozen versioned mix settings, and an ordered list of clips.
-- `SubtitleTrackConfig` / `SubtitleCue` / `SubtitleStyle`: frozen versioned text lanes, stable timed cues, and safe logical-font styling, separate from media clips.
+- `SubtitleTrackConfig` / `SubtitleCue` / `SubtitleWord` / `SubtitleStyle`: frozen versioned subtitle/title lanes, stable timed cues, optional exact word evidence, and safe logical-font styling, separate from media clips.
 - `TimelineTransition`: a frozen version `1.0.0` exact-cut entity with stable ID, exact track/from/to clip IDs, whitelisted video/audio kind and parameters, bounded duration/alignment, enabled state, and reciprocal explicit audio pairing.
 - `TimelineConfig`: schema version `2.0.0`, output dimensions, frame rate, an arbitrary mapping of video/audio tracks, an optional mapping of subtitle/text tracks, and an optional mapping of first-class transitions.
 
@@ -472,13 +472,13 @@ separate first-class subtitle domain:
 
 `src/timeline_query/` is the stable library boundary for future timeline/player visualization. `TimelineSnapshotService.snapshot` accepts a `TimelineConfig`, legacy timeline dictionary, or `TimelineProjectDocument`; `snapshot_current` delegates only to `TimelineManager.get_current_timeline`. Neither method saves, resets, renders, executes a skill, probes media, or writes files.
 
-The returned `vistora.timeline-snapshot` schema is version `8.0.0`. Its frozen, recursively detached read models expose:
+The returned `vistora.timeline-snapshot` schema is version `9.0.0`. Its frozen, recursively detached read models expose:
 
 - snapshot, project, revision, source-schema, migration, and timeline-digest identity;
 - output width, height, and frame rate;
 - every configured track with its mapping key, stable ID, video/audio kind, role, unique order, enabled/muted/locked state, gain/mix mute/pan, clips, count, and derived duration;
-- every clip with its configured ID, optional explicit link-group ID, source reference, trim, placement, speed-adjusted duration, legacy audio flags/volume, dB gain, mute, pan, fades, stable linear envelope, applied loudness evidence ID, reversal/legacy rotation, frozen transform/color state, frozen visual automation/keyframes, bounded masks/mask keyframes/compositing state, and deterministic visual/automation/mask digests;
-- every subtitle/text track and cue with stable IDs, language/speaker metadata, timing, enable/lock/overlap state, safe style data, counts, and derived duration;
+- every clip with its configured ID, explicit video/image/sticker kind, optional explicit link-group ID, source reference, trim, placement, speed-adjusted duration, legacy audio flags/volume, dB gain, mute, pan, fades, stable linear envelope, applied loudness evidence ID, reversal/legacy rotation, frozen transform/color state, frozen visual automation/keyframes, bounded masks/mask keyframes/compositing state, and deterministic visual/automation/mask digests;
+- every subtitle/text track and subtitle/title cue with stable IDs, language/speaker metadata, timing, optional stable word ranges/confidence, enable/lock/overlap state, safe style data, counts, and derived duration;
 - every transition with stable exact-cut identities, media/kind, bounded duration/alignment, controlled parameters, enabled state and reciprocal audio policy, without any source path;
 - a detached `vistora.clip-provenance-summary` for each clip, reporting recorded origin, latest change origin, mapping health, confirmed plan/operation/step/request/result identity, execution status, and browser-safe evidence locators;
 - aggregate media/subtitle track, clip/cue/transition, video/audio counts, timeline duration, and empty state.
@@ -899,7 +899,7 @@ contract.
 The subtitle extension added four production registry entries for
 subtitle track management, exact cue editing, deterministic SRT/WebVTT
 import, and atomic sidecar export. Optional frozen subtitle tracks/cues/styles
-extend compatible timeline-v2 JSON; snapshot v8 retains and exposes detached subtitle
+extend compatible timeline-v2 JSON; snapshot v9 retains and exposes detached subtitle
 state. The detached review engine and manual proposal service simulate cue
 and track changes before confirmation, and confirmed workflow/EditingAgent
 dispatch records subtitle entity relations and tombstones through the same
@@ -1017,9 +1017,9 @@ Visual automation does not add path animation, tracking, speed-remapping curves,
 per-word subtitle animation, arbitrary Bezier/expression editing, 3D,
 particles, plugins, or AI motion effects.
 
-Original O12's multi-spec export completion raises the production registry to
-revision 10 with forty-one entries and retains snapshot schema version `8.0.0`.
-The O11 reverse/freeze completion introduced the preceding revision.
+Original O13's title/word/graphic completion raises the production registry to
+revision 11 with forty-two entries and raises the detached snapshot to version
+`9.0.0`. Original O12 introduced multi-spec export in the preceding revision.
 `FreezeFrameSettings` is a frozen version `1.0.0` contract bound to an exact
 source time inside the clip range and a positive hold duration. It is
 video-only, silent, incompatible with simultaneous reverse, split-safe, and
@@ -1054,3 +1054,26 @@ bounded declarations so they can be reviewed and stored, but export fails
 truthfully until their deterministic backend is implemented. Freeform paths,
 automatic tracking, arbitrary point animation, matte media, rotoscoping, and
 advanced blend modes remain outside this original O16 completion.
+
+### Original O13 title, word-timing, and graphic boundary
+
+`SubtitleWord` is optional evidence nested inside a cue: stable IDs, finite
+absolute timeline ranges, non-overlap, cue containment, deterministic order,
+and optional bounded confidence are enforced. A media edit never fabricates
+words. Cue move/ripple preserves their offsets, split partitions at a safe word
+boundary, trim retains contained words, and any cut through a word fails closed.
+`text` tracks accept only explicit `title` cues; `subtitle` tracks accept only
+subtitle cues. Static titles reuse the controlled style and ASS burn pipeline.
+
+`VideoInsertGraphicSkill` is the only O13 graphic mutation boundary. It accepts
+an exact video track, stable clip ID, confirmed source reference, bounded
+duration, insert/overwrite mode, and validated transform. PNG/JPEG/WebP content
+is decoded before mutation, dimensions and pixel count are bounded, and stickers
+must have an alpha channel. The shared transaction restores exact timeline bytes
+on failure. Detached plan review requires opaque image facts and never decodes or
+writes media. The renderer uses a controlled looped image input; static graphics
+are silent speed-1 clips and unsupported transition/reverse/freeze combinations
+fail validation. The loopback UI reads images through existing allowlisted opaque
+media routes, provides read-only image/sticker preview, and exposes word/title
+drafts only through diff and explicit confirmation. Arbitrary upload, animated
+titles/stickers, ASR, translation, and motion graphics are not implemented.

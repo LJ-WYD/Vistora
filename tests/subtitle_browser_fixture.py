@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from PIL import Image
+
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -21,6 +23,7 @@ from core.timeline import (  # noqa: E402
     ClipTransform,
     SubtitleCue,
     SubtitleTrackConfig,
+    SubtitleWord,
     TimelineConfig,
     TimelineTransition,
     TrackConfig,
@@ -46,6 +49,8 @@ def _timeline(root: Path, mode: str) -> tuple[TimelineConfig, Path]:
             },
         ), media
     source = media / "source.mp4"
+    sticker = media / "sticker.png"
+    Image.new("RGBA", (180, 96), (255, 182, 48, 196)).save(sticker)
     subprocess.run(
         [
             "ffmpeg", "-nostdin", "-y", "-loglevel", "error",
@@ -147,7 +152,7 @@ def _timeline(root: Path, mode: str) -> tuple[TimelineConfig, Path]:
                 id="video_locked",
                 kind="video",
                 role="locked-reference",
-                order=1,
+                order=2,
                 locked=True,
                 clips=[ClipConfig(
                     id="clip_locked",
@@ -161,7 +166,7 @@ def _timeline(root: Path, mode: str) -> tuple[TimelineConfig, Path]:
                 id="video_missing",
                 kind="video",
                 role="missing-reference",
-                order=2,
+                order=3,
                 clips=[ClipConfig(
                     id="clip_missing",
                     source=str(media / "missing.mp4"),
@@ -170,7 +175,27 @@ def _timeline(root: Path, mode: str) -> tuple[TimelineConfig, Path]:
                     keep_audio=False,
                 )],
             ),
-            "audio": TrackConfig(id="audio_main", kind="audio", order=3),
+            "graphics": TrackConfig(
+                id="video_graphics",
+                kind="video",
+                role="graphics",
+                order=1,
+                clips=[ClipConfig(
+                    id="clip_sticker",
+                    source=str(sticker),
+                    visual_kind="sticker",
+                    trim_out=2.4,
+                    timeline_start=0.8,
+                    keep_audio=False,
+                    transform=ClipTransform(
+                        position_x=0.78,
+                        position_y=0.22,
+                        scale_x=0.34,
+                        scale_y=0.34,
+                    ),
+                )],
+            ),
+            "audio": TrackConfig(id="audio_main", kind="audio", order=4),
         },
         subtitle_tracks={
             "captions": SubtitleTrackConfig(
@@ -184,6 +209,22 @@ def _timeline(root: Path, mode: str) -> tuple[TimelineConfig, Path]:
                         end_seconds=1.5,
                         text="Welcome to Vistora",
                         language="en",
+                        words=(
+                            SubtitleWord(
+                                word_id="word_welcome",
+                                start_seconds=0.2,
+                                end_seconds=0.65,
+                                text="Welcome",
+                                confidence=0.98,
+                            ),
+                            SubtitleWord(
+                                word_id="word_vistora",
+                                start_seconds=0.8,
+                                end_seconds=1.5,
+                                text="Vistora",
+                                confidence=0.99,
+                            ),
+                        ),
                     ),
                     SubtitleCue(
                         cue_id="cue_confirm",
@@ -204,6 +245,22 @@ def _timeline(root: Path, mode: str) -> tuple[TimelineConfig, Path]:
                     start_seconds=0.5,
                     end_seconds=1.2,
                     text="Locked reference caption",
+                    language="en",
+                ),),
+            ),
+            "titles": SubtitleTrackConfig(
+                track_id="text_titles",
+                kind="text",
+                role="titles",
+                language="en",
+                order=2,
+                allow_overlaps=True,
+                cues=(SubtitleCue(
+                    cue_id="title_o13",
+                    cue_kind="title",
+                    start_seconds=0.35,
+                    end_seconds=2.4,
+                    text="O13 title",
                     language="en",
                 ),),
             ),

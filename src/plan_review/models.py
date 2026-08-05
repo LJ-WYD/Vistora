@@ -234,8 +234,8 @@ class PreviewMaterialFact(ReviewModel):
         str,
         Field(pattern=r"^source_[0-9a-f]{16}$"),
     ]
-    media_kind: Literal["video", "audio"]
-    duration_seconds: FiniteFloat = Field(gt=0)
+    media_kind: Literal["video", "audio", "image"]
+    duration_seconds: FiniteFloat | None = Field(default=None, gt=0)
     has_audio: bool | None = None
     width: int | None = Field(default=None, gt=0)
     height: int | None = Field(default=None, gt=0)
@@ -246,6 +246,12 @@ class PreviewMaterialFact(ReviewModel):
             self.width is None or self.height is None
         ):
             raise ValueError("Video preview facts require width and height")
+        if self.media_kind in {"video", "audio"} and self.duration_seconds is None:
+            raise ValueError("Video/audio preview facts require duration")
+        if self.media_kind == "image" and (
+            self.width is None or self.height is None
+        ):
+            raise ValueError("Image preview facts require width and height")
         if (self.width is None) != (self.height is None):
             raise ValueError("Material width and height must be paired")
         return self
@@ -290,6 +296,7 @@ class PlanDiffRequest(ReviewModel):
 
 class PreviewClipState(ReviewModel):
     clip_id: str = Field(min_length=1)
+    visual_kind: Literal["video", "image", "sticker"] = "video"
     track_key: str = Field(min_length=1)
     track_id: str = Field(min_length=1)
     order_index: int = Field(ge=0)
@@ -347,6 +354,7 @@ class PreviewTrackMixState(ReviewModel):
 class PreviewSubtitleCueState(ReviewModel):
     cue_id: StableId
     track_id: StableId
+    cue_kind: Literal["subtitle", "title"] = "subtitle"
     start_seconds: FiniteFloat = Field(ge=0)
     end_seconds: FiniteFloat = Field(gt=0)
     text: str = Field(min_length=1)
@@ -354,6 +362,7 @@ class PreviewSubtitleCueState(ReviewModel):
     speaker: str | None = None
     enabled: bool
     style: dict[str, Any] | None = None
+    words: tuple[dict[str, Any], ...] = ()
 
 
 class PreviewSubtitleTrackState(ReviewModel):

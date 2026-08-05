@@ -50,6 +50,12 @@
               playsinline
               aria-label="Selected clip media preview"
             ></video>
+            <img
+              id="preview-image"
+              class="preview-image"
+              alt="Selected image or sticker preview"
+              hidden
+            >
             <div id="preview-placeholder" class="monitor-placeholder">
               <div class="placeholder-glyph" aria-hidden="true">▶</div>
               <p>Select an available video clip from the timeline.</p>
@@ -391,6 +397,7 @@
             </div>
             <div class="field-grid">
               <label><span>Subtitle track</span><select id="subtitle-track-select"></select></label>
+              <label><span>Track kind</span><select id="subtitle-track-kind"><option value="subtitle">Subtitle</option><option value="text">Title / text</option></select></label>
               <label><span>Track language</span><input id="subtitle-track-language" value="und" maxlength="35"></label>
               <label><span>Track order</span><input id="subtitle-track-order" type="number" min="0" step="1" value="0"></label>
               <label class="editor-check"><input id="subtitle-track-enabled" type="checkbox" checked> Track enabled</label>
@@ -408,8 +415,10 @@
               <label><span>End</span><input id="subtitle-end" type="number" min="0.001" step="0.001"></label>
               <label><span>Language</span><input id="subtitle-language" value="und" maxlength="35"></label>
               <label><span>Speaker</span><input id="subtitle-speaker" maxlength="120"></label>
+              <label><span>Cue kind</span><select id="subtitle-cue-kind"><option value="subtitle">Subtitle</option><option value="title">Title</option></select></label>
             </div>
             <label><span>Subtitle text</span><textarea id="subtitle-text" rows="3" maxlength="4096"></textarea></label>
+            <label><span>Word timings (JSON array)</span><textarea id="subtitle-words" rows="4" maxlength="16384" placeholder='[{"word_id":"word_01","start_seconds":0,"end_seconds":0.5,"text":"Hello"}]'></textarea></label>
             <div class="field-grid">
               <label><span>Split at</span><input id="subtitle-split-at" type="number" min="0.001" step="0.001"></label>
               <label><span>Font</span><select id="subtitle-font"><option value="sans">Sans</option><option value="serif">Serif</option><option value="monospace">Monospace</option></select></label>

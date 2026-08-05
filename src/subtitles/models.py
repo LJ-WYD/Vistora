@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from core.timeline import SubtitleCue, SubtitleStyle
+from core.timeline import SubtitleCue, SubtitleStyle, SubtitleWord
 
 
 StableIdPattern = r"^[A-Za-z][A-Za-z0-9._:-]*$"
@@ -91,6 +91,7 @@ class SubtitleEditCueInput(SubtitleModel):
         "ripple_shift",
         "delete",
         "set_style",
+        "set_words",
     ]
     track_id: str = Field(min_length=3, max_length=160, pattern=StableIdPattern)
     cue_id: str | None = Field(default=None, min_length=3, max_length=160, pattern=StableIdPattern)
@@ -109,6 +110,8 @@ class SubtitleEditCueInput(SubtitleModel):
     anchor_seconds: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     delta_seconds: float | None = Field(default=None, allow_inf_nan=False)
     style: SubtitleStyle | None = None
+    cue_kind: Literal["subtitle", "title"] | None = None
+    words: tuple[SubtitleWord, ...] | None = None
 
     @model_validator(mode="after")
     def action_requirements(self) -> "SubtitleEditCueInput":
@@ -116,7 +119,7 @@ class SubtitleEditCueInput(SubtitleModel):
             raise ValueError("Subtitle add requires exactly one cue")
         if self.action == "batch_add" and not self.cues:
             raise ValueError("Subtitle batch_add requires cues")
-        if self.action in {"update", "move", "trim", "delete", "set_style", "split"} and self.cue_id is None:
+        if self.action in {"update", "move", "trim", "delete", "set_style", "set_words", "split"} and self.cue_id is None:
             raise ValueError(f"Subtitle {self.action} requires cue_id")
         if self.action == "split" and (self.split_at_seconds is None or self.right_cue_id is None):
             raise ValueError("Subtitle split requires split_at_seconds and right_cue_id")
@@ -130,9 +133,11 @@ class SubtitleEditCueInput(SubtitleModel):
             raise ValueError("Subtitle ripple_shift requires anchor and non-zero delta")
         if self.action == "set_style" and self.style is None:
             raise ValueError("Subtitle set_style requires style")
+        if self.action == "set_words" and self.words is None:
+            raise ValueError("Subtitle set_words requires an explicit word tuple")
         if self.action == "update" and all(
             value is None
-            for value in (self.text, self.language, self.speaker, self.enabled, self.start_seconds, self.end_seconds, self.style)
+            for value in (self.text, self.language, self.speaker, self.enabled, self.start_seconds, self.end_seconds, self.style, self.cue_kind, self.words)
         ):
             raise ValueError("Subtitle update requires a changed field")
         return self

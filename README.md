@@ -410,17 +410,35 @@ track/cue/style contracts use stable IDs, millisecond timing, deterministic
 order, explicit overlap policy, language/speaker metadata, enabled/locked
 state, and a controlled logical-font style. Subtitle cues are never modeled
 as video clips. Legacy projects with no subtitle field load and render as
-before; the read-only snapshot is version `8.0.0` and includes detached subtitle
-track/cue counts and state.
+before; the read-only snapshot is version `9.0.0` and includes detached subtitle
+track/cue counts, cue kind, and optional word-level timing state.
 
 `SubtitleManageTrackSkill`, `SubtitleEditCueSkill`,
 `SubtitleImportSkill`, and `SubtitleExportSidecarSkill` are registered
 production tools. They cover track lifecycle, add/batch-add/update,
 split/merge/move/trim/ripple-shift/delete, controlled styling, read-only
-UTF-8 SRT/WebVTT import, and atomic sidecar export. Locked tracks accept only
+UTF-8 SRT/WebVTT import, and atomic cue-level sidecar export. SRT/WebVTT cannot
+carry Vistora word evidence, so word timings remain in the project contract
+while exported cue timing and text are deterministic. Locked tracks accept only
 an explicit reviewed unlock. Media ripple defaults to `none`; moving captions
 requires the reviewed `selected_subtitle_tracks` or `all_unlocked` policy, and
 locked subtitle tracks never move.
+
+Optional frozen `SubtitleWord` records bind stable word IDs, exact absolute
+timeline ranges, text, and optional confidence to a cue. Word ranges must be
+sorted, non-overlapping, unique within a track, and contained by their cue;
+split/trim reject cuts through a word while move/ripple shift the word evidence
+with its cue. `text` tracks contain explicit `title` cues and reuse the same
+safe static style/burn boundary without pretending to be video clips.
+
+Accepted catalog images, or an explicitly configured local source at the
+confirmed low-level boundary, can be added with `VideoInsertGraphicSkill` as
+an `image` or alpha-bearing `sticker` clip. Static graphics have a declared
+timeline duration, are silent, use speed 1, reject reverse/freeze and non-cut
+transitions, and render as bounded looped image inputs on exact video tracks.
+Insert/overwrite remains detached-reviewable and transactionally persisted;
+browser payloads expose only opaque source references and allowlisted media
+routes, never absolute paths.
 
 The loopback timeline shows deterministic subtitle lanes, cue details, a
 current-time approximate overlay, safe SRT/WebVTT parsing/download, and a
@@ -431,8 +449,10 @@ through a generated, escaped ASS file and controlled logical-font fallback;
 temporary files are removed and FFmpeg export is authoritative. No arbitrary
 font path, filter, or script is accepted.
 
-ASR/automatic timing, translation, AI copy editing, karaoke highlighting,
-animated title templates, and general motion graphics remain out of scope.
+ASR/automatic word timing, translation, AI copy editing, karaoke highlighting,
+animated title templates, arbitrary graphic upload, and general motion graphics
+remain out of scope. Word timings are imported or authored evidence, not
+inferred by this feature.
 
 ## Picture transform and basic SDR color
 
@@ -455,7 +475,7 @@ processing, not a color-managed HDR, LUT, or secondary-grade pipeline.
 video clip IDs, reject locked/non-video targets, copy only to explicitly named
 clips, never spread through linked audio, and use the shared atomic timeline
 transaction. Detached review, confirmation/workflow, Editing Agent, trace,
-rollback, snapshot v8, Director context, and the manual draft UI carry the
+rollback, snapshot v9, Director context, and the manual draft UI carry the
 same visual state and digest. Browser video/CSS preview is labeled an
 approximation; final FFmpeg export is authoritative. Thumbnail analysis can
 request original or applied mode, and its cache key binds the complete visual
@@ -572,7 +592,7 @@ never propagate through linked audio, and use the shared atomic project-state
 transaction. Split and trim rebase mask curves deterministically, copy issues
 new mask/curve/keyframe IDs, and remove emits truthful mask tombstones.
 Detached plan/manual review, explicit confirmation, gateway execution,
-snapshot v8, provenance, and rollback share the same state.
+snapshot v9, provenance, and rollback share the same state.
 
 Final FFmpeg export generates its alpha expression only from validated mask
 fields and composites masked clips in deterministic track order. The browser

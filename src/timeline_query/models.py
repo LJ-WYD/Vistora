@@ -7,8 +7,8 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-TIMELINE_SNAPSHOT_VERSION = "8.0.0"
-SnapshotVersion = Literal["2.0.0", "3.0.0", "4.0.0", "5.0.0", "6.0.0", "7.0.0", "8.0.0"]
+TIMELINE_SNAPSHOT_VERSION = "9.0.0"
+SnapshotVersion = Literal["2.0.0", "3.0.0", "4.0.0", "5.0.0", "6.0.0", "7.0.0", "8.0.0", "9.0.0"]
 SnapshotId = Annotated[
     str,
     Field(
@@ -212,6 +212,7 @@ class ClipSnapshot(ReadModel):
     """Detached view of one clip and its declared timing."""
 
     clip_id: str = Field(min_length=1)
+    visual_kind: Literal["video", "image", "sticker"] = "video"
     order_index: int = Field(ge=0)
     source: MediaSourceReference
     trim_in_seconds: FiniteFloat
@@ -284,11 +285,23 @@ class SubtitleStyleSnapshot(ReadModel):
     italic: bool
 
 
+class SubtitleWordSnapshot(ReadModel):
+    schema_name: Literal["vistora.subtitle-word-snapshot"] = (
+        "vistora.subtitle-word-snapshot"
+    )
+    word_id: SnapshotId
+    start_seconds: FiniteFloat = Field(ge=0)
+    end_seconds: FiniteFloat = Field(gt=0)
+    text: str = Field(min_length=1)
+    confidence: FiniteFloat | None = Field(default=None, ge=0, le=1)
+
+
 class SubtitleCueSnapshot(ReadModel):
     schema_name: Literal["vistora.subtitle-cue-snapshot"] = (
         "vistora.subtitle-cue-snapshot"
     )
     cue_id: SnapshotId
+    cue_kind: Literal["subtitle", "title"] = "subtitle"
     order_index: int = Field(ge=0)
     start_seconds: FiniteFloat = Field(ge=0)
     end_seconds: FiniteFloat = Field(gt=0)
@@ -299,6 +312,8 @@ class SubtitleCueSnapshot(ReadModel):
     enabled: bool
     settings: tuple[str, ...] = ()
     style: SubtitleStyleSnapshot | None = None
+    words: tuple[SubtitleWordSnapshot, ...] = ()
+    word_count: int = Field(default=0, ge=0)
 
 
 class SubtitleTrackSnapshot(ReadModel):

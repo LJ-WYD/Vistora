@@ -47,6 +47,7 @@ from subtitles import (
     SubtitleManageTrackInput,
     SubtitleStyle,
     SubtitleTrackConfig,
+    SubtitleWord,
     parse_subtitles,
 )
 from timeline_query import TimelineSnapshot, TimelineSnapshotReference
@@ -279,6 +280,7 @@ def _timeline_from_snapshot(snapshot: TimelineSnapshot) -> TimelineConfig:
                 ClipConfig(
                     id=clip.clip_id,
                     source=clip.source.value,
+                    visual_kind=clip.visual_kind,
                     trim_in=clip.trim_in_seconds,
                     trim_out=clip.trim_out_seconds,
                     timeline_start=clip.timeline_start_seconds,
@@ -356,6 +358,7 @@ def _timeline_from_snapshot(snapshot: TimelineSnapshot) -> TimelineConfig:
             cues=tuple(
                 SubtitleCue(
                     cue_id=cue.cue_id,
+                    cue_kind=cue.cue_kind,
                     start_seconds=cue.start_seconds,
                     end_seconds=cue.end_seconds,
                     text=cue.text,
@@ -367,6 +370,16 @@ def _timeline_from_snapshot(snapshot: TimelineSnapshot) -> TimelineConfig:
                         SubtitleStyle.model_validate(cue.style.model_dump(mode="python", exclude={"schema_name"}))
                         if cue.style is not None
                         else None
+                    ),
+                    words=tuple(
+                        SubtitleWord(
+                            word_id=word.word_id,
+                            start_seconds=word.start_seconds,
+                            end_seconds=word.end_seconds,
+                            text=word.text,
+                            confidence=word.confidence,
+                        )
+                        for word in cue.words
                     ),
                 )
                 for cue in track.cues
@@ -444,6 +457,7 @@ def _subtitle_maps(timeline: TimelineConfig) -> tuple[
             cues[(track.track_id, cue.cue_id)] = PreviewSubtitleCueState(
                 cue_id=cue.cue_id,
                 track_id=track.track_id,
+                cue_kind=cue.cue_kind,
                 start_seconds=cue.start_seconds,
                 end_seconds=cue.end_seconds,
                 text=cue.text,
@@ -451,6 +465,7 @@ def _subtitle_maps(timeline: TimelineConfig) -> tuple[
                 speaker=cue.speaker,
                 enabled=cue.enabled,
                 style=cue.style.model_dump(mode="json") if cue.style is not None else None,
+                words=tuple(word.model_dump(mode="json") for word in cue.words),
             )
     return tracks, cues
 
@@ -467,6 +482,7 @@ def _preview_state(
     )
     return PreviewClipState(
         clip_id=clip.id,
+        visual_kind=clip.visual_kind,
         track_key=track_key,
         track_id=track_id,
         order_index=0,
@@ -776,6 +792,7 @@ class PlanDiffEngine:
                 "VideoTrimClipSkill",
                 "VideoMoveClipSkill",
                 "VideoInsertOverwriteClipSkill",
+                "VideoInsertGraphicSkill",
                 "VideoRemoveClipSkill",
                 "VideoSetClipPropertiesSkill",
                 "VideoSetClipFreezeFrameSkill",
@@ -809,6 +826,7 @@ class PlanDiffEngine:
                         ClipConfig(
                             id=clip.clip_id,
                             source=clip.source_name,
+                            visual_kind=clip.visual_kind,
                             trim_in=clip.trim_in_seconds,
                             trim_out=clip.trim_out_seconds,
                             timeline_start=clip.timeline_start_seconds,
@@ -1476,6 +1494,10 @@ class PlanDiffEngine:
                         "Transition preview requires exact opaque media facts "
                         f"for {source_id}"
                     )
+                if fact.duration_seconds is None:
+                    raise TimelineEditError(
+                        "Transition preview requires a timed media source"
+                    )
                 return fact.duration_seconds
 
             def audio_fact(clip: ClipConfig) -> bool:
@@ -1757,6 +1779,53 @@ class PlanDiffEngine:
                     params.clip_id,
                     params.composite or ClipCompositeSettings(),
                 )
+            elif name == "VideoInsertGraphicSkill":
+                material_id = _source_id(params.source_path)
+                fact = facts.get(material_id)
+                if fact is None:
+                    append_change(
+                        step=step,
+                        category="warning",
+                        effect_kind="informational",
+                        severity="blocker",
+                        entity=ProposedEntityReference(
+                            entity_kind="none",
+                            entity_id=f"missing_graphic_fact_{step.step_id}",
+                        ),
+                        reason=(
+                            "Graphic insertion requires exact opaque image facts "
+                            "for detached simulation."
+                        ),
+                    )
+                    return (
+                        "unsupported",
+                        "Required graphic preview facts are missing.",
+                        timeline,
+                    )
+                if fact.media_kind != "image":
+                    raise PlanDiffValidationError(
+                        "Graphic insertion requires a validated image material"
+                    )
+                if engine.track_kind(params.track_reference) != "video":
+                    raise PlanDiffValidationError(
+                        "Graphic insertion requires a video track"
+                    )
+                updated, outcome = engine.insert_overwrite(
+                    params.track_reference,
+                    ClipConfig(
+                        id=params.clip_id,
+                        source=params.source_path,
+                        visual_kind=params.graphic_kind,
+                        trim_in=0,
+                        trim_out=params.duration_seconds,
+                        timeline_start=params.timeline_start,
+                        keep_audio=False,
+                        speed_factor=1,
+                        transform=params.transform,
+                    ),
+                    mode=params.mode,
+                    edit_scope="current_clip",
+                )
             else:
                 material_id = _source_id(params.source_path)
                 fact = facts.get(material_id)
@@ -1798,10 +1867,10 @@ class PlanDiffEngine:
                     engine.timeline.width = fact.width
                     engine.timeline.height = fact.height
                 trim_out = min(
-                    fact.duration_seconds,
+                    fact.duration_seconds or 0,
                     params.trim_out
                     if params.trim_out is not None
-                    else fact.duration_seconds,
+                    else (fact.duration_seconds or 0),
                 )
                 if trim_out <= params.trim_in:
                     raise PlanDiffValidationError(
