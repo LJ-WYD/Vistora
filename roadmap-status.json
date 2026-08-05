@@ -4,7 +4,7 @@
   "roadmap_id": "vistora-original-optimization-o1-o32",
   "roadmap_digest": "sha256:143850f88a50bf6b43137723cff42c4f1f9132b2a12cceda369c659db5c5d618",
   "definitions_source": "ROADMAP.md",
-  "updated_at": "2026-08-05T10:27:54Z",
+  "updated_at": "2026-08-05T10:46:50Z",
   "change_requests": [
     {
       "change_request_id": "change_request_initial_authoritative_import_20260805",
@@ -309,12 +309,12 @@
     {
       "id": "O29",
       "original_summary": "将 AI 结果回填统一时间线",
-      "status": "in_progress",
-      "commits": [],
-      "remote_verified": false,
-      "implementation_paths": [],
-      "validation_evidence": [],
-      "remaining_scope": ["标准视频片段", "透明图层", "效果层", "确认后原子回填", "回填 rollback/provenance"]
+      "status": "complete",
+      "commits": ["778cb3642f61931e6d42abee22b3be4b3776a827"],
+      "remote_verified": true,
+      "implementation_paths": ["src/effect_fillback", "src/product_entry", "src/timeline_preview/static/app.js", "README.md", "ARCHITECTURE.md"],
+      "validation_evidence": ["tests/test_effect_fillback.py", "tests/test_effect_capabilities.py", "tests/test_workflow.py", "tests/test_editing_agent.py", "tests/test_plan_review.py", "tests/test_product_entry.py", "tests/test_timeline_preview.py", "tests/test_reference_workflow.py", "tests/run_validation.py", "tests/product_visual_fixture.py", "scripts/validate_roadmap.py"],
+      "remaining_scope": []
     },
     {
       "id": "O30",
