@@ -4,7 +4,7 @@
   "roadmap_id": "vistora-original-optimization-o1-o32",
   "roadmap_digest": "sha256:143850f88a50bf6b43137723cff42c4f1f9132b2a12cceda369c659db5c5d618",
   "definitions_source": "ROADMAP.md",
-  "updated_at": "2026-08-05T09:58:14Z",
+  "updated_at": "2026-08-05T10:11:25Z",
   "change_requests": [
     {
       "change_request_id": "change_request_initial_authoritative_import_20260805",
@@ -289,12 +289,12 @@
     {
       "id": "O27",
       "original_summary": "建立云端 AI 包装任务模型",
-      "status": "in_progress",
-      "commits": [],
-      "remote_verified": false,
-      "implementation_paths": [],
-      "validation_evidence": [],
-      "remaining_scope": ["镜头/时间段/对象/遮罩/跟踪/风格/提示词/模型/参数/验收的版本化任务契约"]
+      "status": "complete",
+      "commits": ["86a963199a7e1e62163caa878f3bb309edf8d63a"],
+      "remote_verified": true,
+      "implementation_paths": ["src/effect_workflow", "README.md", "ARCHITECTURE.md"],
+      "validation_evidence": ["tests/test_effect_workflow.py", "tests/test_reference_workflow.py", "tests/run_validation.py", "tests/product_visual_fixture.py", "scripts/validate_roadmap.py"],
+      "remaining_scope": []
     },
     {
       "id": "O28",
