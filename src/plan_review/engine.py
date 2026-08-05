@@ -1009,6 +1009,59 @@ class PlanDiffEngine:
                     if removed
                     else "The timeline is already empty."
                 )
+            elif step.tool_name == "VideoExportVariantsSkill":
+                if not clips:
+                    raise PlanDiffValidationError(
+                        f"Step {step.step_id} cannot export an empty timeline"
+                    )
+                if params.subtitle_mode == "burn":
+                    selected = set(params.subtitle_track_ids)
+                    known = {track.track_id for track in core_timeline.subtitle_tracks.values()}
+                    if selected - known:
+                        raise PlanDiffValidationError("Subtitle burn references an unknown track")
+                    enabled_cues = [
+                        cue
+                        for track in core_timeline.subtitle_tracks.values()
+                        if track.enabled and (not selected or track.track_id in selected)
+                        for cue in track.cues
+                        if cue.enabled
+                    ]
+                    if not enabled_cues:
+                        append_change(
+                            step=step,
+                            category="warning",
+                            effect_kind="informational",
+                            severity="blocker",
+                            entity=ProposedEntityReference(
+                                entity_kind="none",
+                                entity_id=f"subtitle_burn_{step.step_id}",
+                            ),
+                            reason=(
+                                "Subtitle burn-in requires at least one enabled cue "
+                                "and a video stream."
+                            ),
+                        )
+                        status = "unsupported"
+                for variant in params.variants:
+                    append_change(
+                        step=step,
+                        category="export_only",
+                        effect_kind="informational",
+                        severity="info",
+                        entity=ProposedEntityReference(
+                            entity_kind="media_output",
+                            entity_id=f"export_variant_{variant.variant_id}",
+                        ),
+                        reason=(
+                            f"Would render variant {variant.variant_id} at "
+                            f"{variant.width}x{variant.height} and {variant.fps:g} fps; "
+                            "the preview does not render or disclose filesystem paths."
+                        ),
+                    )
+                message = (
+                    f"Would export {len(params.variants)} create-new media variants "
+                    "without changing the timeline."
+                )
             elif step.tool_name == "VideoExportSkill":
                 if not clips:
                     raise PlanDiffValidationError(

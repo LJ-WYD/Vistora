@@ -4,7 +4,7 @@
   "roadmap_id": "vistora-original-optimization-o1-o32",
   "roadmap_digest": "sha256:143850f88a50bf6b43137723cff42c4f1f9132b2a12cceda369c659db5c5d618",
   "definitions_source": "ROADMAP.md",
-  "updated_at": "2026-08-05T06:29:45Z",
+  "updated_at": "2026-08-05T06:33:00Z",
   "change_requests": [
     {
       "change_request_id": "change_request_initial_authoritative_import_20260805",
@@ -139,7 +139,7 @@
     {
       "id": "O12",
       "original_summary": "补齐基础画面原子能力与多规格导出",
-      "status": "partial",
+      "status": "in_progress",
       "commits": ["80a460e57d075f41ee0001c7f3939370ba2e9271"],
       "remote_verified": true,
       "implementation_paths": ["src/visuals", "src/skills/video_visual_edits.py"],

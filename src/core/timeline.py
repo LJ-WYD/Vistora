@@ -947,7 +947,7 @@ class TimelineRenderer:
         self.config = config
         self._opened_clips = []  # 记录所有打开的 MoviePy Clip 实例，便于渲染结束后统一关闭释放资源
 
-    def render(self, output_path: str) -> str:
+    def render(self, output_path: str, *, enforce_canvas: bool = False) -> str:
         """
         开始渲染时间线，并输出到指定路径
         """
@@ -1030,13 +1030,13 @@ class TimelineRenderer:
                 else:
                     is_multi_fast_path = True
                 
-        if is_fast_path:
+        if is_fast_path and not enforce_canvas:
             try:
                 return self._render_fast_path(output_path)
             except Exception as e:
                 print(f"[Fast-Path] 极速渲染失败，降级到标准 MoviePy 渲染通道: {e}")
                 
-        if is_multi_fast_path:
+        if is_multi_fast_path and not enforce_canvas:
             try:
                 return self._render_multi_fast_path(output_path)
             except Exception as e:
@@ -1045,7 +1045,8 @@ class TimelineRenderer:
                 print(f"[Multi-Fast-Path] 多片段极速并发拼接失败，降级到标准 MoviePy 渲染通道: {e}")
 
         requires_multitrack = (
-            len(video_tracks) > 1
+            enforce_canvas
+            or len(video_tracks) > 1
             or len(audio_tracks) > 1
             or any(
                 track.mix != TrackMixSettings()

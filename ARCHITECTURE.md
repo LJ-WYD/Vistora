@@ -622,6 +622,7 @@ The implemented mutation ownership is:
 | `VideoModifyClipSkill` | Updates a clip and saves the timeline. | May create a reverse proxy. |
 | `VideoClearTimelineSkill` | Deletes the active timeline state. | None. |
 | `VideoExportSkill` | May reset timeline state after export. | Renders the timeline to an output file. |
+| `VideoExportVariantsSkill` | None. | Stages and publishes two to eight explicit create-new MP4 canvas/frame-rate variants; existing files are never overwritten. |
 | `VideoTimelapseSkill` | None. | Writes a new timelapse file through FFmpeg. |
 | `VideoApplyManualEditsSkill` | Applies one exact confirmed user proposal to copied arbitrary video/audio track state, including explicit current/linked scope and track/link management; atomically replaces timeline JSON and appends truthful manual provenance. | None. |
 | `VideoRestoreTimelineCheckpointSkill` | Restores one exact reviewed and confirmed checkpoint with atomic replacement and post-write digest validation; prior bytes are restored on failure. | None; generated/exported files are explicitly outside rollback. |
@@ -1016,8 +1017,9 @@ Visual automation does not add path animation, tracking, speed-remapping curves,
 per-word subtitle animation, arbitrary Bezier/expression editing, 3D,
 particles, plugins, or AI motion effects.
 
-Original O11's reverse/freeze completion raises the production registry to
-revision 9 with forty entries and snapshot schema to version `8.0.0`.
+Original O12's multi-spec export completion raises the production registry to
+revision 10 with forty-one entries and retains snapshot schema version `8.0.0`.
+The O11 reverse/freeze completion introduced the preceding revision.
 `FreezeFrameSettings` is a frozen version `1.0.0` contract bound to an exact
 source time inside the clip range and a positive hold duration. It is
 video-only, silent, incompatible with simultaneous reverse, split-safe, and

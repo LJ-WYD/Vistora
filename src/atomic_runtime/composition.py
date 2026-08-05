@@ -31,6 +31,7 @@ from skills.video_add_clip import VideoAddClipSkill
 from skills.video_apply_manual_edits import VideoApplyManualEditsSkill
 from skills.video_clear_timeline import VideoClearTimelineSkill
 from skills.video_export import VideoExportSkill
+from skills.video_export_variants import VideoExportVariantsSkill
 from skills.video_modify_clip import VideoModifyClipSkill
 from skills.video_restore_timeline_checkpoint import (
     VideoRestoreTimelineCheckpointSkill,
@@ -96,6 +97,25 @@ class ExportResult(_Result):
     subtitle_mode: str = "none"
     subtitle_track_ids: list[str] = []
     font_warnings: list[str] = []
+
+
+class ExportVariantResult(_Result):
+    variant_id: str
+    output_path: str
+    width: int
+    height: int
+    fps: float
+    size_bytes: int
+    sha256: str
+    font_warnings: list[str] = []
+
+
+class ExportVariantsResult(_Result):
+    status: Literal["success"]
+    export_set_id: str
+    output_policy: Literal["create_new"]
+    subtitle_mode: Literal["none", "burn"]
+    outputs: list[ExportVariantResult]
 
 
 class TimelapseResult(ExportResult):
@@ -270,7 +290,7 @@ def build_production_registry(
     )
     return AtomicSkillRegistry(
         registry_id="registry_atomic_skills",
-        registry_revision=9,
+        registry_revision=10,
         entries=(
             _entry(
                 VideoAddClipSkill(),
@@ -296,6 +316,16 @@ def build_production_registry(
                 VideoExportSkill(),
                 ExportResult,
                 side_effects=("files", "media", "timeline"),
+                transactionality="best_effort",
+                retry_safety="gateway_replay_only",
+                preview_supported=True,
+                rollback_support="none",
+                required_capabilities=("media_render",),
+            ),
+            _entry(
+                VideoExportVariantsSkill(),
+                ExportVariantsResult,
+                side_effects=("files", "media"),
                 transactionality="best_effort",
                 retry_safety="gateway_replay_only",
                 preview_supported=True,

@@ -202,6 +202,7 @@ def test_production_registry_is_deterministic_frozen_and_complete() -> None:
             "VideoCopyVisualAutomationSkill",
             "VideoDeleteVisualKeyframeSkill",
             "VideoExportSkill",
+            "VideoExportVariantsSkill",
         "VideoInsertOverwriteClipSkill",
         "VideoModifyClipSkill",
         "VideoMoveClipSkill",
@@ -397,7 +398,7 @@ def test_cli_registry_output_is_versioned_and_descriptor_complete(
     payload = json.loads(capsys.readouterr().out)
     assert payload["schema_name"] == "vistora.atomic-skill-registry"
     assert payload["registry"]["registry_digest"]
-    assert len(payload["skills"]) == 40
+    assert len(payload["skills"]) == 41
     assert all(item["output_schema_digest"] for item in payload["skills"])
 
 

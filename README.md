@@ -370,6 +370,16 @@ legacy compatibility surfaces. Property-only edits can use
 embedded audio, and is rendered from the exact bounded source frame. Legacy
 `VideoModifyClipSkill` retains its best-effort proxy behavior only for
 compatibility.
+
+`VideoExportVariantsSkill` is the bounded multi-spec export boundary. One
+confirmed request names two to eight stably ordered variants, each with an
+explicit even-sized canvas, frame rate, and create-new MP4 destination. Every
+variant is rendered against the same immutable timeline state with exact canvas
+enforcement, staged beside its destination, hashed, and published only after all
+renders succeed. Existing files are never overwritten; a failed set removes its
+staging files and reports failure rather than success. Detached review lists each
+canvas/FPS result without exposing output paths or rendering media. The older
+`VideoExportSkill` remains compatible and unchanged.
 Linked A/V and arbitrary video/audio track foundations are implemented.
 Automatic link inference, linked-source ingest as one operation,
 transcription/ASR, motion tracking, denoise/de-reverb/source separation, plugin hosting, AI audio
@@ -400,7 +410,7 @@ track/cue/style contracts use stable IDs, millisecond timing, deterministic
 order, explicit overlap policy, language/speaker metadata, enabled/locked
 state, and a controlled logical-font style. Subtitle cues are never modeled
 as video clips. Legacy projects with no subtitle field load and render as
-before; the read-only snapshot is version `6.0.0` and adds detached subtitle
+before; the read-only snapshot is version `8.0.0` and includes detached subtitle
 track/cue counts and state.
 
 `SubtitleManageTrackSkill`, `SubtitleEditCueSkill`,

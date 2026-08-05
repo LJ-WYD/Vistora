@@ -289,7 +289,7 @@ def test_registry_gateway_requires_exact_confirmation_and_is_transactional(
     monkeypatch.setattr(timeline_manager, "PROJECT_FILE", str(project))
     monkeypatch.setattr(timeline_manager, "WORKSPACE_DIR", str(project.parent))
     registry = build_production_registry()
-    assert registry.reference.registry_revision == 9
+    assert registry.reference.registry_revision == 10
     descriptor = registry.descriptor("SubtitleEditCueSkill")
     assert descriptor.transactionality == "atomic_project_state"
     assert descriptor.preview_supported is True
