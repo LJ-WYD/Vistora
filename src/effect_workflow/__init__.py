@@ -20,6 +20,31 @@ from .models import (
     EffectTrackingReference,
 )
 from .service import EffectPlanService
+from .capabilities import (
+    EFFECT_CAPABILITY_IDS,
+    DeterministicEffectFixtureAdapter,
+    EffectAdapterDescriptor,
+    EffectAdapterRegistry,
+    EffectAdapterRegistryReference,
+    EffectAdapterRequest,
+    EffectAdapterResult,
+    EffectArtifactCandidate,
+    EffectCapabilityDescriptor,
+    ManualEffectImportAdapter,
+    UnconfiguredEffectAdapter,
+    build_effect_adapter_registry,
+    effect_capability_descriptors,
+)
+from .execution import (
+    EffectAcceptanceCheck,
+    EffectCapabilityExecutionService,
+    EffectExecutionBinding,
+    EffectExecutionError,
+    EffectExecutionReport,
+    EffectExecutionRequest,
+    EffectTaskExecutionReport,
+    EffectTaskInput,
+)
 from .store import (
     EffectPlanConcurrencyError,
     EffectPlanError,
@@ -27,4 +52,11 @@ from .store import (
     EffectPlanStore,
 )
 
-__all__ = [name for name in globals() if name.startswith("Effect")]
+__all__ = [name for name in globals() if name.startswith("Effect")] + [
+    "EFFECT_CAPABILITY_IDS",
+    "DeterministicEffectFixtureAdapter",
+    "ManualEffectImportAdapter",
+    "UnconfiguredEffectAdapter",
+    "build_effect_adapter_registry",
+    "effect_capability_descriptors",
+]

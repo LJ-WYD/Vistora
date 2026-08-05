@@ -1163,3 +1163,32 @@ fail validation. The loopback UI reads images through existing allowlisted opaqu
 media routes, provides read-only image/sticker preview, and exposes word/title
 drafts only through diff and explicit confirmation. Arbitrary upload, animated
 titles/stickers, ASR, translation, and motion graphics are not implemented.
+
+### Original O27/O28 AI packaging planning and capability boundary
+
+`effect_workflow` separates the reviewed creative intent from provider
+execution. O27's frozen intent/plan/review/confirmation records bind the exact
+Director plan, snapshot revision/digest, source evidence, shot, clip, bounded
+time range, object, mask/tracking/style references, structured prompt, model
+capabilities, parameters, output role, and acceptance criteria. Its hash-chained
+sidecar never invokes a provider or mutates project state.
+
+O28 adds a distinct deterministic capability registry for the ten authorized
+high-value kinds: background replacement, object removal, localized inpainting,
+stylization, frame interpolation, generative transition, generative B-roll, AI
+voice, AI music, and AI sound effects. `EffectCapabilityExecutionService`
+accepts only an exact confirmed O27 binding and exact adapter-registry digest;
+task omissions, registry drift, stale snapshots, unsupported output roles,
+missing required fields, malformed adapter output, or adapter exceptions fail
+closed. The service imports no timeline manager, renderer, skill, gateway, or
+mutation engine. Its frozen report always states `timeline_mutated=false`.
+
+The production composition root registers only unavailable external-provider
+placeholders and exposes their `not_configured` state to the loopback product
+view. The deterministic fixture adapter emits only test manifests; the manual
+adapter resolves an opaque server-side token and copies into isolated staging.
+Neither is silently installed as an online production provider. Successful
+results remain `human_acceptance_required`; they are not catalog entries and
+cannot be filled back until O29 provides a separately confirmed atomic timeline
+boundary. Candidate versioning, operational progress/cost, retry and cache
+lifecycle remain O30 scope.

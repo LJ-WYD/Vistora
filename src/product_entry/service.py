@@ -67,6 +67,7 @@ class ProductionEntryService:
         material_production: MaterialProductionOrchestrator | None = None,
         material_production_agent: MaterialProductionAgent | None = None,
         material_feedback: MaterialFeedbackService | None = None,
+        effect_capability_provider: Callable[[], dict[str, Any]] | None = None,
         clock: Clock = _utc_now,
         id_factory: IdFactory = _random_id,
     ) -> None:
@@ -82,6 +83,7 @@ class ProductionEntryService:
         self.creation_planning = creation_planning
         self.material_production = material_production
         self.material_feedback = material_feedback
+        self.effect_capability_provider = effect_capability_provider
         self.material_production_agent = material_production_agent or (
             MaterialProductionAgent(
                 material_production,
@@ -132,6 +134,11 @@ class ProductionEntryService:
             if self.material_feedback is not None
             else None
         )
+        effect_view = (
+            self.effect_capability_provider()
+            if self.effect_capability_provider is not None
+            else None
+        )
         state, allowed = self._state(
             ledger,
             director,
@@ -154,6 +161,7 @@ class ProductionEntryService:
             creation_planning=creation_view,
             material_production=production_view,
             material_feedback=feedback_view,
+            effect_packaging=effect_view,
             latest_result=latest,
             allowed_actions=allowed,
         )

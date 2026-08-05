@@ -966,6 +966,24 @@ function renderProduct() {
       );
     }
   }
+  const effectPackaging = view.effect_packaging;
+  if (effectPackaging) {
+    ui.productSummary.append(
+      workflowEvent(
+        "AI packaging capabilities",
+        (effectPackaging.capabilities || []).some((item) => item.configured)
+          ? "partially_configured"
+          : "not_configured",
+        [
+          effectPackaging.message,
+          ...(effectPackaging.capabilities || []).map(
+            (item) => `${item.title} / ${item.status}`,
+          ),
+          "Generated results remain isolated until human acceptance and a later O29 timeline-fillback operation.",
+        ],
+      ),
+    );
+  }
   ui.productActions.replaceChildren();
   for (const action of view.allowed_actions) {
     if (action === "director_turn") {

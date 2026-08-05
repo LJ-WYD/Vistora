@@ -37,6 +37,7 @@ from material_production import (
     build_creation_capability_reference,
     build_material_production_registry,
 )
+from effect_workflow import build_effect_adapter_registry
 
 from .service import ProductionEntryService
 from .store import ProductEntryStore
@@ -188,6 +189,7 @@ def build_current_product_entry(
     )
 
     production_adapters = build_material_production_registry()
+    effect_adapters = build_effect_adapter_registry()
 
     def capability_provider():
         return build_creation_capability_reference(production_adapters)
@@ -228,6 +230,7 @@ def build_current_product_entry(
         material_production=production,
         material_production_agent=MaterialProductionAgent(production),
         material_feedback=material_feedback,
+        effect_capability_provider=effect_adapters.public_view,
     )
 
 

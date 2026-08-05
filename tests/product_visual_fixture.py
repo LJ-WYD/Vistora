@@ -599,6 +599,29 @@ def _view(state: str) -> ProductEntryView:
             }
             else None
         ),
+        effect_packaging={
+            "schema_name": "vistora.effect-capability-view",
+            "schema_version": "1.0.0",
+            "registry_revision": 1,
+            "registry_digest": "sha256:" + "e" * 64,
+            "capabilities": [
+                {
+                    "capability_id": "background_replacement",
+                    "title": "Background replacement",
+                    "configured": False,
+                    "status": "not_configured",
+                    "limitation": "No background-replacement provider is configured.",
+                },
+                {
+                    "capability_id": "ai_voice",
+                    "title": "AI voice",
+                    "configured": False,
+                    "status": "not_configured",
+                    "limitation": "No AI-voice provider is configured.",
+                },
+            ],
+            "message": "AI packaging providers are not configured by default.",
+        },
         latest_result={"status": state},
         allowed_actions=allowed,
     )

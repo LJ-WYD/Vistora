@@ -727,6 +727,34 @@ This API does not create reviews or confirmations. The caller must use the exist
 
 Rollback is never automatic. The service first creates a deterministic proposal from the current exact checkpoint to the run's start checkpoint. Manual edits or other revision drift make the proposal unavailable or stale. A second immutable user decision is required before `VideoRestoreTimelineCheckpointSkill` atomically restores the validated timeline document. This restores timeline/project JSON only: generated/exported external media is neither deleted nor promised reversible, and original execution/provenance history remains append-only.
 
+## Provider-neutral AI packaging capabilities
+
+Original O28 registers ten explicit high-value packaging capabilities:
+background replacement, object removal, localized inpainting, stylization,
+frame interpolation, generative transition, generative B-roll, AI voice, AI
+music, and AI sound effects. Each capability declares its accepted output
+role, required structured O27 task fields, modality, and human acceptance
+dimensions. The registry and execution request are frozen, versioned, bound to
+the exact confirmed O27 plan/review/snapshot and have deterministic digests.
+
+The production composition contains only truthful `not_configured` provider
+adapters. It performs no online or paid request and accepts no credentials.
+Tests can explicitly compose a deterministic fixture adapter, while a local
+manual-import adapter accepts only server-side opaque tokens and copies the
+approved artifact into isolated staging. Both paths produce reviewable
+artifact records; every creative acceptance dimension remains pending human
+review. Nothing is automatically accepted, cataloged, or written to the
+timeline. O29 owns the later confirmed timeline-fillback boundary, and O30
+owns candidate/version/progress/retry lifecycle.
+
+The local product view lists all ten capabilities as `not_configured` unless
+an application composition explicitly supplies a safe adapter. Run the
+focused deterministic contract and dispatch regression with:
+
+```powershell
+python -m pytest -q tests/test_effect_capabilities.py
+```
+
 ## Validation
 
 The integration validation creates its own synthetic source clip and generated outputs under `tests/test_data/`:
