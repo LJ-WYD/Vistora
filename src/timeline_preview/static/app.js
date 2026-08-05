@@ -984,6 +984,19 @@ function renderProduct() {
       ),
     );
   }
+  if (view.effect_fillback) {
+    ui.productSummary.append(
+      workflowEvent(
+        "AI result timeline fillback",
+        view.effect_fillback.status,
+        [
+          view.effect_fillback.message,
+          `Supported entities: ${(view.effect_fillback.layer_kinds || []).join(", ")}`,
+          "This status is capability availability, not confirmation or execution.",
+        ],
+      ),
+    );
+  }
   ui.productActions.replaceChildren();
   for (const action of view.allowed_actions) {
     if (action === "director_turn") {

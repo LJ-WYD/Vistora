@@ -755,6 +755,32 @@ focused deterministic contract and dispatch regression with:
 python -m pytest -q tests/test_effect_capabilities.py
 ```
 
+## Accepted AI result timeline fillback
+
+Original O29 adds a read-only `EffectFillbackCompiler`. It accepts one exact
+O28 execution report, one immutable human artifact acceptance, the matching
+validated catalog entry, and one explicit placement. It compiles those facts
+into a normal structured `DirectorPlan` and step-8 `PlanDiffRequest`; it does
+not create confirmation or execute anything.
+
+Three honest timeline mappings are supported: timed video/audio as a standard
+clip, an alpha-validated catalog image as a transparent layer, and catalog
+video/image on an explicit non-primary effects/overlay/graphics track as an
+effect layer. The compiler uses only opaque `material://source_...` references,
+rejects locked/mismatched tracks, duplicate clip IDs, stale reports, catalog
+digest drift, unverified alpha, and overlong placement. The normal workflow
+then provides review, independent user confirmation, constrained EditingAgent
+dispatch through existing registered atomic tools, provenance, checkpoints,
+and rollback. Rollback restores project state but does not delete the accepted
+external artifact.
+
+Run the deterministic standard-clip/transparent/effect-layer compilation and
+confirmed fillback regression with:
+
+```powershell
+python -m pytest -q tests/test_effect_fillback.py
+```
+
 ## Validation
 
 The integration validation creates its own synthetic source clip and generated outputs under `tests/test_data/`:

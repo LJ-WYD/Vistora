@@ -231,6 +231,16 @@ def build_current_product_entry(
         material_production_agent=MaterialProductionAgent(production),
         material_feedback=material_feedback,
         effect_capability_provider=effect_adapters.public_view,
+        effect_fillback_provider=lambda: {
+            "schema_name": "vistora.effect-fillback-view",
+            "schema_version": "1.0.0",
+            "status": "available_after_human_acceptance",
+            "layer_kinds": ("effect_layer", "standard_clip", "transparent_layer"),
+            "message": (
+                "Accepted catalog artifacts return through Director review, "
+                "independent workflow confirmation, EditingAgent, and registered atomic tools."
+            ),
+        },
     )
 
 

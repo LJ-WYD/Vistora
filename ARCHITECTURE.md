@@ -1192,3 +1192,27 @@ results remain `human_acceptance_required`; they are not catalog entries and
 cannot be filled back until O29 provides a separately confirmed atomic timeline
 boundary. Candidate versioning, operational progress/cost, retry and cache
 lifecycle remain O30 scope.
+
+### Original O29 accepted effect fillback
+
+`effect_fillback` is a read-only compiler, not a mutation engine. Its frozen
+acceptance binds the exact O28 execution report/task/artifact/content digest to
+one exact accepted material-catalog entry and explicit human decision. One
+placement selects a stable target track/clip ID, start, duration, insert or
+overwrite mode, and one of `standard_clip`, `transparent_layer`, or
+`effect_layer`. Transparent layers require an alpha-validation fact; visual
+effect layers require an explicit non-primary layer track. Locked tracks,
+catalog/report drift, duplicate IDs, media/track mismatch, and duration drift
+fail before review.
+
+The compiler emits an ordinary `DirectorPlan` plus `PlanDiffRequest`, with the
+accepted artifact represented as opaque source evidence whose analysis fact is
+the acceptance ID/digest. It cannot confirm or dispatch. The existing plan
+review and workflow ledger create the independent confirmation, after which
+the production EditingAgent dispatches `VideoInsertOverwriteClipSkill` or
+`VideoInsertGraphicSkill` through the atomic gateway. Existing workflow
+checkpoint, trace, failure recovery, replay, and rollback semantics therefore
+remain the only write path. Standard audio/video, alpha image layers, and
+visual effects layers become normal timeline clip entities; no parallel effect
+timeline is introduced. Artifact deletion and O30 candidate/job lifecycle are
+outside timeline rollback.

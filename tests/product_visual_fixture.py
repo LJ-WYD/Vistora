@@ -622,6 +622,13 @@ def _view(state: str) -> ProductEntryView:
             ],
             "message": "AI packaging providers are not configured by default.",
         },
+        effect_fillback={
+            "schema_name": "vistora.effect-fillback-view",
+            "schema_version": "1.0.0",
+            "status": "available_after_human_acceptance",
+            "layer_kinds": ["effect_layer", "standard_clip", "transparent_layer"],
+            "message": "Accepted effects still require Director review and independent workflow confirmation.",
+        },
         latest_result={"status": state},
         allowed_actions=allowed,
     )

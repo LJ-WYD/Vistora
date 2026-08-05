@@ -221,10 +221,10 @@ def _schema_digest(model):
 
 
 _CAPABILITY_FACTS = {
-    "background_replacement": ("Background replacement", "video", ("effect_layer", "video_clip"), ("mask_ref", "object_target", "prompt", "timeline_range"), ("edge_quality", "temporal_consistency")),
+    "background_replacement": ("Background replacement", "video", ("effect_layer", "transparent_layer", "video_clip"), ("mask_ref", "object_target", "prompt", "timeline_range"), ("edge_quality", "temporal_consistency")),
     "object_removal": ("Object removal", "video", ("effect_layer", "video_clip"), ("mask_ref", "object_target", "prompt", "timeline_range"), ("fill_consistency", "temporal_consistency")),
-    "localized_inpainting": ("Localized inpainting", "multimodal", ("effect_layer", "video_clip"), ("mask_ref", "object_target", "prompt", "timeline_range"), ("boundary_quality", "prompt_alignment")),
-    "stylization": ("Stylization", "multimodal", ("effect_layer", "video_clip"), ("prompt", "style_references", "timeline_range"), ("content_preservation", "style_alignment")),
+    "localized_inpainting": ("Localized inpainting", "multimodal", ("effect_layer", "transparent_layer", "video_clip"), ("mask_ref", "object_target", "prompt", "timeline_range"), ("boundary_quality", "prompt_alignment")),
+    "stylization": ("Stylization", "multimodal", ("effect_layer", "transparent_layer", "video_clip"), ("prompt", "style_references", "timeline_range"), ("content_preservation", "style_alignment")),
     "frame_interpolation": ("Frame interpolation", "video", ("video_clip",), ("parameters", "timeline_range"), ("motion_continuity", "timing_accuracy")),
     "generative_transition": ("Generative transition", "video", ("effect_layer", "video_clip"), ("prompt", "timeline_range"), ("boundary_match", "temporal_continuity")),
     "generative_b_roll": ("Generative B-roll", "video", ("video_clip",), ("prompt", "style_references", "timeline_range"), ("prompt_alignment", "technical_compliance")),

@@ -4,7 +4,7 @@
   "roadmap_id": "vistora-original-optimization-o1-o32",
   "roadmap_digest": "sha256:143850f88a50bf6b43137723cff42c4f1f9132b2a12cceda369c659db5c5d618",
   "definitions_source": "ROADMAP.md",
-  "updated_at": "2026-08-05T10:26:49Z",
+  "updated_at": "2026-08-05T10:27:54Z",
   "change_requests": [
     {
       "change_request_id": "change_request_initial_authoritative_import_20260805",
@@ -309,7 +309,7 @@
     {
       "id": "O29",
       "original_summary": "将 AI 结果回填统一时间线",
-      "status": "missing",
+      "status": "in_progress",
       "commits": [],
       "remote_verified": false,
       "implementation_paths": [],
