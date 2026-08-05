@@ -40,7 +40,7 @@ in [roadmap-status.json](roadmap-status.json).
 | O29 | accepted effect artifact→catalog→confirmed atomic timeline fillback | complete |
 | O30 | candidates, cost/progress, retry/redo, selection/rollback and cache | complete |
 | O31 | nine-check finished-media automatic QC | complete |
-| O32 | version compare, brand/preferences, confirmed multi-spec delivery manifest | validation pending |
+| O32 | version compare, brand/preferences, confirmed multi-spec delivery manifest | complete |
 
 ## Deterministic acceptance coverage
 

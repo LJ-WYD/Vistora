@@ -339,12 +339,12 @@
     {
       "id": "O32",
       "original_summary": "完成多规格输出、版本比较、品牌包、偏好和完整交付",
-      "status": "in_progress",
-      "commits": [],
-      "remote_verified": false,
-      "implementation_paths": [],
-      "validation_evidence": [],
-      "remaining_scope": ["多规格输出", "项目版本比较", "品牌风格包", "用户偏好", "完整交付流程"]
+      "status": "complete",
+      "commits": ["2a354608c2aa0715186d969e1fe93aafad595662"],
+      "remote_verified": true,
+      "implementation_paths": ["src/delivery_workflow", "src/skills/video_export_variants.py", "src/product_entry", "src/timeline_preview/static/app.js", "V1_ACCEPTANCE.md", "README.md", "ARCHITECTURE.md"],
+      "validation_evidence": ["tests/test_delivery_workflow.py", "tests/test_multi_spec_export.py", "tests/test_delivery_qc.py", "tests/test_reference_workflow.py", "tests/test_product_entry.py", "tests/run_validation.py", "tests/product_visual_fixture.py", "scripts/validate_roadmap.py"],
+      "remaining_scope": []
     }
   ]
 }
