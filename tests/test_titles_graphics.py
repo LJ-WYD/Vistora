@@ -200,7 +200,7 @@ def test_graphic_gateway_requires_confirmation_validates_alpha_and_replays(
     _graphic(image, alpha=False)
     _graphic(sticker, alpha=True)
     registry = build_production_registry()
-    assert registry.reference.registry_revision == 13 and len(registry) == 43
+    assert registry.reference.registry_revision == 14 and len(registry) == 43
     descriptor = registry.descriptor("VideoInsertGraphicSkill")
     assert descriptor.preview_supported is True
     assert descriptor.transactionality == "atomic_project_state"

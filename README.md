@@ -608,9 +608,18 @@ current-time approximate overlay, safe SRT/WebVTT parsing/download, and a
 compact draft editor. Browser edits remain detached until structured diff
 and explicit confirmation, then use `VideoApplyManualEditsSkill` through the
 registry/gateway. Final `VideoExportSkill` can burn selected subtitle tracks
-through a generated, escaped ASS file and controlled logical-font fallback;
-temporary files are removed and FFmpeg export is authoritative. No arbitrary
-font path, filter, or script is accepted.
+through a generated, escaped ASS file and controlled logical-font fallback.
+Before ASS generation, a deterministic CJK-aware layout pass wraps text even
+when it contains no spaces, preserves explicit line breaks, and conservatively
+auto-fits the font within the configured horizontal margin and a bounded
+two-line title / three-line automatically wrapped subtitle policy. Explicit
+author line breaks remain semantic and are preserved separately. A cue that cannot fit fails before
+rendering instead of being clipped. Each export returns path-free per-cue
+layout evidence (effective font, line count, available width, maximum line
+width, and safe-area status); O32 passes that renderer-produced evidence to O31
+instead of trusting a caller-authored `passed` flag. Temporary files are
+removed and FFmpeg export is authoritative. No arbitrary font path, filter, or
+script is accepted.
 
 ASR/automatic word timing, translation, AI copy editing, karaoke highlighting,
 animated title templates, arbitrary graphic upload, and general motion graphics

@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from core.timeline import TimelineRenderer
 from core.timeline_manager import TimelineManager
-from subtitles import burn_subtitles
+from subtitles import analyze_subtitle_layout, burn_subtitles
 
 from .base import BaseSkill
 
@@ -122,7 +122,9 @@ class VideoExportVariantsSkill(BaseSkill):
         if selected_subtitle_ids - known_subtitle_ids:
             raise ValueError("Subtitle burn references an unknown track")
 
-        staged: list[tuple[VideoExportVariant, Path, tuple[str, ...]]] = []
+        staged: list[
+            tuple[VideoExportVariant, Path, tuple[str, ...], tuple[dict[str, Any], ...]]
+        ] = []
         committed: list[Path] = []
         temporary_paths: set[Path] = set()
         try:
@@ -149,7 +151,12 @@ class VideoExportVariantsSkill(BaseSkill):
                 )
                 renderer = TimelineRenderer(variant_timeline)
                 font_warnings: tuple[str, ...] = ()
+                subtitle_layout: tuple[dict[str, Any], ...] = ()
                 if params.subtitle_mode == "burn":
+                    subtitle_layout = analyze_subtitle_layout(
+                        variant_timeline,
+                        params.subtitle_track_ids,
+                    )
                     base_output = target.parent / (
                         f".vistora-export-base-{params.export_set_id}-"
                         f"{variant.variant_id}-{token}.mp4"
@@ -169,17 +176,24 @@ class VideoExportVariantsSkill(BaseSkill):
                 if not staged_output.is_file() or staged_output.stat().st_size <= 0:
                     raise RuntimeError("A staged export did not produce a valid file")
                 _fsync_file(staged_output)
-                staged.append((variant, staged_output, tuple(font_warnings)))
+                staged.append(
+                    (
+                        variant,
+                        staged_output,
+                        tuple(font_warnings),
+                        subtitle_layout,
+                    )
+                )
 
             # Hard-link publication is an atomic create-new operation and fails if a
             # concurrent writer created the destination after preflight.
-            for variant, staged_output, _ in staged:
+            for variant, staged_output, _, _ in staged:
                 target = Path(variant.output_path)
                 os.link(staged_output, target)
                 committed.append(target)
 
             outputs: list[dict[str, Any]] = []
-            for variant, staged_output, font_warnings in staged:
+            for variant, staged_output, font_warnings, subtitle_layout in staged:
                 target = Path(variant.output_path)
                 outputs.append(
                     {
@@ -191,6 +205,7 @@ class VideoExportVariantsSkill(BaseSkill):
                         "size_bytes": target.stat().st_size,
                         "sha256": _sha256(target),
                         "font_warnings": list(font_warnings),
+                        "subtitle_layout": list(subtitle_layout),
                     }
                 )
             return {

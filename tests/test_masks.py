@@ -200,7 +200,7 @@ def test_engine_mask_crud_copy_split_trim_and_lock() -> None:
 
 def test_registry_exposes_only_validated_mask_skills() -> None:
     registry = build_production_registry()
-    assert registry.reference.registry_revision == 13
+    assert registry.reference.registry_revision == 14
     assert len(registry) == 43
     for name in (
         "VideoSetClipMaskSkill",

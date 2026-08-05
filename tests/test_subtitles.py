@@ -57,6 +57,7 @@ from subtitles import (  # noqa: E402
     SubtitleEditError,
     SubtitleManageTrackInput,
     SubtitleRipplePolicy,
+    analyze_subtitle_layout,
     build_ass,
     burn_subtitles,
     export_subtitles,
@@ -289,7 +290,7 @@ def test_registry_gateway_requires_exact_confirmation_and_is_transactional(
     monkeypatch.setattr(timeline_manager, "PROJECT_FILE", str(project))
     monkeypatch.setattr(timeline_manager, "WORKSPACE_DIR", str(project.parent))
     registry = build_production_registry()
-    assert registry.reference.registry_revision == 13
+    assert registry.reference.registry_revision == 14
     descriptor = registry.descriptor("SubtitleEditCueSkill")
     assert descriptor.transactionality == "atomic_project_state"
     assert descriptor.preview_supported is True
@@ -539,3 +540,118 @@ def test_safe_ass_and_real_burn_in_are_deterministic_and_cleanup(tmp_path: Path)
     assert sum(abs(left - right) for left, right in zip(base_frame, burned_frame)) > 10_000
     assert not list(tmp_path.glob(".vistora-subtitles-*.ass"))
     assert not list(tmp_path.glob(".vistora-burn-*"))
+
+
+def _cjk_timeline() -> TimelineConfig:
+    style = SubtitleStyle(
+        font_size=52,
+        background_color="#000000B8",
+        outline_width=3,
+        safe_margin_x=0.10,
+        safe_margin_y=0.145,
+        bold=True,
+    )
+    cue = SubtitleCue(
+        cue_id="cue_cjk_market_risk",
+        start_seconds=0.1,
+        end_seconds=1.9,
+        text="标普五百和道指创下新高后高位震荡，纳指距纪录高点约百分之二。",
+        language="zh-CN",
+    )
+    return TimelineConfig(
+        width=540,
+        height=960,
+        fps=30,
+        tracks={
+            "video": TrackConfig(
+                id="video_cjk",
+                kind="video",
+                order=0,
+                clips=[ClipConfig(id="clip_cjk", source="source.mp4", trim_out=2)],
+            ),
+            "audio": TrackConfig(id="audio_cjk", kind="audio", order=1),
+        },
+        subtitle_tracks={
+            "captions": SubtitleTrackConfig(
+                track_id="track_cjk_captions",
+                kind="subtitle",
+                language="zh-CN",
+                order=0,
+                style=style,
+                cues=(cue,),
+            )
+        },
+    )
+
+
+def test_cjk_without_spaces_is_auto_fitted_and_renderer_evidence_is_safe() -> None:
+    timeline = _cjk_timeline()
+    first = analyze_subtitle_layout(timeline, ("track_cjk_captions",))
+    second = analyze_subtitle_layout(timeline, ("track_cjk_captions",))
+    assert first == second and len(first) == 1
+    evidence = first[0]
+    assert evidence["safe_area_status"] == "passed"
+    assert 2 <= evidence["line_count"] <= 3
+    assert "\n" in evidence["rendered_text"]
+    assert evidence["rendered_font_size"] < evidence["original_font_size"]
+    assert evidence["maximum_line_width_px"] <= evidence["available_width_px"]
+    ass, warnings = build_ass(timeline, ("track_cjk_captions",))
+    assert r"\N" in ass
+    assert any("auto-fitted" in warning for warning in warnings)
+
+
+def test_explicit_author_line_breaks_remain_compatible_with_width_gate() -> None:
+    timeline = _cjk_timeline()
+    track = timeline.subtitle_tracks["captions"].model_copy(update={
+        "language": "en",
+        "style": SubtitleStyle(font_size=42, safe_margin_x=0.05),
+        "cues": (
+            SubtitleCue(
+                cue_id="cue_explicit_breaks",
+                start_seconds=0.1,
+                end_seconds=1.9,
+                text="Confirmed subtitle flow\nConfirmed subtitle flow",
+                language="en",
+            ),
+        ),
+    })
+    timeline = timeline.model_copy(update={
+        "width": 320,
+        "height": 180,
+        "subtitle_tracks": {"captions": track},
+    })
+    evidence = analyze_subtitle_layout(timeline, ("track_cjk_captions",))[0]
+    assert evidence["safe_area_status"] == "passed"
+    assert 2 <= evidence["line_count"] <= 4
+    assert evidence["rendered_text"].count("\n") >= 1
+    assert evidence["maximum_line_width_px"] <= evidence["available_width_px"]
+
+
+def test_real_cjk_burn_stays_inside_horizontal_safe_area(tmp_path: Path) -> None:
+    source = tmp_path / "cjk-base.mp4"
+    burned = tmp_path / "cjk-burned.mp4"
+    subprocess.run([
+        "ffmpeg", "-nostdin", "-y", "-loglevel", "error",
+        "-f", "lavfi", "-i", "color=c=black:s=540x960:d=2:r=30",
+        "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(source),
+    ], check=True, timeout=60)
+    timeline = _cjk_timeline()
+    burn_subtitles(str(source), str(burned), timeline, ("track_cjk_captions",))
+
+    def rgb_frame(path: Path) -> bytes:
+        return subprocess.run([
+            "ffmpeg", "-nostdin", "-v", "error", "-ss", "0.5", "-i", str(path),
+            "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
+        ], check=True, capture_output=True, timeout=30).stdout
+
+    before = rgb_frame(source)
+    after = rgb_frame(burned)
+    changed_x = []
+    for pixel in range(540 * 960):
+        offset = pixel * 3
+        if max(abs(after[offset + channel] - before[offset + channel]) for channel in range(3)) > 20:
+            changed_x.append(pixel % 540)
+    assert changed_x
+    margin = round(540 * timeline.subtitle_tracks["captions"].style.safe_margin_x)
+    assert min(changed_x) >= margin - 8
+    assert max(changed_x) <= 539 - margin + 8

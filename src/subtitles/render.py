@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import subprocess
+import unicodedata
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from core.timeline import SubtitleStyle, SubtitleTrackConfig, TimelineConfig
 
@@ -17,11 +21,165 @@ class SubtitleRenderError(ValueError):
     pass
 
 
+@dataclass(frozen=True)
+class SubtitleCueLayout:
+    """Deterministic, path-free layout evidence for one rendered cue."""
+
+    track_id: str
+    cue_id: str
+    start_seconds: float
+    end_seconds: float
+    source_text: str
+    rendered_text: str
+    original_font_size: int
+    rendered_font_size: int
+    line_count: int
+    available_width_px: float
+    maximum_line_width_px: float
+    safe_area_status: str = "passed"
+
+    def public_dict(self) -> dict[str, Any]:
+        return {
+            "track_id": self.track_id,
+            "cue_id": self.cue_id,
+            "start_seconds": self.start_seconds,
+            "end_seconds": self.end_seconds,
+            "text": self.source_text,
+            "rendered_text": self.rendered_text,
+            "original_font_size": self.original_font_size,
+            "rendered_font_size": self.rendered_font_size,
+            "line_count": self.line_count,
+            "available_width_px": round(self.available_width_px, 3),
+            "maximum_line_width_px": round(self.maximum_line_width_px, 3),
+            "safe_area_status": self.safe_area_status,
+        }
+
+
 _FONT_NAMES = {
     "sans": ("Arial", "DejaVu Sans"),
     "serif": ("Times New Roman", "DejaVu Serif"),
     "monospace": ("Consolas", "DejaVu Sans Mono"),
 }
+
+_BREAK_AFTER = frozenset(" \t，。！？；：、,.!?;:)]}）》】…—")
+_OPENING_PUNCTUATION = frozenset("([{（《【“‘")
+_CLOSING_PUNCTUATION = frozenset(")]}），。！？；：、》】”’…")
+
+
+def _estimated_glyph_width(character: str, font_size: int) -> float:
+    """Conservative deterministic width estimate used only for safe wrapping."""
+
+    if unicodedata.combining(character):
+        return 0.0
+    if character == "\t":
+        return font_size * 1.4
+    if character.isspace():
+        return font_size * 0.38
+    east_asian_width = unicodedata.east_asian_width(character)
+    if east_asian_width in {"W", "F", "A"}:
+        return font_size * 1.04
+    if character.isascii():
+        if character in "MW@#%&":
+            return font_size * 0.92
+        if character.isupper() or character.isdigit():
+            return font_size * 0.72
+        if character.islower():
+            return font_size * 0.62
+        return font_size * 0.52
+    return font_size * 0.92
+
+
+def _estimated_line_width(value: str, font_size: int) -> float:
+    return sum(_estimated_glyph_width(character, font_size) for character in value)
+
+
+def _wrap_paragraph(value: str, font_size: int, maximum_width: float) -> tuple[str, ...]:
+    remaining = value.strip()
+    if not remaining:
+        return ("",)
+    lines: list[str] = []
+    while remaining:
+        consumed = 0
+        width = 0.0
+        last_break = 0
+        for index, character in enumerate(remaining):
+            next_width = width + _estimated_glyph_width(character, font_size)
+            if next_width > maximum_width + 1e-6:
+                break
+            width = next_width
+            consumed = index + 1
+            if character in _BREAK_AFTER:
+                last_break = consumed
+        else:
+            lines.append(remaining.rstrip())
+            break
+        if consumed == 0:
+            raise SubtitleRenderError("A subtitle glyph cannot fit inside the configured safe area")
+        cut = last_break if last_break and consumed - last_break <= 4 else consumed
+        if cut < len(remaining) and remaining[cut] in _CLOSING_PUNCTUATION and cut > 1:
+            cut -= 1
+        while cut > 1 and remaining[cut - 1] in _OPENING_PUNCTUATION:
+            cut -= 1
+        line = remaining[:cut].rstrip()
+        if not line:
+            line = remaining[:consumed]
+            cut = consumed
+        lines.append(line)
+        remaining = remaining[cut:].lstrip()
+    return tuple(lines)
+
+
+def _wrap_text(value: str, font_size: int, maximum_width: float) -> tuple[str, ...]:
+    lines: list[str] = []
+    for paragraph in value.split("\n"):
+        lines.extend(_wrap_paragraph(paragraph, font_size, maximum_width))
+    return tuple(lines)
+
+
+def _layout_cue(timeline: TimelineConfig, track: SubtitleTrackConfig, cue) -> tuple[SubtitleStyle, SubtitleCueLayout]:
+    base_style = cue.style or track.style
+    horizontal_margin = round(timeline.width * base_style.safe_margin_x)
+    outline_allowance = 2 * (math.ceil(base_style.outline_width) + 2)
+    available_width = timeline.width - (2 * horizontal_margin) - outline_allowance
+    if available_width <= 1:
+        raise SubtitleRenderError("Subtitle safe margins leave no usable horizontal area")
+    automatic_line_limit = 3 if track.kind == "subtitle" or cue.cue_kind == "subtitle" else 2
+    # Explicit author line breaks are semantic and must survive legacy
+    # split/merge workflows. They extend the cap without weakening the width gate.
+    maximum_lines = min(6, automatic_line_limit + cue.text.count("\n"))
+    minimum_font_size = max(8, math.floor(base_style.font_size * 0.60))
+    best: tuple[SubtitleStyle, SubtitleCueLayout] | None = None
+    for font_size in range(base_style.font_size, minimum_font_size - 1, -1):
+        lines = _wrap_text(cue.text, font_size, available_width)
+        maximum_line_width = max((_estimated_line_width(line, font_size) for line in lines), default=0.0)
+        if len(lines) <= maximum_lines and maximum_line_width <= available_width + 1e-6:
+            effective_style = (
+                base_style
+                if font_size == base_style.font_size
+                else base_style.model_copy(update={"font_size": font_size})
+            )
+            candidate = effective_style, SubtitleCueLayout(
+                track_id=track.track_id,
+                cue_id=cue.cue_id,
+                start_seconds=cue.start_seconds,
+                end_seconds=cue.end_seconds,
+                source_text=cue.text,
+                rendered_text="\n".join(lines),
+                original_font_size=base_style.font_size,
+                rendered_font_size=font_size,
+                line_count=len(lines),
+                available_width_px=available_width,
+                maximum_line_width_px=maximum_line_width,
+            )
+            if best is None or candidate[1].line_count < best[1].line_count:
+                best = candidate
+            if candidate[1].line_count == 1:
+                break
+    if best is not None:
+        return best
+    raise SubtitleRenderError(
+        f"Subtitle cue {cue.cue_id} cannot fit the configured safe area in {maximum_lines} lines"
+    )
 
 
 def _font_exists(name: str) -> bool:
@@ -86,7 +244,10 @@ def _alignment(style: SubtitleStyle) -> int:
     return columns[style.alignment] + rows[style.position]
 
 
-def build_ass(timeline: TimelineConfig, track_ids: tuple[str, ...] = ()) -> tuple[str, tuple[str, ...]]:
+def _selected_tracks(
+    timeline: TimelineConfig,
+    track_ids: tuple[str, ...],
+) -> tuple[SubtitleTrackConfig, ...]:
     selected = set(track_ids)
     tracks = tuple(sorted(
         (
@@ -100,20 +261,52 @@ def build_ass(timeline: TimelineConfig, track_ids: tuple[str, ...] = ()) -> tupl
         raise SubtitleRenderError("Subtitle burn references an unknown track")
     if not tracks or not any(cue.enabled for track in tracks for cue in track.cues):
         raise SubtitleRenderError("Subtitle burn requires an enabled cue")
+    return tracks
+
+
+def _prepared_events(
+    timeline: TimelineConfig,
+    tracks: tuple[SubtitleTrackConfig, ...],
+) -> tuple[tuple[SubtitleTrackConfig, object, SubtitleStyle, SubtitleCueLayout], ...]:
+    return tuple(
+        (track, cue, *_layout_cue(timeline, track, cue))
+        for track in tracks
+        for cue in track.cues
+        if cue.enabled
+    )
+
+
+def analyze_subtitle_layout(
+    timeline: TimelineConfig,
+    track_ids: tuple[str, ...] = (),
+) -> tuple[dict[str, Any], ...]:
+    """Return renderer-produced, path-free safe-area evidence for every cue."""
+
+    tracks = _selected_tracks(timeline, track_ids)
+    return tuple(
+        layout.public_dict()
+        for _, _, _, layout in _prepared_events(timeline, tracks)
+    )
+
+
+def build_ass(timeline: TimelineConfig, track_ids: tuple[str, ...] = ()) -> tuple[str, tuple[str, ...]]:
+    tracks = _selected_tracks(timeline, track_ids)
+    prepared = _prepared_events(timeline, tracks)
     style_by_digest: dict[str, tuple[str, SubtitleStyle, str]] = {}
     warnings: list[str] = []
-    for track in tracks:
-        for cue in track.cues:
-            if not cue.enabled:
-                continue
-            style = cue.style or track.style
-            payload = style.model_dump_json()
-            digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
-            if digest not in style_by_digest:
-                font, fallback = resolve_font(style)
-                style_by_digest[digest] = (f"Style_{digest}", style, font)
-                if fallback:
-                    warnings.append(f"Logical font {style.font_family} used deterministic fallback {font}.")
+    for _, _, style, layout in prepared:
+        payload = style.model_dump_json()
+        digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+        if digest not in style_by_digest:
+            font, fallback = resolve_font(style)
+            style_by_digest[digest] = (f"Style_{digest}", style, font)
+            if fallback:
+                warnings.append(f"Logical font {style.font_family} used deterministic fallback {font}.")
+        if layout.rendered_font_size != layout.original_font_size:
+            warnings.append(
+                f"Cue {layout.cue_id} was auto-fitted from {layout.original_font_size}px "
+                f"to {layout.rendered_font_size}px for {layout.line_count} safe lines."
+            )
     header = (
         "[Script Info]\nScriptType: v4.00+\nWrapStyle: 0\nScaledBorderAndShadow: yes\n"
         f"PlayResX: {timeline.width}\nPlayResY: {timeline.height}\n\n"
@@ -136,17 +329,13 @@ def build_ass(timeline: TimelineConfig, track_ids: tuple[str, ...] = ()) -> tupl
         )
     events = "\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     dialogue: list[str] = []
-    for track in tracks:
-        for cue in track.cues:
-            if not cue.enabled:
-                continue
-            style = cue.style or track.style
-            digest = hashlib.sha256(style.model_dump_json().encode("utf-8")).hexdigest()[:12]
-            style_name = style_by_digest[digest][0]
-            speaker = (cue.speaker or "").replace(",", " ")
-            dialogue.append(
-                f"Dialogue: {track.order},{_ass_time(cue.start_seconds)},{_ass_time(cue.end_seconds)},{style_name},{speaker},0,0,0,,{_ass_text(cue.text)}"
-            )
+    for track, cue, style, layout in prepared:
+        digest = hashlib.sha256(style.model_dump_json().encode("utf-8")).hexdigest()[:12]
+        style_name = style_by_digest[digest][0]
+        speaker = (cue.speaker or "").replace(",", " ")
+        dialogue.append(
+            f"Dialogue: {track.order},{_ass_time(cue.start_seconds)},{_ass_time(cue.end_seconds)},{style_name},{speaker},0,0,0,,{_ass_text(layout.rendered_text)}"
+        )
     return header + "\n".join(style_lines) + events + "\n".join(dialogue) + "\n", tuple(sorted(set(warnings)))
 
 

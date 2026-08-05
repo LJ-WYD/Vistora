@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from contracts import DirectorOperation, DirectorPlan
-from delivery_qc import DeliveryQCRequest, DeliveryQCService
+from delivery_qc import DeliveryQCRequest, DeliveryQCService, QCSubtitleCueEvidence
 from director import digest_json
 from plan_review import (
     PlanDiffRequest,
@@ -165,6 +165,23 @@ class DeliveryWorkflowService:
             reported = result_items[variant.variant_id]
             if reported.get("sha256") != content_digest or reported.get("size_bytes") != path.stat().st_size:
                 raise DeliveryWorkflowError("Delivery output digest or size drifted")
+            layout_items = reported.get("subtitle_layout", [])
+            if not isinstance(layout_items, list):
+                raise DeliveryWorkflowError("Delivery subtitle layout evidence is malformed")
+            if plan.subtitle_track_ids and not layout_items:
+                raise DeliveryWorkflowError("Delivery subtitle layout evidence is missing")
+            subtitle_cues = []
+            for layout in layout_items:
+                if not isinstance(layout, dict) or layout.get("safe_area_status") != "passed":
+                    raise DeliveryWorkflowError("Delivery subtitle layout did not pass the renderer safe-area gate")
+                subtitle_cues.append(QCSubtitleCueEvidence(
+                    cue_id=f"{layout['track_id']}:{layout['cue_id']}",
+                    start_seconds=layout["start_seconds"],
+                    end_seconds=layout["end_seconds"],
+                    text=layout["rendered_text"],
+                    safe_area_status="passed",
+                ))
+            subtitle_cues = tuple(sorted(subtitle_cues, key=lambda item: item.cue_id))
             qc = DeliveryQCService(allowlisted_roots=(path.parent,)).analyze(
                 DeliveryQCRequest(
                     request_id=f"qc_request_{plan.delivery_plan_id}_{variant.variant_id}",
@@ -173,6 +190,7 @@ class DeliveryWorkflowService:
                     asset_id=f"delivery_asset_{plan.delivery_plan_id}_{variant.variant_id}",
                     expected_content_digest=content_digest,
                     profile=variant.qc_profile,
+                    subtitle_cues=subtitle_cues,
                 ), source_path=path,
             )
             items.append(DeliveryManifestItem(

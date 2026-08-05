@@ -77,6 +77,21 @@ class _Result(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class SubtitleLayoutResult(_Result):
+    track_id: str
+    cue_id: str
+    start_seconds: float
+    end_seconds: float
+    text: str
+    rendered_text: str
+    original_font_size: int
+    rendered_font_size: int
+    line_count: int
+    available_width_px: float
+    maximum_line_width_px: float
+    safe_area_status: Literal["passed"]
+
+
 class AddClipResult(_Result):
     status: str
     message: str
@@ -99,6 +114,7 @@ class ExportResult(_Result):
     subtitle_mode: str = "none"
     subtitle_track_ids: list[str] = []
     font_warnings: list[str] = []
+    subtitle_layout: list[SubtitleLayoutResult] = []
 
 
 class ExportVariantResult(_Result):
@@ -110,6 +126,7 @@ class ExportVariantResult(_Result):
     size_bytes: int
     sha256: str
     font_warnings: list[str] = []
+    subtitle_layout: list[SubtitleLayoutResult] = []
 
 
 class ExportVariantsResult(_Result):
@@ -292,7 +309,7 @@ def build_production_registry(
     )
     return AtomicSkillRegistry(
         registry_id="registry_atomic_skills",
-        registry_revision=13,
+        registry_revision=14,
         entries=(
             _entry(
                 VideoAddClipSkill(),

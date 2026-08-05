@@ -12,13 +12,21 @@ from .models import (
     SubtitleManageTrackInput,
     SubtitleRipplePolicy,
 )
-from .render import SubtitleRenderError, build_ass, burn_subtitles, export_sidecar
+from .render import (
+    SubtitleCueLayout,
+    SubtitleRenderError,
+    analyze_subtitle_layout,
+    build_ass,
+    burn_subtitles,
+    export_sidecar,
+)
 from .transaction import SubtitleEditTransaction
 
 __all__ = [
     "SubtitleCodecError", "SubtitleEditCueInput", "SubtitleEditEngine", "SubtitleEditError",
     "SubtitleEditOutcome", "SubtitleEditTransaction", "SubtitleExportInput", "SubtitleImportInput",
-    "SubtitleManageTrackInput", "SubtitleRenderError", "SubtitleRipplePolicy", "build_ass",
+    "SubtitleCueLayout", "SubtitleManageTrackInput", "SubtitleRenderError", "SubtitleRipplePolicy",
+    "analyze_subtitle_layout", "build_ass",
     "SubtitleCue", "SubtitleStyle", "SubtitleTrackConfig", "SubtitleWord", "burn_subtitles", "export_sidecar",
     "export_subtitles", "load_subtitles", "parse_subtitles",
 ]

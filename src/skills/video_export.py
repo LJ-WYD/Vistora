@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .base import BaseSkill
 from core.timeline_manager import TimelineManager
 from core.timeline import TimelineRenderer
-from subtitles import burn_subtitles
+from subtitles import analyze_subtitle_layout, burn_subtitles
 
 class VideoExportInput(BaseModel):
     """导出合成视频的输入契约"""
@@ -53,7 +53,12 @@ class VideoExportSkill(BaseSkill):
         # 使用 TimelineRenderer 引擎进行渲染
         renderer = TimelineRenderer(timeline)
         font_warnings: tuple[str, ...] = ()
+        subtitle_layout: tuple[dict[str, Any], ...] = ()
         if params.subtitle_mode == "burn":
+            subtitle_layout = analyze_subtitle_layout(
+                timeline,
+                params.subtitle_track_ids,
+            )
             target = Path(params.output_path)
             base_output = target.parent / (
                 f".vistora-base-{uuid.uuid4().hex}{target.suffix or '.mp4'}"
@@ -83,4 +88,5 @@ class VideoExportSkill(BaseSkill):
             "subtitle_mode": params.subtitle_mode,
             "subtitle_track_ids": list(params.subtitle_track_ids),
             "font_warnings": list(font_warnings),
+            "subtitle_layout": list(subtitle_layout),
         }
