@@ -4,7 +4,7 @@
   "roadmap_id": "vistora-original-optimization-o1-o32",
   "roadmap_digest": "sha256:143850f88a50bf6b43137723cff42c4f1f9132b2a12cceda369c659db5c5d618",
   "definitions_source": "ROADMAP.md",
-  "updated_at": "2026-08-05T09:29:57Z",
+  "updated_at": "2026-08-05T09:56:32Z",
   "change_requests": [
     {
       "change_request_id": "change_request_initial_authoritative_import_20260805",
@@ -279,12 +279,12 @@
     {
       "id": "O26",
       "original_summary": "新增缺素材反馈循环",
-      "status": "in_progress",
-      "commits": [],
-      "remote_verified": false,
-      "implementation_paths": [],
-      "validation_evidence": [],
-      "remaining_scope": ["审阅或剪辑缺素材检测", "返回 Director 生成补素材需求", "重新进入规划与生产", "可恢复闭环"]
+      "status": "complete",
+      "commits": ["24a58284b8a04943c554519a5dba04ef76e90a9c"],
+      "remote_verified": true,
+      "implementation_paths": ["src/material_feedback", "src/director/models.py", "src/agent/director_agent.py", "src/product_entry", "src/timeline_preview/static/app.js"],
+      "validation_evidence": ["tests/test_material_feedback.py", "tests/test_material_requirements.py", "tests/test_reference_workflow.py", "tests/product_visual_fixture.py", "305 pytest tests", "legacy synthetic render and ffprobe", "desktop and 390px loopback browser regression"],
+      "remaining_scope": []
     },
     {
       "id": "O27",
