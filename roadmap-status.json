@@ -329,7 +329,7 @@
     {
       "id": "O31",
       "original_summary": "新增成片自动质检",
-      "status": "missing",
+      "status": "in_progress",
       "commits": [],
       "remote_verified": false,
       "implementation_paths": [],

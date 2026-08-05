@@ -60,6 +60,12 @@ from director import (  # noqa: E402
     RequirementConstraint,
     digest_json,
 )
+from delivery_qc import (  # noqa: E402
+    DeliveryQCProfile,
+    DeliveryQCReport,
+    DeliveryQCRequest,
+    DeliveryQCService,
+)
 from material_requirements import (  # noqa: E402
     MaterialRequirementsService,
     MaterialRequirementsStore,
@@ -155,6 +161,7 @@ class ReferenceWorkflowReport:
     rollback_run: RollbackRunRecord
     timeline_restored: bool
     output_metadata: dict[str, Any]
+    delivery_qc_report: DeliveryQCReport
     timeline_state_removed: bool
     no_material_chain: dict[str, Any]
     material_feedback_chain: dict[str, Any]
@@ -193,6 +200,8 @@ class ReferenceWorkflowReport:
             "workflow_integrity_digest": (
                 self.workflow_ledger.integrity_digest
             ),
+            "delivery_qc_status": self.delivery_qc_report.status,
+            "delivery_qc_digest": self.delivery_qc_report.report_digest,
             "rollback_proposal_digest": self.rollback_proposal.digest(),
             "rollback_status": self.rollback_run.status,
             "timeline_restored": self.timeline_restored,
@@ -1459,6 +1468,29 @@ def run_reference_workflow(
             requests = tuple(step.request for step in execution_run.steps)
             results = tuple(step.result for step in execution_run.steps)
             output_metadata = _verify_output(output_path)
+            output_file = Path(output_path)
+            qc_source_digest = "sha256:" + hashlib.sha256(
+                output_file.read_bytes()
+            ).hexdigest()
+            delivery_qc_report = DeliveryQCService(
+                allowlisted_roots=(output_file.parent,)
+            ).analyze(
+                DeliveryQCRequest(
+                    request_id="qc_request_reference_delivery",
+                    project_id=execution_run.project_id,
+                    project_revision=execution_run.latest_checkpoint.project_revision,
+                    asset_id="delivery_asset_reference_output",
+                    expected_content_digest=qc_source_digest,
+                    profile=DeliveryQCProfile(
+                        profile_id="qc_profile_reference_delivery",
+                        expected_width=320,
+                        expected_height=180,
+                        require_audio=False,
+                        minimum_audio_streams=0,
+                    ),
+                ),
+                source_path=output_file,
+            )
             timeline_state_removed = not project_file.exists()
             trace_document = TraceabilityStore.load()
             final_snapshot = TimelineSnapshotService.snapshot_current()
@@ -1511,6 +1543,7 @@ def run_reference_workflow(
             rollback_run=rollback_run,
             timeline_restored=timeline_restored,
             output_metadata=output_metadata,
+            delivery_qc_report=delivery_qc_report,
             timeline_state_removed=timeline_state_removed,
             no_material_chain=no_material_chain,
             material_feedback_chain=material_feedback_chain,

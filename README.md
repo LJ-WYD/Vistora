@@ -354,6 +354,35 @@ not claim to delete an external artifact or reverse a timeline edit. Timeline
 fillback remains the separate O29 Director review → confirmation → EditingAgent
 → registered-tool path. Production still has no configured online AI provider.
 
+## Finished-media automatic QC (O31)
+
+`src/delivery_qc/` provides a strict, frozen `1.0.0` profile/request/report
+boundary for a finished export. The read-only analyzer binds an opaque asset
+ID, exact project revision, source SHA-256 and profile, then uses argument-list
+FFprobe/FFmpeg calls to verify duration, frame dimensions/aspect evidence,
+allowed video/audio codecs, audio stream count, threshold-length black and
+static/freeze intervals, integrated LUFS/true peak, subtitle presence/timing/
+safe-area evidence, and complete decoding of every encoded stream. Reports are
+deterministically ordered, self-digesting, cached by exact request and content,
+and contain no filesystem path or FFmpeg command.
+
+Run QC only against an explicitly allowlisted local root:
+
+```powershell
+python src/main.py qc --input path\to\finished.mp4 `
+  --media-root path\to\allowed\delivery `
+  --asset-id delivery_asset_review `
+  --expected-width 1920 --expected-height 1080
+```
+
+Black/freeze intervals and out-of-target loudness are review warnings unless a
+backend check fails; duration, required streams, codec/frame mismatch,
+subtitle contract failure, content drift, and incomplete decode fail closed.
+Burned-in subtitle visual correctness cannot be inferred from an encoded
+stream alone, so safe-area validation must be supplied as explicit cue
+evidence from the existing subtitle review/render path. QC never mutates the
+timeline or the delivery file.
+
 `src/plan_review/` provides strict version `1.0.0` contracts and a deterministic read-only diff engine for the period before confirmation. A `PlanDiffRequest` binds an exact timeline snapshot ID/revision/digest, Director plan ID/version/digest, non-executable proposed execution-plan digest, and the exact registered tool-schema set. The engine validates proposed arguments with the current registry schemas, simulates supported semantics on detached clip data, and returns stable before/after changes, source-evidence links, provenance summaries, warnings, and net counts. Repeating the same request produces the same document and digest; snapshot or registry drift requires regeneration.
 
 The current semantic adapters cover non-reverse legacy video add (with supplied

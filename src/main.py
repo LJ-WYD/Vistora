@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -178,6 +179,58 @@ def production_studio(
     )
 
 
+def quality_check(
+    source_path: str,
+    media_roots: list[str],
+    *,
+    asset_id: str,
+    expected_width: int | None,
+    expected_height: int | None,
+) -> None:
+    """Run the read-only, browser-safe O31 finished-media QC boundary."""
+
+    from delivery_qc import (
+        DeliveryQCError,
+        DeliveryQCProfile,
+        DeliveryQCRequest,
+        DeliveryQCService,
+    )
+
+    if not media_roots:
+        raise SystemExit("qc requires at least one explicit --media-root")
+    try:
+        digest = hashlib.sha256()
+        with open(source_path, "rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+        request = DeliveryQCRequest(
+            request_id=f"qc_request_{uuid.uuid4().hex}",
+            project_id="project_cli_qc",
+            project_revision=0,
+            asset_id=asset_id,
+            expected_content_digest="sha256:" + digest.hexdigest(),
+            profile=DeliveryQCProfile(
+                profile_id="qc_profile_cli_default",
+                expected_width=expected_width,
+                expected_height=expected_height,
+            ),
+        )
+        report = DeliveryQCService(allowlisted_roots=media_roots).analyze(
+            request, source_path=source_path
+        )
+    except (OSError, ValueError, DeliveryQCError):
+        print(json.dumps({
+            "schema_name": "vistora.cli.qc-error",
+            "schema_version": "1.0.0",
+            "status": "failed",
+            "error": {"code": "delivery_qc_failed", "message": "Finished-media QC failed without exposing a filesystem path."},
+        }, ensure_ascii=False), file=sys.stderr)
+        raise SystemExit(1)
+    print(report.model_dump_json(indent=2))
+    if report.status == "failed":
+        raise SystemExit(2)
+
+
 def _add_server_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--media-root",
@@ -240,6 +293,16 @@ def main() -> None:
     )
     _add_server_arguments(studio)
 
+    qc = commands.add_parser(
+        "qc",
+        help="Run read-only automatic finished-media quality checks.",
+    )
+    qc.add_argument("--input", required=True)
+    qc.add_argument("--media-root", action="append", default=[], required=True)
+    qc.add_argument("--asset-id", default="delivery_asset_cli")
+    qc.add_argument("--expected-width", type=int)
+    qc.add_argument("--expected-height", type=int)
+
     args = parser.parse_args()
     if args.command == "list-skills":
         list_skills()
@@ -264,6 +327,14 @@ def main() -> None:
             args.host,
             args.port,
             args.session_id,
+        )
+    elif args.command == "qc":
+        quality_check(
+            args.input,
+            args.media_root,
+            asset_id=args.asset_id,
+            expected_width=args.expected_width,
+            expected_height=args.expected_height,
         )
     else:
         parser.print_help()

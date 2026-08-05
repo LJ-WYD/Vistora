@@ -248,6 +248,20 @@ def build_current_product_entry(
         effect_job_provider=lambda: EffectJobLifecycleService.project_view(
             effect_job_store.load(project_id=initial.project_id)
         ).model_dump(mode="json"),
+        delivery_qc_provider=lambda: {
+            "schema_name": "vistora.delivery-qc-product-view",
+            "schema_version": "1.0.0",
+            "status": "not_run",
+            "checks": (
+                "duration", "frame_size", "codec", "audio_tracks",
+                "black_frames", "freeze_frames", "loudness", "subtitles",
+                "full_decode",
+            ),
+            "message": (
+                "Run the read-only qc command against an allowlisted finished export; "
+                "no delivery has been inspected in this session."
+            ),
+        },
     )
 
 

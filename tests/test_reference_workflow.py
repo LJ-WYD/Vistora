@@ -114,6 +114,16 @@ def test_reference_main_workflow_is_traceable_and_repeatable() -> None:
     assert first.output_metadata["frame_rate"] == "30/1"
     assert first.output_metadata["audio_stream_count"] == 0
     assert abs(first.output_metadata["duration_seconds"] - 1.25) <= 0.08
+    assert first.delivery_qc_report == second.delivery_qc_report
+    assert first.delivery_qc_report.status in {"passed", "warning"}
+    assert {item.check_id for item in first.delivery_qc_report.checks} == {
+        "audio_tracks", "black_frames", "codec", "duration", "frame_size",
+        "freeze_frames", "full_decode", "loudness", "subtitles",
+    }
+    assert next(
+        item for item in first.delivery_qc_report.checks
+        if item.check_id == "full_decode"
+    ).status == "passed"
     assert first.timeline_state_removed is True
     assert first.trace_document == second.trace_document
     assert first.workflow_ledger == second.workflow_ledger

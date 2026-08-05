@@ -663,6 +663,18 @@ def _view(state: str) -> ProductEntryView:
             "selections": [],
             "cache_entries": [],
         },
+        delivery_qc={
+            "schema_name": "vistora.delivery-qc-product-view",
+            "schema_version": "1.0.0",
+            "status": "warning",
+            "message": "Finished export decoded completely; one static interval needs review.",
+            "checks": [
+                {"check_id": "duration", "status": "passed", "message": "Duration matches."},
+                {"check_id": "frame_size", "status": "passed", "message": "1920x1080."},
+                {"check_id": "freeze_frames", "status": "warning", "message": "One interval detected."},
+                {"check_id": "full_decode", "status": "passed", "message": "Complete decode passed."},
+            ],
+        },
         latest_result={"status": state},
         allowed_actions=allowed,
     )

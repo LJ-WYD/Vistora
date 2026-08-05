@@ -1237,3 +1237,23 @@ same confirmed execution request, task and bounded redo scope. Candidate
 selection and rollback are audit decisions, not timeline mutation or external
 artifact deletion. Human acceptance still must enter O29 and then the ordinary
 review, immutable confirmation, EditingAgent and registered atomic-tool chain.
+
+### Original O31 finished-media QC
+
+`delivery_qc` is a read-only post-render analysis boundary. A versioned profile
+and request bind the opaque delivery asset, exact project revision, content
+SHA-256, expected duration/frame/audio/codec constraints, black/freeze
+thresholds, loudness/peak targets, and optional subtitle cue evidence. The
+service resolves its private input path only inside explicit allowlisted roots
+and invokes FFprobe/FFmpeg with fixed argument lists. It returns nine stable
+checks: duration, frame size/aspect evidence, codecs, audio tracks, black
+frames, freeze frames, loudness/true peak, subtitles, and complete decode.
+
+The result is frozen, self-digesting, deterministic for the same content and
+profile, cached in bounded memory, and browser-safe. Backend diagnostics and
+paths are redacted. This module imports no timeline manager, renderer,
+EditingAgent, registry gateway or mutation skill; it cannot repair a failure.
+Black/freeze detection is threshold-based, and burned subtitle safe-area
+correctness depends on explicit evidence produced by the subtitle review path.
+The deterministic main reference applies O31 QC to its confirmed export before
+workflow rollback.

@@ -1018,6 +1018,24 @@ function renderProduct() {
       ),
     );
   }
+  if (view.delivery_qc) {
+    const qc = view.delivery_qc;
+    ui.productSummary.append(
+      workflowEvent(
+        "Finished-media automatic QC",
+        qc.status,
+        [
+          qc.message,
+          ...(qc.checks || []).map((item) =>
+            typeof item === "string"
+              ? item
+              : `${item.check_id}: ${item.status} · ${item.message}`,
+          ),
+          "QC is read-only and never changes the timeline or delivery asset.",
+        ],
+      ),
+    );
+  }
   ui.productActions.replaceChildren();
   for (const action of view.allowed_actions) {
     if (action === "director_turn") {
