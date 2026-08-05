@@ -473,7 +473,7 @@ separate first-class subtitle domain:
 
 `src/timeline_query/` is the stable library boundary for future timeline/player visualization. `TimelineSnapshotService.snapshot` accepts a `TimelineConfig`, legacy timeline dictionary, or `TimelineProjectDocument`; `snapshot_current` delegates only to `TimelineManager.get_current_timeline`. Neither method saves, resets, renders, executes a skill, probes media, or writes files.
 
-The returned `vistora.timeline-snapshot` schema is version `10.0.0`. Its frozen, recursively detached read models expose:
+The returned `vistora.timeline-snapshot` schema is version `11.0.0`. Its frozen, recursively detached read models expose:
 
 - snapshot, project, revision, source-schema, migration, and timeline-digest identity;
 - output width, height, and frame rate;
@@ -844,7 +844,7 @@ Mutation-capable utilities and core objects are implementation details behind to
 | G-03 | Operator combines incompatible roles | `OperatorAgent` owns dialogue, planning, and execution. | Separate/retire the hybrid behind Director and Editing contracts. |
 | G-06 | Direct CLI render bypass | `render` instantiates `TimelineRenderer` directly. | Route mutations through an explicit atomic tool or clearly isolated maintenance interface. |
 | G-07 | Canonical timeline persistence remains legacy | Workflow checkpoints and confirmed restore add guarded history/recovery, but the canonical timeline is still one legacy JSON file with content-derived snapshot identity. | Introduce a first-class versioned project store only in a separately approved migration. |
-| G-11 | Professional controls remain intentionally bounded | The loopback UI provides arbitrary video/audio lanes, first-class subtitle/text lanes, track/link state, thumbnails/waveforms/subtitle overlay, confirmed exact-ID edits, bounded audio mixing, SRT/WebVTT import/export/burn-in, bounded clip transform/basic SDR color, first-version exact-cut primary-video/audio transitions, fixed-interpolation visual keyframes, and bounded rectangle/ellipse/convex-polygon masks. Insert/overwrite remains available through structured Director plans. | Add ASR/transcription, translation, automatic tracking, LUT/secondary/HDR color, denoise/de-reverb/separation, fully rendered non-normal blend modes, overlay-track/3D/plugin transitions, custom paths/curves/expressions, plugin hosting, animated titles, and later professional controls only through separately approved contracts and atomic tools. |
+| G-11 | Professional controls remain intentionally bounded | The loopback UI provides arbitrary video/audio lanes, first-class subtitle/text lanes, track/link state, thumbnails/waveforms/subtitle overlay, confirmed exact-ID edits, bounded audio mixing, SRT/WebVTT import/export/burn-in, bounded clip transform/SDR color/master curve/path-free 1D LUT, normal/multiply/screen layering, rounded corners, shadow/glow, first-version exact-cut primary-video/audio transitions, fixed-interpolation visual keyframes, and bounded rectangle/ellipse/convex-polygon masks. Insert/overwrite remains available through structured Director plans. | Add ASR/transcription, translation, automatic tracking, arbitrary LUT-file import/secondary/HDR color, denoise/de-reverb/separation, additional blend modes, overlay-track/3D/plugin transitions, custom paths/curves/expressions, plugin hosting, animated titles, and later professional controls only through separately approved contracts and atomic tools. |
 
 This gap register is descriptive. Closing any gap requires a separate approved implementation task.
 
@@ -910,7 +910,7 @@ contract.
 The subtitle extension added four production registry entries for
 subtitle track management, exact cue editing, deterministic SRT/WebVTT
 import, and atomic sidecar export. Optional frozen subtitle tracks/cues/styles
-extend compatible timeline-v2 JSON; snapshot v10 retains and exposes detached subtitle
+extend compatible timeline-v2 JSON; snapshot v11 retains and exposes detached subtitle
 state. The detached review engine and manual proposal service simulate cue
 and track changes before confirmation, and confirmed workflow/EditingAgent
 dispatch records subtitle entity relations and tombstones through the same
@@ -929,19 +929,22 @@ effects.
 
 The visual-properties extension added three production registry entries for exact
 clip transform, exact clip SDR color adjustment, and explicit-target visual
-property copy. Frozen version `1.0.0` transform/color attachments remain
-neutral by default, so old timeline-v2 JSON and neutral legacy rendering stay
-equivalent. Position and anchor use normalized output-canvas coordinates;
+property copy. Transform remains version `1.0.0`; color and compositing now
+default to version `2.0.0` while accepting their legacy `1.0.0` payloads with
+neutral defaults. Old timeline-v2 JSON and neutral legacy rendering therefore
+stay equivalent. Position and anchor use normalized output-canvas coordinates;
 scale, rotation, opacity, source-edge fractional crop, fit mode, and flips are
 bounded and finite. Visual properties apply only to the named video clip and
 never propagate to linked audio.
 
 The renderer builds filters from validated fields only: crop/flip, legacy and
-new rotation, fit/scale, bounded SDR tone/color balance/detail, opacity, then
-deterministic track-order overlay. No caller filter/script/path is accepted.
+new rotation, fit/scale, bounded SDR exposure/contrast/saturation/gamma, a
+stable master curve, a path-free 17-point RGB 1D LUT, color balance/detail,
+opacity/rounded alpha, shadow/glow, then deterministic track-order
+normal/multiply/screen overlay. No caller filter/script/path is accepted.
 The browser's CSS/video treatment is explicitly approximate; authoritative
 export uses FFmpeg. Media-analysis thumbnails select original/applied mode and
-bind the visual digest plus canvas to the cache key. Snapshot v7, Director
+bind the visual digest plus canvas to the cache key. Snapshot v11, Director
 read context, detached plan/manual review, workflow/EditingAgent dispatch,
 trace relations, checkpoint rollback, and the inspector expose the same
 detached visual state.
@@ -977,15 +980,15 @@ uses deterministic layer/mix/limiter/output policies. Timelines with no
 enabled non-cut transition retain the previous paths and remain equivalent.
 Version one intentionally rejects video transitions on non-primary overlay
 tracks; it does not pretend that full-canvas overlay transition composition
-is supported. Snapshot v7, Director context, review, trace, rollback and the
+is supported. Snapshot v11, Director context, review, trace, rollback and the
 browser inspector/draft UI expose the same detached transition identities.
 The browser can run only a bounded, explicitly approximate local animation;
 it cannot dispatch or persist a transition without the normal confirmation
 gate. The deterministic multi-track reference covers confirmed reciprocal
 video/audio creation, rendering, trace relations, and checkpoint rollback.
 
-This transition layer does not add transition speed curves, tracking, LUT import,
-secondary grading, HDR, complex blend modes, 3D or plugin/VST/OFX
+This transition layer does not add transition speed curves, tracking, arbitrary
+LUT-file import, secondary grading, HDR, complex blend modes, 3D or plugin/VST/OFX
 transitions, animated titles, or AI effects.
 
 The visual-automation extension raised the production registry to revision 7
@@ -1018,7 +1021,7 @@ The final FFmpeg path evaluates schema-generated expressions before transition
 composition, stable track layering, subtitle burn-in, and final format output.
 No raw expression/filter/script enters from a plan or browser. Applied media
 analysis binds exact timeline sample time plus automation digest to its cache
-key. Snapshot v8, Director read context, plan/manual review, confirmed Editing
+key. Snapshot v11, Director read context, plan/manual review, confirmed Editing
 Agent execution, provenance, rollback, and the compact browser inspector share
 the same detached automation data. The deterministic reference carries
 hold/linear/ease curves through review, explicit confirmation, gateway
@@ -1059,12 +1062,13 @@ consequential `clip_mask`/`clip_composite` changes without dispatching tools.
 
 The final FFmpeg path builds a normalized alpha expression exclusively from
 validated fields before stable track overlay. Browser clip-path rendering is
-an approximate review aid; exported pixels are authoritative. `normal` is the
-only compositing mode currently rendered. `multiply` and `screen` are valid
-bounded declarations so they can be reviewed and stored, but export fails
-truthfully until their deterministic backend is implemented. Freeform paths,
-automatic tracking, arbitrary point animation, matte media, rotoscoping, and
-advanced blend modes remain outside this original O16 completion.
+an approximate review aid; exported pixels are authoritative. The later O15
+completion renders the bounded `normal`, `multiply`, and `screen` set and adds
+rounded corners, black shadow, and source-color glow through the same composite
+record. First-version transition export fails closed when combined with
+non-normal blend, shadow, or glow because that graph combination is not yet
+exact. Freeform paths, automatic tracking, arbitrary point animation, matte
+media, rotoscoping, and additional blend modes remain outside this boundary.
 
 ### Original O13 title, word-timing, and graphic boundary
 

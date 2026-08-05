@@ -11,6 +11,18 @@ def _number(value: float) -> str:
     return f"{value:.12g}"
 
 
+def _curve_points(points) -> str:
+    return " ".join(f"{_number(point.input)}/{_number(point.output)}" for point in points)
+
+
+def _lut_points(values: tuple[float, ...], strength: float) -> str:
+    last = len(values) - 1
+    return " ".join(
+        f"{_number(index / last)}/{_number((index / last) * (1 - strength) + value * strength)}"
+        for index, value in enumerate(values)
+    )
+
+
 def clip_visual_filter_chain(
     clip: ClipConfig,
     canvas_width: int,
@@ -154,6 +166,16 @@ def clip_visual_filter_chain(
         )
     elif transform.opacity < 1:
         chain.append(f"colorchannelmixer=aa={_number(transform.opacity)}")
+    if clip.composite.corner_radius > 0:
+        radius = _number(clip.composite.corner_radius)
+        chain.append(
+            "geq="
+            "r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':"
+            "a='clip(alpha(X,Y)*if(lte("
+            f"pow(max(abs(X-W/2)-(W/2-min(W,H)*{radius}),0),2)+"
+            f"pow(max(abs(Y-H/2)-(H/2-min(W,H)*{radius}),0),2),"
+            f"pow(min(W,H)*{radius},2)),1,0),0,255)'"
+        )
     mask_expression = mask_alpha_expression(clip.masks, variable="T")
     if mask_expression is not None:
         chain.append(
@@ -189,6 +211,15 @@ def color_filter_chain(color: ClipColorAdjustment) -> list[str]:
             f"contrast={_number(1 + color.contrast)}:"
             f"saturation={_number(1 + color.saturation)}:"
             f"gamma={_number(color.gamma)}:gamma_weight=1"
+        )
+    if color.tone_curve is not None:
+        chain.append(f"curves=all='{_curve_points(color.tone_curve.points)}'")
+    if color.lut is not None and color.lut.strength > 0:
+        chain.append(
+            "curves="
+            f"r='{_lut_points(color.lut.red, color.lut.strength)}':"
+            f"g='{_lut_points(color.lut.green, color.lut.strength)}':"
+            f"b='{_lut_points(color.lut.blue, color.lut.strength)}'"
         )
     if any(
         abs(value) > 1e-9

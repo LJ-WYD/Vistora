@@ -148,6 +148,23 @@ def _groups(
 
 
 def render_transition_timeline(config: TimelineConfig, output_path: str) -> str:
+    unsupported_packaging = next(
+        (
+            clip.id
+            for track in config.tracks.values()
+            if track.kind == "video"
+            for clip in track.clips
+            if clip.composite.blend_mode != "normal"
+            or clip.composite.shadow_opacity > 0
+            or clip.composite.glow_strength > 0
+        ),
+        None,
+    )
+    if unsupported_packaging is not None:
+        raise TimelineEditError(
+            "Transition export cannot yet combine non-normal blend, shadow, or "
+            f"glow packaging on clip {unsupported_packaging!r}; re-review is required"
+        )
     """Render enabled built-in transitions without accepting raw filter text."""
 
     enabled = {

@@ -420,7 +420,7 @@ track/cue/style contracts use stable IDs, millisecond timing, deterministic
 order, explicit overlap policy, language/speaker metadata, enabled/locked
 state, and a controlled logical-font style. Subtitle cues are never modeled
 as video clips. Legacy projects with no subtitle field load and render as
-before; the read-only snapshot is version `10.0.0` and includes detached subtitle
+before; the read-only snapshot is version `11.0.0` and includes detached subtitle
 track/cue counts, cue kind, and optional word-level timing state.
 
 `SubtitleManageTrackSkill`, `SubtitleEditCueSkill`,
@@ -464,28 +464,40 @@ animated title templates, arbitrary graphic upload, and general motion graphics
 remain out of scope. Word timings are imported or authored evidence, not
 inferred by this feature.
 
-## Picture transform and basic SDR color
+## Picture transform, bounded SDR color, and packaging
 
-Every video clip now has optional frozen version `1.0.0` `ClipTransform` and
-`ClipColorAdjustment` state. Neutral defaults preserve legacy timeline-v2 JSON
+Every video clip now has optional frozen `ClipTransform`, version `2.0.0`
+`ClipColorAdjustment`, and version `2.0.0` `ClipCompositeSettings` state.
+Versions `1.0.0` of the color/composite records remain accepted for legacy
+projects; missing fields receive neutral defaults. Neutral state preserves timeline-v2 JSON
 and its render result. Transform coordinates are normalized to the output
 canvas: position is the anchor's canvas location, scale is relative to the
 selected contain/fill/stretch fit, rotation is clockwise degrees, crop values
 are source-edge fractions, and opacity is composited bottom-to-top by track
 order. Crop and flip precede fit/scale; rotation and opacity precede overlay.
 
-The bounded SDR color pipeline applies exposure/gamma/contrast/saturation,
-then temperature/tint/highlights/shadows balance, then either a small sharpen
-or blur. Inputs reject NaN, infinity, unsafe ranges, simultaneous sharpen and
-blur, raw filters, scripts, and paths. This is deterministic local SDR
-processing, not a color-managed HDR, LUT, or secondary-grade pipeline.
+The bounded SDR color pipeline applies exposure/brightness, gamma, contrast,
+and saturation; then an optional stable master tone curve; then an optional
+path-free 17-point RGB 1D LUT; then temperature/tint/highlights/shadows; and
+finally either a small sharpen or blur. Inputs reject NaN, infinity, unsafe
+ranges, unordered or duplicate curve points, invalid LUT grids, simultaneous
+sharpen and blur, raw filters, scripts, and paths. The LUT presets are stored
+inline with their exact values and digest-bearing project state; this is not
+arbitrary `.cube` import, secondary grading, or an HDR pipeline.
+
+The same confirmed compositing boundary supports normalized rounded corners,
+bounded black shadow, blurred source-color glow, and deterministic `normal`,
+`multiply`, or `screen` layering. These effects are built only from validated
+fields. A timeline that combines first-version transitions with non-normal
+blend, shadow, or glow fails before export and must be re-reviewed; the current
+transition graph does not pretend that combination is exact.
 
 `VideoSetClipTransformSkill`, `VideoSetClipColorSkill`, and
 `VideoCopyClipVisualSkill` are production-registry tools. They target exact
 video clip IDs, reject locked/non-video targets, copy only to explicitly named
 clips, never spread through linked audio, and use the shared atomic timeline
 transaction. Detached review, confirmation/workflow, Editing Agent, trace,
-rollback, snapshot v10, Director context, and the manual draft UI carry the
+rollback, snapshot v11, Director context, and the manual draft UI carry the
 same visual state and digest. Browser video/CSS preview is labeled an
 approximation; final FFmpeg export is authoritative. Thumbnail analysis can
 request original or applied mode, and its cache key binds the complete visual
@@ -493,8 +505,9 @@ digest and canvas settings.
 
 Visual keyframes for the bounded properties above are implemented by the
 separate automation system below. Clip masks are implemented by the bounded
-mask system below. Tracking, LUT import, secondary color, HDR, non-normal
-rendered blend modes, animated titles, and AI effects remain unimplemented.
+mask system below. Tracking, arbitrary LUT-file import, secondary color, HDR,
+blend modes beyond normal/multiply/screen, animated titles, and AI effects
+remain unimplemented.
 
 ## Deterministic video and audio transitions
 
@@ -521,7 +534,7 @@ changes remove any structurally invalid transition and expose its transition
 ID as a consequential tombstone instead of leaving an orphan.
 
 Detached Director review uses the same engine and registry validation but
-never dispatches a skill. Snapshot v7 exposes path-free stable transition
+never dispatches a skill. Snapshot v11 exposes path-free stable transition
 state and counts. Confirmed workflow and manual edits record transition
 creates/modifies/deletes in provenance; rollback restores the prior project
 document. The loopback timeline shows compact cut markers and a transition
@@ -576,7 +589,7 @@ final format conversion. This makes sequential and random-seek frame requests
 independent of evaluation history. Applied thumbnail requests bind the exact
 timeline sample time and automation digest into the cache key. Browser CSS
 preview is intentionally approximate; final FFmpeg export is authoritative.
-Snapshot v7 exposes fully detached curve/keyframe data and a stable automation
+Snapshot v11 exposes fully detached curve/keyframe data and a stable automation
 digest. The compact UI supports previous/next keyframe navigation and detached
 upsert/delete/clear/copy proposals, all behind structured diff and explicit
 confirmation.
@@ -602,7 +615,7 @@ never propagate through linked audio, and use the shared atomic project-state
 transaction. Split and trim rebase mask curves deterministically, copy issues
 new mask/curve/keyframe IDs, and remove emits truthful mask tombstones.
 Detached plan/manual review, explicit confirmation, gateway execution,
-snapshot v10, provenance, and rollback share the same state.
+snapshot v11, provenance, and rollback share the same state.
 
 Final FFmpeg export generates its alpha expression only from validated mask
 fields and composites masked clips in deterministic track order. The browser

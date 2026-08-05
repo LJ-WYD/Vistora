@@ -99,6 +99,8 @@ const ui = {
   colorGamma: document.querySelector("#color-gamma"),
   colorSharpen: document.querySelector("#color-sharpen"),
   colorBlur: document.querySelector("#color-blur"),
+  colorToneCurve: document.querySelector("#color-tone-curve"),
+  colorLutPreset: document.querySelector("#color-lut-preset"),
   visualCopyComponents: document.querySelector("#visual-copy-components"),
   visualCopyTargets: document.querySelector("#visual-copy-targets"),
   visualPreviewMode: document.querySelector("#visual-preview-mode"),
@@ -143,6 +145,13 @@ const ui = {
   maskKeyframeValue: document.querySelector("#mask-keyframe-value"),
   maskKeyframeInterpolation: document.querySelector("#mask-keyframe-interpolation"),
   blendMode: document.querySelector("#blend-mode"),
+  cornerRadius: document.querySelector("#corner-radius"),
+  shadowOpacity: document.querySelector("#shadow-opacity"),
+  shadowBlur: document.querySelector("#shadow-blur"),
+  shadowOffsetX: document.querySelector("#shadow-offset-x"),
+  shadowOffsetY: document.querySelector("#shadow-offset-y"),
+  glowStrength: document.querySelector("#glow-strength"),
+  glowRadius: document.querySelector("#glow-radius"),
   maskCopyTargets: document.querySelector("#mask-copy-targets"),
   maskFormMessage: document.querySelector("#mask-form-message"),
   stageMask: document.querySelector("#stage-mask"),
@@ -1675,6 +1684,9 @@ function showManualEditor(track, clip) {
   ui.visualFit.value = transform.fit;
   ui.visualFlipH.checked = transform.flip_horizontal;
   ui.visualFlipV.checked = transform.flip_vertical;
+  ui.colorToneCurve.value = color.tone_curve?.points
+    ?.map((point) => `${point.input},${point.output}`).join("\n") || "";
+  ui.colorLutPreset.value = color.lut?.lut_id?.replace("lut_builtin_", "") || "none";
   ui.visualPreviewMode.value = state.visualPreviewMode;
   ui.visualCopyTargets.replaceChildren();
   for (const candidateTrack of state.snapshot.tracks) {
@@ -1792,6 +1804,13 @@ function showManualEditor(track, clip) {
     Math.max(0, state.currentTime - clip.timeline_start_seconds),
   ).toFixed(3);
   ui.blendMode.value = clip.composite?.blend_mode || "normal";
+  ui.cornerRadius.value = String(clip.composite?.corner_radius ?? 0);
+  ui.shadowOpacity.value = String(clip.composite?.shadow_opacity ?? 0);
+  ui.shadowBlur.value = String(clip.composite?.shadow_blur ?? 0);
+  ui.shadowOffsetX.value = String(clip.composite?.shadow_offset_x ?? 0);
+  ui.shadowOffsetY.value = String(clip.composite?.shadow_offset_y ?? 0);
+  ui.glowStrength.value = String(clip.composite?.glow_strength ?? 0);
+  ui.glowRadius.value = String(clip.composite?.glow_radius ?? 0);
   ui.maskCopyTargets.replaceChildren();
   for (const candidateTrack of state.snapshot.tracks) {
     if (candidateTrack.kind !== "video") continue;
@@ -1963,10 +1982,65 @@ function visualTransformFromUi() {
   return transform;
 }
 
+function toneCurveFromUi() {
+  const text = ui.colorToneCurve.value.trim();
+  if (!text) return null;
+  const points = text.split(/\r?\n/).filter(Boolean).map((line, index) => {
+    const values = line.split(",").map((value) => Number(value.trim()));
+    if (values.length !== 2 || values.some((value) => !Number.isFinite(value))) {
+      throw new Error("Each master curve line must contain finite input,output values.");
+    }
+    return {
+      schema_name: "vistora.tone-curve-point",
+      schema_version: "1.0.0",
+      point_id: `tone_point_${String(index).padStart(2, "0")}`,
+      input: values[0],
+      output: values[1],
+    };
+  });
+  if (points.length < 2 || points.length > 17 || points[0].input !== 0 ||
+      points.at(-1).input !== 1) {
+    throw new Error("Master curve needs 2-17 ordered points with exact 0 and 1 endpoints.");
+  }
+  for (let index = 0; index < points.length; index += 1) {
+    const point = points[index];
+    if (point.input < 0 || point.input > 1 || point.output < 0 || point.output > 1 ||
+        (index > 0 && point.input <= points[index - 1].input)) {
+      throw new Error("Master curve inputs must increase and all values must stay within 0-1.");
+    }
+  }
+  return {
+    schema_name: "vistora.tone-curve",
+    schema_version: "1.0.0",
+    curve_id: "tone_curve_manual",
+    points,
+  };
+}
+
+function lutPresetFromUi() {
+  const preset = ui.colorLutPreset.value;
+  if (preset === "none") return null;
+  const base = Array.from({length: 17}, (_, index) => index / 16);
+  const clamp = (value) => Math.max(0, Math.min(1, value));
+  const channels = {
+    warm: [base.map((value) => clamp(value * 1.05 + 0.015)), base, base.map((value) => value * 0.92)],
+    cool: [base.map((value) => value * 0.92), base, base.map((value) => clamp(value * 1.05 + 0.015))],
+    film: [base.map((value) => clamp(0.04 + value * 0.92)), base.map((value) => clamp(0.03 + value * 0.94)), base.map((value) => clamp(0.05 + value * 0.9))],
+  }[preset];
+  if (!channels) throw new Error("Unknown bounded LUT preset.");
+  return {
+    schema_name: "vistora.color-lut-1d",
+    schema_version: "1.0.0",
+    lut_id: `lut_builtin_${preset}`,
+    title: `${preset[0].toUpperCase()}${preset.slice(1)} built-in 1D LUT`,
+    red: channels[0], green: channels[1], blue: channels[2], strength: 1,
+  };
+}
+
 function visualColorFromUi() {
   const color = {
     schema_name: "vistora.clip-color-adjustment",
-    schema_version: "1.0.0",
+    schema_version: "2.0.0",
     exposure: readFiniteInput(ui.colorExposure, "Exposure"),
     contrast: readFiniteInput(ui.colorContrast, "Contrast"),
     saturation: readFiniteInput(ui.colorSaturation, "Saturation"),
@@ -1977,6 +2051,8 @@ function visualColorFromUi() {
     gamma: readFiniteInput(ui.colorGamma, "Gamma"),
     sharpen: readFiniteInput(ui.colorSharpen, "Sharpen"),
     blur: readFiniteInput(ui.colorBlur, "Blur"),
+    tone_curve: toneCurveFromUi(),
+    lut: lutPresetFromUi(),
   };
   if (color.sharpen > 0 && color.blur > 0) {
     throw new Error("Sharpen and blur cannot be active together.");
@@ -1992,6 +2068,7 @@ function approximateVisualPreview(clip, transform = clip?.transform, color = cli
     ui.previewVideo.style.clipPath = "";
     ui.previewVideo.style.objectFit = "contain";
     ui.previewVideo.style.filter = "";
+    ui.previewVideo.style.borderRadius = "";
     return;
   }
   const flipX = transform.flip_horizontal ? -1 : 1;
@@ -2028,12 +2105,28 @@ function approximateVisualPreview(clip, transform = clip?.transform, color = cli
       (point) => `${point.x * 100}% ${point.y * 100}%`,
     ).join(",")})`;
   }
-  ui.previewVideo.style.filter = [
+  const composite = clip.composite || {};
+  ui.previewVideo.style.borderRadius = `${(composite.corner_radius || 0) * 50}%`;
+  const effects = [
     `brightness(${Math.pow(2, color.exposure)})`,
     `contrast(${1 + color.contrast})`,
     `saturate(${1 + color.saturation})`,
     `blur(${color.blur}px)`,
-  ].join(" ");
+  ];
+  if ((composite.shadow_opacity || 0) > 0) {
+    effects.push(
+      `drop-shadow(${(composite.shadow_offset_x || 0) * 100}px ` +
+      `${(composite.shadow_offset_y || 0) * 100}px ` +
+      `${composite.shadow_blur || 0}px rgb(0 0 0 / ${composite.shadow_opacity}))`,
+    );
+  }
+  if ((composite.glow_strength || 0) > 0) {
+    effects.push(
+      `drop-shadow(0 0 ${composite.glow_radius || 0}px ` +
+      `rgb(255 255 255 / ${composite.glow_strength}))`,
+    );
+  }
+  ui.previewVideo.style.filter = effects.join(" ");
 }
 
 function proposalPayload() {
@@ -3965,15 +4058,28 @@ ui.copyMasks.addEventListener("click", () => {
 
 ui.stageComposite.addEventListener("click", () => {
   try {
+    const composite = {
+      schema_name: "vistora.clip-composite-settings",
+      schema_version: "2.0.0",
+      blend_mode: ui.blendMode.value,
+      corner_radius: readFiniteInput(ui.cornerRadius, "Rounded corners"),
+      shadow_opacity: readFiniteInput(ui.shadowOpacity, "Shadow opacity"),
+      shadow_blur: readFiniteInput(ui.shadowBlur, "Shadow blur"),
+      shadow_offset_x: readFiniteInput(ui.shadowOffsetX, "Shadow offset X"),
+      shadow_offset_y: readFiniteInput(ui.shadowOffsetY, "Shadow offset Y"),
+      glow_strength: readFiniteInput(ui.glowStrength, "Glow strength"),
+      glow_radius: readFiniteInput(ui.glowRadius, "Glow radius"),
+    };
+    const isDefault = composite.blend_mode === "normal" &&
+      composite.corner_radius === 0 && composite.shadow_opacity === 0 &&
+      composite.shadow_blur === 0 && composite.shadow_offset_x === 0 &&
+      composite.shadow_offset_y === 0 && composite.glow_strength === 0 &&
+      composite.glow_radius === 0;
     stageMaskEdit({
-      action: ui.blendMode.value === "normal" ? "reset_composite" : "set_composite",
-      composite: ui.blendMode.value === "normal" ? null : {
-        schema_name: "vistora.clip-composite-settings",
-        schema_version: "1.0.0",
-        blend_mode: ui.blendMode.value,
-      },
+      action: isDefault ? "reset_composite" : "set_composite",
+      composite: isDefault ? null : composite,
     });
-    maskMessage("Blend mode staged; restricted modes may be blocked at review/export.");
+    maskMessage("Bounded packaging staged; review is required before application.");
   } catch (error) { maskMessage(error.message || String(error), true); }
 });
 
@@ -3990,7 +4096,7 @@ for (const control of [
   ui.visualFit, ui.visualFlipH, ui.visualFlipV, ui.colorExposure,
   ui.colorContrast, ui.colorSaturation, ui.colorTemperature, ui.colorTint,
   ui.colorHighlights, ui.colorShadows, ui.colorGamma, ui.colorSharpen,
-  ui.colorBlur,
+  ui.colorBlur, ui.colorToneCurve, ui.colorLutPreset,
 ]) {
   control.addEventListener("input", () => {
     if (!state.selected) return;

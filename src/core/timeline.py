@@ -342,6 +342,72 @@ class ClipTransform(BaseModel):
         return self
 
 
+class ToneCurvePoint(BaseModel):
+    """One stable normalized point on a bounded master tone curve."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    schema_name: Literal["vistora.tone-curve-point"] = "vistora.tone-curve-point"
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    point_id: str = Field(
+        min_length=3,
+        max_length=160,
+        pattern=r"^[A-Za-z][A-Za-z0-9._:-]*$",
+    )
+    input: float = Field(ge=0, le=1, allow_inf_nan=False)
+    output: float = Field(ge=0, le=1, allow_inf_nan=False)
+
+
+class ToneCurve(BaseModel):
+    """Deterministic master luma curve represented by bounded control points."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    schema_name: Literal["vistora.tone-curve"] = "vistora.tone-curve"
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    curve_id: str = Field(
+        min_length=3,
+        max_length=160,
+        pattern=r"^[A-Za-z][A-Za-z0-9._:-]*$",
+    )
+    points: tuple[ToneCurvePoint, ...] = Field(min_length=2, max_length=17)
+
+    @model_validator(mode="after")
+    def stable_points(self) -> "ToneCurve":
+        ids = tuple(point.point_id for point in self.points)
+        inputs = tuple(point.input for point in self.points)
+        if len(ids) != len(set(ids)) or len(inputs) != len(set(inputs)):
+            raise ValueError("Tone curve point IDs and input values must be unique")
+        if self.points != tuple(sorted(self.points, key=lambda point: point.input)):
+            raise ValueError("Tone curve points must use increasing input order")
+        if abs(self.points[0].input) > 1e-9 or abs(self.points[-1].input - 1) > 1e-9:
+            raise ValueError("Tone curve must bind exact 0 and 1 endpoints")
+        return self
+
+
+class ColorLut1D(BaseModel):
+    """Inline, path-free 17-point RGB LUT suitable for deterministic SDR work."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    schema_name: Literal["vistora.color-lut-1d"] = "vistora.color-lut-1d"
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    lut_id: str = Field(
+        min_length=3,
+        max_length=160,
+        pattern=r"^[A-Za-z][A-Za-z0-9._:-]*$",
+    )
+    title: str = Field(min_length=1, max_length=120)
+    red: tuple[float, ...] = Field(min_length=17, max_length=17)
+    green: tuple[float, ...] = Field(min_length=17, max_length=17)
+    blue: tuple[float, ...] = Field(min_length=17, max_length=17)
+    strength: float = Field(1, ge=0, le=1, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def bounded_channels(self) -> "ColorLut1D":
+        values = self.red + self.green + self.blue
+        if any(not isinstance(value, (int, float)) or not 0 <= value <= 1 for value in values):
+            raise ValueError("LUT channel values must be finite normalized numbers")
+        return self
+
+
 class ClipColorAdjustment(BaseModel):
     """Bounded deterministic SDR color adjustment in documented order."""
 
@@ -349,7 +415,7 @@ class ClipColorAdjustment(BaseModel):
     schema_name: Literal["vistora.clip-color-adjustment"] = (
         "vistora.clip-color-adjustment"
     )
-    schema_version: Literal["1.0.0"] = "1.0.0"
+    schema_version: Literal["1.0.0", "2.0.0"] = "2.0.0"
     exposure: float = Field(0, ge=-2, le=2, allow_inf_nan=False)
     contrast: float = Field(0, ge=-0.75, le=1, allow_inf_nan=False)
     saturation: float = Field(0, ge=-1, le=2, allow_inf_nan=False)
@@ -360,6 +426,8 @@ class ClipColorAdjustment(BaseModel):
     gamma: float = Field(1, ge=0.5, le=2, allow_inf_nan=False)
     sharpen: float = Field(0, ge=0, le=1, allow_inf_nan=False)
     blur: float = Field(0, ge=0, le=8, allow_inf_nan=False)
+    tone_curve: ToneCurve | None = None
+    lut: ColorLut1D | None = None
 
     @model_validator(mode="after")
     def one_detail_filter(self) -> "ClipColorAdjustment":
@@ -608,8 +676,30 @@ class ClipCompositeSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     schema_name: Literal["vistora.clip-composite-settings"] = "vistora.clip-composite-settings"
-    schema_version: Literal["1.0.0"] = "1.0.0"
+    schema_version: Literal["1.0.0", "2.0.0"] = "2.0.0"
     blend_mode: Literal["normal", "multiply", "screen"] = "normal"
+    corner_radius: float = Field(0, ge=0, le=0.5, allow_inf_nan=False)
+    shadow_opacity: float = Field(0, ge=0, le=1, allow_inf_nan=False)
+    shadow_blur: float = Field(0, ge=0, le=32, allow_inf_nan=False)
+    shadow_offset_x: float = Field(0, ge=-0.25, le=0.25, allow_inf_nan=False)
+    shadow_offset_y: float = Field(0, ge=-0.25, le=0.25, allow_inf_nan=False)
+    glow_strength: float = Field(0, ge=0, le=1, allow_inf_nan=False)
+    glow_radius: float = Field(0, ge=0, le=32, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def meaningful_effect_parameters(self) -> "ClipCompositeSettings":
+        if (self.glow_strength > 0) != (self.glow_radius > 0):
+            raise ValueError("Glow strength and radius must be enabled together")
+        if self.shadow_opacity == 0 and any(
+            abs(value) > 1e-9
+            for value in (
+                self.shadow_blur,
+                self.shadow_offset_x,
+                self.shadow_offset_y,
+            )
+        ):
+            raise ValueError("Disabled shadow accepts no blur or offset values")
+        return self
 
 
 TransitionKind = Literal[
@@ -1344,19 +1434,6 @@ class TimelineRenderer:
             raise ValueError(
                 "A multi-track export requires an enabled video clip"
             )
-        unsupported_blend = next(
-            (
-                clip.composite.blend_mode
-                for _, clip in video_items
-                if clip.composite.blend_mode != "normal"
-            ),
-            None,
-        )
-        if unsupported_blend is not None:
-            raise RuntimeError(
-                "The deterministic renderer currently supports only normal "
-                f"clip compositing; {unsupported_blend!r} must be re-reviewed"
-            )
         audio_items = [
             (track, clip)
             for track in tracks
@@ -1509,10 +1586,91 @@ class TimelineRenderer:
         )
         filters = [
             f"color=c=black:s={self.config.width}x{self.config.height}:"
-            f"r={self.config.fps}:d={duration:.12g}[base]"
+            f"r={self.config.fps}:d={duration:.12g},format=rgba[base]"
         ]
         audio_labels: list[str] = []
         video_labels: list[tuple[str, str]] = []
+
+        def offset_overlay(expression: str, dx: float, dy: float) -> str:
+            prefix = "x='"
+            separator = "':y='"
+            suffix = "':eval=frame"
+            if not expression.startswith(prefix) or separator not in expression:
+                raise RuntimeError("Internal visual overlay expression is invalid")
+            x_value, remainder = expression[len(prefix):].split(separator, 1)
+            if not remainder.endswith(suffix):
+                raise RuntimeError("Internal visual overlay expression is invalid")
+            y_value = remainder[:-len(suffix)]
+            return (
+                f"x='({x_value})+{dx:.12g}':"
+                f"y='({y_value})+{dy:.12g}':eval=frame"
+            )
+
+        def full_canvas_layer(
+            label: str,
+            overlay_expression: str,
+            clip: ClipConfig,
+            index: int,
+        ) -> str:
+            composite = clip.composite
+            use_shadow = composite.shadow_opacity > 0
+            use_glow = composite.glow_strength > 0
+            branches = 1 + int(use_shadow) + int(use_glow)
+            names = [f"video_{index}_original"]
+            if use_shadow:
+                names.append(f"video_{index}_shadow_source")
+            if use_glow:
+                names.append(f"video_{index}_glow_source")
+            if branches > 1:
+                filters.append(
+                    f"{label}split={branches}" + "".join(f"[{name}]" for name in names)
+                )
+            else:
+                filters.append(f"{label}null[{names[0]}]")
+            filters.append(
+                f"color=c=black@0:s={self.config.width}x{self.config.height}:"
+                f"r={self.config.fps}:d={duration:.12g},format=rgba[layer_{index}_base]"
+            )
+            stage = f"[layer_{index}_base]"
+            if use_shadow:
+                filters.append(
+                    f"[video_{index}_shadow_source]"
+                    "colorchannelmixer=rr=0:rg=0:rb=0:gr=0:gg=0:gb=0:"
+                    "br=0:bg=0:bb=0,"
+                    f"gblur=sigma={composite.shadow_blur:.12g}:planes=15,"
+                    f"colorchannelmixer=aa={composite.shadow_opacity:.12g}"
+                    f"[video_{index}_shadow]"
+                )
+                output = f"[layer_{index}_shadowed]"
+                shifted = offset_overlay(
+                    overlay_expression,
+                    composite.shadow_offset_x * self.config.width,
+                    composite.shadow_offset_y * self.config.height,
+                )
+                filters.append(
+                    f"{stage}[video_{index}_shadow]overlay={shifted}:"
+                    f"eof_action=pass:shortest=0,format=rgba{output}"
+                )
+                stage = output
+            if use_glow:
+                filters.append(
+                    f"[video_{index}_glow_source]"
+                    f"gblur=sigma={composite.glow_radius:.12g}:planes=15,"
+                    f"colorchannelmixer=aa={composite.glow_strength:.12g}"
+                    f"[video_{index}_glow]"
+                )
+                output = f"[layer_{index}_glowing]"
+                filters.append(
+                    f"{stage}[video_{index}_glow]overlay={overlay_expression}:"
+                    f"eof_action=pass:shortest=0,format=rgba{output}"
+                )
+                stage = output
+            output = f"[video_{index}_canvas]"
+            filters.append(
+                f"{stage}[{names[0]}]overlay={overlay_expression}:"
+                f"eof_action=pass:shortest=0,format=rgba{output}"
+            )
+            return output
         for index, (kind, track, clip) in enumerate(all_items):
             delay_ms = max(0, round(clip.timeline_start * 1000))
             if kind == "video":
@@ -1553,7 +1711,10 @@ class TimelineRenderer:
                     f"[video_{index}]",
                 ))
                 filters.append(",".join(chain))
-                video_labels.append((f"[video_{index}]", overlay_expression))
+                full_layer = full_canvas_layer(
+                    f"[video_{index}]", overlay_expression, clip, index
+                )
+                video_labels.append((full_layer, clip.composite.blend_mode))
                 if (
                     clip.keep_audio
                     and clip.visual_kind == "video"
@@ -1597,13 +1758,32 @@ class TimelineRenderer:
                 audio_labels.append(f"[audio_{index}]")
 
         current = "[base]"
-        for layer_index, (label, overlay_expression) in enumerate(video_labels):
+        for layer_index, (label, blend_mode) in enumerate(video_labels):
             output = f"[layer_{layer_index}]"
-            filters.append(
-                f"{current}{label}overlay={overlay_expression}:"
-                "eof_action=pass:shortest=0"
-                f"{output}"
-            )
+            if blend_mode == "normal":
+                filters.append(
+                    f"{current}{label}overlay=x=0:y=0:eof_action=pass:shortest=0,"
+                    f"format=rgba{output}"
+                )
+            else:
+                keep = f"[layer_{layer_index}_keep]"
+                blend_base = f"[layer_{layer_index}_blend_input]"
+                blended = f"[layer_{layer_index}_blend]"
+                filters.append(f"{current}split=2{keep}{blend_base}")
+                expression = (
+                    "A*B/255"
+                    if blend_mode == "multiply"
+                    else "255-(255-A)*(255-B)/255"
+                )
+                filters.append(
+                    f"{blend_base}{label}blend="
+                    f"c0_expr='{expression}':c1_expr='{expression}':"
+                    f"c2_expr='{expression}':c3_expr='B'{blended}"
+                )
+                filters.append(
+                    f"{keep}{blended}overlay=x=0:y=0:eof_action=pass:"
+                    f"shortest=0,format=rgba{output}"
+                )
             current = output
         filters.append(f"{current}format=yuv420p[video_out]")
         if audio_labels:

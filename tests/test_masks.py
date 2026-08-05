@@ -150,7 +150,7 @@ def test_snapshot_v7_is_detached_and_browser_safe() -> None:
     timeline = _timeline(source="C:/private/secret/source.mp4")
     snapshot = TimelineSnapshotService.snapshot(timeline)
     clip = snapshot.tracks[0].clips[0]
-    assert snapshot.schema_version == "10.0.0"
+    assert snapshot.schema_version == "11.0.0"
     assert clip.masks[0].mask_id == "mask_main"
     assert clip.masks[0].automations[0].keyframes[1].value == .65
     assert clip.composite.blend_mode == "normal"
@@ -200,7 +200,7 @@ def test_engine_mask_crud_copy_split_trim_and_lock() -> None:
 
 def test_registry_exposes_only_validated_mask_skills() -> None:
     registry = build_production_registry()
-    assert registry.reference.registry_revision == 12
+    assert registry.reference.registry_revision == 13
     assert len(registry) == 43
     for name in (
         "VideoSetClipMaskSkill",
@@ -462,11 +462,42 @@ def test_real_mask_render_changes_expected_pixel_regions_and_is_seek_safe(tmp_pa
     assert (video["width"], video["height"], video["r_frame_rate"]) == (320, 180, "24/1")
 
 
-def test_non_normal_blend_mode_fails_truthfully_before_export(tmp_path: Path) -> None:
-    timeline = _timeline(source=str(tmp_path / "missing.mp4"))
-    timeline.tracks["video"].clips[0].composite = ClipCompositeSettings(blend_mode="multiply")
-    with pytest.raises(RuntimeError, match="supports only normal"):
-        TimelineRenderer(timeline).render(str(tmp_path / "output.mp4"))
+def test_non_normal_blend_mode_renders_deterministically(tmp_path: Path) -> None:
+    red = tmp_path / "red.mp4"
+    blue = tmp_path / "blue.mp4"
+    output = tmp_path / "screen.mp4"
+    for path, color in ((red, "red"), (blue, "blue")):
+        subprocess.run(
+            [
+                "ffmpeg", "-nostdin", "-y", "-loglevel", "error",
+                "-f", "lavfi", "-i", f"color={color}:s=320x180:r=24:d=1",
+                "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(path),
+            ],
+            check=True,
+            timeout=60,
+        )
+    timeline = TimelineConfig(
+        width=320,
+        height=180,
+        fps=24,
+        tracks={
+            "base": TrackConfig(
+                id="track_base", kind="video", order=0,
+                clips=[ClipConfig(id="clip_base", source=str(red), trim_out=1)],
+            ),
+            "top": TrackConfig(
+                id="track_top", kind="video", order=1,
+                clips=[ClipConfig(
+                    id="clip_top", source=str(blue), trim_out=1,
+                    composite=ClipCompositeSettings(blend_mode="screen"),
+                )],
+            ),
+        },
+    )
+    TimelineRenderer(timeline).render(str(output))
+    pixel = _pixel(_frame(output, 0.5), 160, 90)
+    assert pixel[0] > 180 and pixel[2] > 180 and pixel[1] < 80
+    assert _frame(output, 0.5) == _frame(output, 0.5)
 
 
 def test_browser_assets_expose_review_only_mask_controls_without_paths() -> None:

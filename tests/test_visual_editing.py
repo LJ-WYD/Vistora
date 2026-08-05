@@ -29,12 +29,16 @@ from contracts import (  # noqa: E402
 )
 from core import timeline_manager  # noqa: E402
 from core.timeline import (  # noqa: E402
+    ColorLut1D,
     ClipColorAdjustment,
+    ClipCompositeSettings,
     ClipConfig,
     ClipTransform,
     TimelineConfig,
     TimelineRenderer,
     TrackConfig,
+    ToneCurve,
+    ToneCurvePoint,
 )
 from media_analysis import MediaAnalysisRequest, MediaAnalysisService  # noqa: E402
 from plan_review import (  # noqa: E402
@@ -138,6 +142,82 @@ def test_visual_contracts_are_frozen_bounded_and_digest_stable() -> None:
     )
 
 
+def test_tone_curve_lut_and_packaging_contracts_are_strict_and_round_trip() -> None:
+    curve = ToneCurve(
+        curve_id="tone_curve_o15",
+        points=(
+            ToneCurvePoint(point_id="tone_black", input=0, output=0.02),
+            ToneCurvePoint(point_id="tone_mid", input=0.5, output=0.62),
+            ToneCurvePoint(point_id="tone_white", input=1, output=1),
+        ),
+    )
+    values = tuple(index / 16 for index in range(17))
+    lut = ColorLut1D(
+        lut_id="lut_o15_warm",
+        title="Warm deterministic LUT",
+        red=tuple(min(1, value * 1.05 + 0.01) for value in values),
+        green=values,
+        blue=tuple(value * 0.9 for value in values),
+        strength=0.75,
+    )
+    color = ClipColorAdjustment(tone_curve=curve, lut=lut)
+    composite = ClipCompositeSettings(
+        blend_mode="screen",
+        corner_radius=0.15,
+        shadow_opacity=0.5,
+        shadow_blur=4,
+        shadow_offset_x=0.03,
+        shadow_offset_y=0.04,
+        glow_strength=0.25,
+        glow_radius=3,
+    )
+    assert ClipColorAdjustment.model_validate_json(color.model_dump_json()) == color
+    assert ClipCompositeSettings.model_validate_json(
+        composite.model_dump_json()
+    ) == composite
+    timeline = _timeline()
+    timeline.tracks["video"].clips[0].color = color
+    timeline.tracks["video"].clips[0].composite = composite
+    snapshot = TimelineSnapshotService.snapshot(timeline)
+    snap_clip = snapshot.tracks[0].clips[0]
+    assert snapshot.schema_version == "11.0.0"
+    assert snap_clip.color.tone_curve.curve_id == "tone_curve_o15"
+    assert snap_clip.color.lut.lut_id == "lut_o15_warm"
+    assert snap_clip.composite.glow_strength == 0.25
+    legacy_color = ClipColorAdjustment.model_validate({
+        "schema_name": "vistora.clip-color-adjustment",
+        "schema_version": "1.0.0",
+    })
+    legacy_composite = ClipCompositeSettings.model_validate({
+        "schema_name": "vistora.clip-composite-settings",
+        "schema_version": "1.0.0",
+        "blend_mode": "normal",
+    })
+    assert legacy_color.tone_curve is None and legacy_color.lut is None
+    assert legacy_composite == ClipCompositeSettings().model_copy(
+        update={"schema_version": "1.0.0"}
+    )
+    with pytest.raises(ValidationError, match="increasing"):
+        ToneCurve(
+            curve_id="tone_bad_order",
+            points=(
+                ToneCurvePoint(point_id="tone_bad_a", input=1, output=1),
+                ToneCurvePoint(point_id="tone_bad_b", input=0, output=0),
+            ),
+        )
+    with pytest.raises(ValidationError):
+        ColorLut1D(
+            lut_id="lut_bad_length", title="bad",
+            red=(0.0,) * 16, green=values, blue=values,
+        )
+    with pytest.raises(ValidationError):
+        ClipCompositeSettings(glow_strength=float("nan"))
+    with pytest.raises(ValidationError, match="enabled together"):
+        ClipCompositeSettings(glow_strength=0.5, glow_radius=0)
+    with pytest.raises(ValidationError, match="Disabled shadow"):
+        ClipCompositeSettings(shadow_blur=4)
+
+
 def test_visual_engine_exact_clip_reset_copy_and_lock_boundaries() -> None:
     transform = ClipTransform(position_x=0.2, opacity=0.6, rotation_degrees=17)
     color = ClipColorAdjustment(exposure=0.4, temperature=0.2, blur=0.4)
@@ -184,7 +264,7 @@ def test_registry_gateway_requires_exact_confirmation_and_replays(
     monkeypatch.setattr(timeline_manager, "PROJECT_FILE", str(project))
     monkeypatch.setattr(timeline_manager, "WORKSPACE_DIR", str(project.parent))
     registry = build_production_registry()
-    assert registry.reference.registry_revision == 12 and len(registry) == 43
+    assert registry.reference.registry_revision == 13 and len(registry) == 43
     request = AtomicToolRequestEnvelope(
         request_id="request_visual_gateway",
         execution_id="execution_visual_gateway",
@@ -468,3 +548,91 @@ def test_real_transform_color_render_changes_pixels_and_neutral_is_equivalent(
     video = next(item for item in probe["streams"] if item["codec_type"] == "video")
     assert (video["width"], video["height"], video["r_frame_rate"]) == (320, 180, "24/1")
     assert 1.9 <= float(probe["format"]["duration"]) <= 2.1
+
+
+def test_real_curve_lut_glow_shadow_and_rounding_change_render(tmp_path: Path) -> None:
+    source = tmp_path / "source.mp4"
+    neutral = tmp_path / "neutral.mp4"
+    packaged = tmp_path / "packaged.mp4"
+    subprocess.run(
+        [
+            "ffmpeg", "-nostdin", "-y", "-loglevel", "error",
+            "-f", "lavfi", "-i", "testsrc2=s=320x180:r=24:d=1",
+            "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(source),
+        ],
+        check=True,
+        timeout=60,
+    )
+    base = TimelineConfig(
+        width=320,
+        height=180,
+        fps=24,
+        tracks={
+            "video": TrackConfig(
+                id="track_video", kind="video", order=0,
+                clips=[ClipConfig(
+                    id="clip_video", source=str(source), trim_out=1,
+                    keep_audio=False,
+                    transform=ClipTransform(scale_x=0.62, scale_y=0.62),
+                )],
+            )
+        },
+    )
+    TimelineRenderer(base).render(str(neutral))
+    values = tuple(index / 16 for index in range(17))
+    treatment = base.model_copy(deep=True)
+    treatment.tracks["video"].clips[0].color = ClipColorAdjustment(
+        tone_curve=ToneCurve(
+            curve_id="tone_curve_render",
+            points=(
+                ToneCurvePoint(point_id="tone_render_black", input=0, output=0.03),
+                ToneCurvePoint(point_id="tone_render_mid", input=0.5, output=0.66),
+                ToneCurvePoint(point_id="tone_render_white", input=1, output=1),
+            ),
+        ),
+        lut=ColorLut1D(
+            lut_id="lut_render_warm", title="Warm render LUT",
+            red=tuple(min(1, value * 1.08 + 0.01) for value in values),
+            green=values,
+            blue=tuple(value * 0.86 for value in values),
+            strength=0.8,
+        ),
+    )
+    treatment.tracks["video"].clips[0].composite = ClipCompositeSettings(
+        corner_radius=0.18,
+        shadow_opacity=0.7,
+        shadow_blur=5,
+        shadow_offset_x=0.04,
+        shadow_offset_y=0.05,
+        glow_strength=0.28,
+        glow_radius=4,
+    )
+    TimelineRenderer(treatment).render(str(packaged))
+    neutral_frame = _frame(neutral, 0.5)
+    packaged_frame = _frame(packaged, 0.5)
+    assert packaged_frame == _frame(packaged, 0.5)
+    difference = sum(
+        abs(left - right) for left, right in zip(neutral_frame, packaged_frame)
+    )
+    assert difference > 250_000
+    corner_index = (35 * 320 + 65) * 3
+    center_index = (90 * 320 + 160) * 3
+    assert sum(packaged_frame[center_index:center_index + 3]) > 80
+    assert sum(packaged_frame[corner_index:corner_index + 3]) < 80
+
+
+def test_browser_assets_expose_bounded_o15_controls_without_paths() -> None:
+    html = (ROOT / "src/timeline_preview/static/index.html").read_text(
+        encoding="utf-8"
+    )
+    script = (ROOT / "src/timeline_preview/static/app.js").read_text(
+        encoding="utf-8"
+    )
+    for token in (
+        "color-tone-curve", "color-lut-preset", "corner-radius",
+        "shadow-opacity", "glow-strength", "stage-composite",
+    ):
+        assert token in html
+    assert 'schema_version: "2.0.0"' in script
+    assert "toneCurveFromUi" in script and "lutPresetFromUi" in script
+    assert "file://" not in html + script and "C:\\" not in html + script

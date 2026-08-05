@@ -291,6 +291,8 @@
                   <label><span>Gamma</span><input id="color-gamma" type="number" min="0.5" max="2" step="0.05"></label>
                   <label><span>Sharpen</span><input id="color-sharpen" type="number" min="0" max="1" step="0.05"></label>
                   <label><span>Blur</span><input id="color-blur" type="number" min="0" max="8" step="0.1"></label>
+                  <label><span>Master curve (input,output)</span><textarea id="color-tone-curve" rows="3" placeholder="0,0&#10;0.5,0.55&#10;1,1"></textarea></label>
+                  <label><span>Bounded 1D LUT</span><select id="color-lut-preset"><option value="none">None</option><option value="warm">Warm</option><option value="cool">Cool</option><option value="film">Film contrast</option></select></label>
                   <label><span>Copy components</span><select id="visual-copy-components"><option value="both">Transform + color</option><option value="transform">Transform only</option><option value="color">Color only</option></select></label>
                   <label><span>Explicit copy targets</span><select id="visual-copy-targets" multiple></select></label>
                   <label><span>Thumbnail mode</span><select id="visual-preview-mode"><option value="applied">Applied visual</option><option value="original">Original source</option></select></label>
@@ -357,7 +359,14 @@
                   <label><span>Keyframe time</span><input id="mask-keyframe-time" type="number" min="0" step="0.001" value="0"></label>
                   <label><span>Keyframe value</span><input id="mask-keyframe-value" type="number" step="0.01" value="1"></label>
                   <label><span>Interpolation</span><select id="mask-keyframe-interpolation"><option value="hold">Hold</option><option value="linear" selected>Linear</option><option value="ease_in">Ease in</option><option value="ease_out">Ease out</option><option value="ease_in_out">Ease in/out</option></select></label>
-                  <label><span>Blend mode</span><select id="blend-mode"><option value="normal">Normal</option><option value="multiply">Multiply (restricted)</option><option value="screen">Screen (restricted)</option></select></label>
+                  <label><span>Blend mode</span><select id="blend-mode"><option value="normal">Normal</option><option value="multiply">Multiply</option><option value="screen">Screen</option></select></label>
+                  <label><span>Rounded corners</span><input id="corner-radius" type="number" min="0" max="0.5" step="0.01" value="0"></label>
+                  <label><span>Shadow opacity</span><input id="shadow-opacity" type="number" min="0" max="1" step="0.05" value="0"></label>
+                  <label><span>Shadow blur</span><input id="shadow-blur" type="number" min="0" max="32" step="1" value="0"></label>
+                  <label><span>Shadow offset X</span><input id="shadow-offset-x" type="number" min="-0.25" max="0.25" step="0.01" value="0"></label>
+                  <label><span>Shadow offset Y</span><input id="shadow-offset-y" type="number" min="-0.25" max="0.25" step="0.01" value="0"></label>
+                  <label><span>Glow strength</span><input id="glow-strength" type="number" min="0" max="1" step="0.05" value="0"></label>
+                  <label><span>Glow radius</span><input id="glow-radius" type="number" min="0" max="32" step="1" value="0"></label>
                   <label><span>Explicit copy targets</span><select id="mask-copy-targets" multiple></select></label>
                 </div>
                 <p id="mask-form-message" class="form-message" aria-live="polite">No mask draft staged.</p>
@@ -366,7 +375,7 @@
                   <button id="stage-mask-keyframe" class="button" type="button">Add mask keyframe</button>
                   <button id="remove-mask" class="button danger" type="button">Remove mask</button>
                   <button id="copy-masks" class="button" type="button">Copy masks</button>
-                  <button id="stage-composite" class="button" type="button">Stage blend mode</button>
+                  <button id="stage-composite" class="button" type="button">Stage packaging</button>
                 </div>
               </fieldset>
               <fieldset id="transition-edit-panel" class="audio-edit-panel transition-edit-panel">

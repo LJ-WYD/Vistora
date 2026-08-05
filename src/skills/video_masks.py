@@ -64,7 +64,10 @@ class VideoCopyClipMasksSkill(BaseSkill):
 
 class VideoSetClipCompositeSkill(BaseSkill):
     name = "VideoSetClipCompositeSkill"
-    description = "Set or reset one clip's bounded blend-mode declaration."
+    description = (
+        "Set or reset one clip's bounded blend, rounded-corner, shadow, and "
+        "glow declaration without raw renderer expressions."
+    )
     input_model = SetClipCompositeInput
 
     def run(self, params: SetClipCompositeInput) -> dict[str, Any]:

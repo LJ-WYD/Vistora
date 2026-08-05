@@ -2288,9 +2288,17 @@ class TimelineEditEngine:
         if clip.composite == composite:
             raise TimelineEditError("Composite edit changes nothing")
         clip.composite = composite
-        warnings = () if composite.blend_mode == "normal" else (
-            "Multiply/screen are restricted to full-canvas opaque clips by the current renderer.",
+        has_packaging = (
+            composite.blend_mode != "normal"
+            or composite.shadow_opacity > 0
+            or composite.glow_strength > 0
         )
+        warnings = (
+            (
+                "Non-normal blend, shadow, and glow require re-review if combined "
+                "with a first-version transition on the same project."
+            ),
+        ) if has_packaging and any(item.enabled for item in self.timeline.transitions) else ()
         return self._finish(
             operation="set_clip_composite",
             primary_key=key,

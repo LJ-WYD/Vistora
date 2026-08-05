@@ -7,8 +7,8 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-TIMELINE_SNAPSHOT_VERSION = "10.0.0"
-SnapshotVersion = Literal["2.0.0", "3.0.0", "4.0.0", "5.0.0", "6.0.0", "7.0.0", "8.0.0", "9.0.0", "10.0.0"]
+TIMELINE_SNAPSHOT_VERSION = "11.0.0"
+SnapshotVersion = Literal["2.0.0", "3.0.0", "4.0.0", "5.0.0", "6.0.0", "7.0.0", "8.0.0", "9.0.0", "10.0.0", "11.0.0"]
 SnapshotId = Annotated[
     str,
     Field(
@@ -126,6 +126,32 @@ class ClipTransformSnapshot(ReadModel):
     flip_vertical: bool = False
 
 
+class ToneCurvePointSnapshot(ReadModel):
+    schema_name: Literal["vistora.tone-curve-point"] = "vistora.tone-curve-point"
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    point_id: SnapshotId
+    input: FiniteFloat = Field(ge=0, le=1)
+    output: FiniteFloat = Field(ge=0, le=1)
+
+
+class ToneCurveSnapshot(ReadModel):
+    schema_name: Literal["vistora.tone-curve"] = "vistora.tone-curve"
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    curve_id: SnapshotId
+    points: tuple[ToneCurvePointSnapshot, ...]
+
+
+class ColorLutSnapshot(ReadModel):
+    schema_name: Literal["vistora.color-lut-1d"] = "vistora.color-lut-1d"
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    lut_id: SnapshotId
+    title: str = Field(min_length=1, max_length=120)
+    red: tuple[FiniteFloat, ...]
+    green: tuple[FiniteFloat, ...]
+    blue: tuple[FiniteFloat, ...]
+    strength: FiniteFloat = Field(ge=0, le=1)
+
+
 class ClipColorSnapshot(ReadModel):
     exposure: FiniteFloat = 0
     contrast: FiniteFloat = 0
@@ -137,6 +163,8 @@ class ClipColorSnapshot(ReadModel):
     gamma: FiniteFloat = 1
     sharpen: FiniteFloat = 0
     blur: FiniteFloat = 0
+    tone_curve: ToneCurveSnapshot | None = None
+    lut: ColorLutSnapshot | None = None
 
 
 class VisualKeyframeSnapshot(ReadModel):
@@ -206,6 +234,13 @@ class ClipMaskSnapshot(ReadModel):
 
 class ClipCompositeSnapshot(ReadModel):
     blend_mode: Literal["normal", "multiply", "screen"] = "normal"
+    corner_radius: FiniteFloat = 0
+    shadow_opacity: FiniteFloat = 0
+    shadow_blur: FiniteFloat = 0
+    shadow_offset_x: FiniteFloat = 0
+    shadow_offset_y: FiniteFloat = 0
+    glow_strength: FiniteFloat = 0
+    glow_radius: FiniteFloat = 0
 
 
 class AudioDuckingSnapshot(ReadModel):

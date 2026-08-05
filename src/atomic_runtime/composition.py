@@ -292,7 +292,7 @@ def build_production_registry(
     )
     return AtomicSkillRegistry(
         registry_id="registry_atomic_skills",
-        registry_revision=12,
+        registry_revision=13,
         entries=(
             _entry(
                 VideoAddClipSkill(),

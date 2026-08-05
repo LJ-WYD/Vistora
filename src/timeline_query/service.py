@@ -256,7 +256,11 @@ def _clip_snapshot(clip: ClipConfig, order_index: int) -> ClipSnapshot:
                 ),
             ) for mask in clip.masks
         ),
-        composite=ClipCompositeSnapshot(blend_mode=clip.composite.blend_mode),
+        composite=ClipCompositeSnapshot.model_validate(
+            clip.composite.model_dump(
+                mode="python", exclude={"schema_name", "schema_version"}
+            )
+        ),
         mask_digest=mask_digest,
         automation_digest=automation_digest,
         visual_digest=(
