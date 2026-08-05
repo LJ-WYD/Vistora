@@ -319,12 +319,12 @@
     {
       "id": "O30",
       "original_summary": "新增 AI 候选、成本、进度、重试、局部重做、替换、回退和缓存",
-      "status": "in_progress",
-      "commits": [],
-      "remote_verified": false,
-      "implementation_paths": [],
-      "validation_evidence": [],
-      "remaining_scope": ["候选版本", "成本", "进度", "失败重试", "局部重做", "替换", "回退", "缓存"]
+      "status": "complete",
+      "commits": ["f56bc59e563fd67586cf3d9f1e8b045cc3d69ef4"],
+      "remote_verified": true,
+      "implementation_paths": ["src/effect_jobs", "src/product_entry", "src/timeline_preview/static/app.js", "README.md", "ARCHITECTURE.md"],
+      "validation_evidence": ["tests/test_effect_jobs.py", "tests/test_effect_capabilities.py", "tests/test_effect_fillback.py", "tests/test_product_entry.py", "tests/test_reference_workflow.py", "tests/run_validation.py", "tests/product_visual_fixture.py", "scripts/validate_roadmap.py"],
+      "remaining_scope": []
     },
     {
       "id": "O31",
