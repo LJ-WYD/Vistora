@@ -37,6 +37,8 @@ venv/
 *.material-catalog.json.lock
 *.effect-jobs.json
 *.effect-jobs.json.lock
+*.deliveries.json
+*.deliveries.json.lock
 material_staging/
 effect_staging/
 materials/

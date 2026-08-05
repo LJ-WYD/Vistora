@@ -1257,3 +1257,29 @@ Black/freeze detection is threshold-based, and burned subtitle safe-area
 correctness depends on explicit evidence produced by the subtitle review path.
 The deterministic main reference applies O31 QC to its confirmed export before
 workflow rollback.
+
+### Original O32 project versions and delivery
+
+`delivery_workflow` owns only immutable delivery intent, detached version
+comparison, compilation and audit finalization. `ProjectVersionComparison`
+compares two exact same-project snapshots and emits stable ID/digest changes;
+it never exposes configured source values. `BrandStylePack` and
+`UserPreferenceProfile` are strict versioned inputs with no filesystem path or
+provider credential. `DeliveryPlan` binds those inputs to one exact project
+revision/digest, destination ID and bounded set of variants/QC profiles.
+
+The compiler has no renderer, timeline manager, gateway or skill import. It
+emits a regular Director plan for the already registered
+`VideoExportVariantsSkill`; plan review, immutable confirmation and
+EditingAgent execution remain mandatory. The finalizer accepts only the exact
+successful atomic result, verifies every create-new file by size/SHA-256,
+executes O31 read-only QC, and creates a path-free `DeliveryManifest`. The
+project delivery sidecar atomically persists the full brand/preference-bound
+plan and manifest, rejecting duplicate IDs, tampering, stale revision and
+cross-plan linkage.
+
+This V1 boundary supports local MP4/H.264 delivery through the current reliable
+renderer. It does not upload to a platform, overwrite existing files, provide
+an installer, configure a real AI provider, or claim commercial release
+operations. Legacy compatibility `render` remains a documented low-level
+exception outside the confirmed product workflow.

@@ -1036,6 +1036,43 @@ function renderProduct() {
       ),
     );
   }
+  if (view.project_version_comparison) {
+    const comparison = view.project_version_comparison;
+    ui.productSummary.append(
+      workflowEvent(
+        "Project version comparison",
+        "read_only",
+        [
+          `${comparison.before.version_id} → ${comparison.after.version_id}`,
+          `${comparison.added} added / ${comparison.removed} removed / ${comparison.modified} modified`,
+          ...(comparison.changes || []).map((item) => `${item.entity_kind} ${item.entity_id}: ${item.change_kind}`),
+          "Only entity IDs and content digests are exposed; source paths remain private.",
+        ],
+      ),
+    );
+  }
+  if (view.delivery) {
+    const delivery = view.delivery;
+    ui.productSummary.append(
+      workflowEvent(
+        "Multi-spec delivery",
+        delivery.status,
+        [
+          delivery.message,
+          ...(delivery.plans || []).map((item) =>
+            `${item.delivery_plan_id}: project ${item.project_version_id} / brand ${item.brand_pack_id} v${item.brand_version} / preferences ${item.preference_id} v${item.preference_version}`,
+          ),
+          ...(delivery.manifests || []).flatMap((manifest) => [
+            `${manifest.manifest_id}: ${manifest.status}`,
+            ...(manifest.items || []).map((item) =>
+              `${item.variant_id}: ${item.width}×${item.height}@${item.fps} / QC ${item.qc_status}`,
+            ),
+          ]),
+          "Every delivery still requires the normal review, independent confirmation and EditingAgent export path.",
+        ],
+      ),
+    );
+  }
   ui.productActions.replaceChildren();
   for (const action of view.allowed_actions) {
     if (action === "director_turn") {

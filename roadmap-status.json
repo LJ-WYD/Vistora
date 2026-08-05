@@ -339,7 +339,7 @@
     {
       "id": "O32",
       "original_summary": "完成多规格输出、版本比较、品牌包、偏好和完整交付",
-      "status": "missing",
+      "status": "in_progress",
       "commits": [],
       "remote_verified": false,
       "implementation_paths": [],

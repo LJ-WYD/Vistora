@@ -383,6 +383,32 @@ stream alone, so safe-area validation must be supplied as explicit cue
 evidence from the existing subtitle review/render path. QC never mutates the
 timeline or the delivery file.
 
+## Versioned multi-spec delivery (O32)
+
+`src/delivery_workflow/` closes the V1 delivery chain without creating a new
+mutation path. Frozen brand packs contain controlled colors, logical fonts,
+opaque catalog logo IDs, tone keywords and prohibited uses. Frozen user
+preferences bind default variants, subtitle mode, loudness target, safe
+filename prefix and create-new output policy. A `DeliveryPlan` embeds exact
+versions/digests of both plus an exact project snapshot revision/digest and two
+to eight explicit MP4 variants with per-output O31 QC profiles.
+
+The deterministic project-version comparator reports added, removed and
+modified project settings, tracks, clips, subtitle cues and transitions by
+stable ID and before/after digest; it never returns source paths. Delivery
+compilation produces one ordinary Director plan containing only the existing
+registered `VideoExportVariantsSkill`. The plan must still pass detached
+review, separate immutable user confirmation and constrained EditingAgent/
+gateway execution. Outputs use same-directory staging, atomic create-new
+publication and all-or-none cleanup. Finalization verifies the exact atomic
+result, file size and SHA-256, runs O31 QC per variant, and appends a
+self-digesting delivery manifest to a project-scoped atomic sidecar.
+
+The loopback product view exposes only version IDs, brand/preference versions,
+variant dimensions, QC state and content digests. It cannot export directly.
+See [V1_ACCEPTANCE.md](V1_ACCEPTANCE.md) for the final capability matrix and
+honest non-blocking limitations.
+
 `src/plan_review/` provides strict version `1.0.0` contracts and a deterministic read-only diff engine for the period before confirmation. A `PlanDiffRequest` binds an exact timeline snapshot ID/revision/digest, Director plan ID/version/digest, non-executable proposed execution-plan digest, and the exact registered tool-schema set. The engine validates proposed arguments with the current registry schemas, simulates supported semantics on detached clip data, and returns stable before/after changes, source-evidence links, provenance summaries, warnings, and net counts. Repeating the same request produces the same document and digest; snapshot or registry drift requires regeneration.
 
 The current semantic adapters cover non-reverse legacy video add (with supplied

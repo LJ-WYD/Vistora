@@ -39,6 +39,7 @@ from material_production import (
 )
 from effect_workflow import build_effect_adapter_registry
 from effect_jobs import EffectJobLifecycleService, EffectJobStore
+from delivery_workflow import DeliveryStore, DeliveryWorkflowService
 
 from .service import ProductionEntryService
 from .store import ProductEntryStore
@@ -194,6 +195,9 @@ def build_current_product_entry(
     effect_job_store = EffectJobStore.for_project_file(
         timeline_manager.PROJECT_FILE
     )
+    delivery_store = DeliveryStore.for_project_file(
+        timeline_manager.PROJECT_FILE
+    )
 
     def capability_provider():
         return build_creation_capability_reference(production_adapters)
@@ -262,6 +266,9 @@ def build_current_product_entry(
                 "no delivery has been inspected in this session."
             ),
         },
+        delivery_provider=lambda: DeliveryWorkflowService.public_view(
+            delivery_store.load(project_id=initial.project_id)
+        ),
     )
 
 

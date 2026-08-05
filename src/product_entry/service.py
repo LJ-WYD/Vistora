@@ -71,6 +71,8 @@ class ProductionEntryService:
         effect_fillback_provider: Callable[[], dict[str, Any]] | None = None,
         effect_job_provider: Callable[[], dict[str, Any]] | None = None,
         delivery_qc_provider: Callable[[], dict[str, Any]] | None = None,
+        project_version_comparison_provider: Callable[[], dict[str, Any]] | None = None,
+        delivery_provider: Callable[[], dict[str, Any]] | None = None,
         clock: Clock = _utc_now,
         id_factory: IdFactory = _random_id,
     ) -> None:
@@ -90,6 +92,8 @@ class ProductionEntryService:
         self.effect_fillback_provider = effect_fillback_provider
         self.effect_job_provider = effect_job_provider
         self.delivery_qc_provider = delivery_qc_provider
+        self.project_version_comparison_provider = project_version_comparison_provider
+        self.delivery_provider = delivery_provider
         self.material_production_agent = material_production_agent or (
             MaterialProductionAgent(
                 material_production,
@@ -160,6 +164,16 @@ class ProductionEntryService:
             if self.delivery_qc_provider is not None
             else None
         )
+        version_comparison_view = (
+            self.project_version_comparison_provider()
+            if self.project_version_comparison_provider is not None
+            else None
+        )
+        delivery_view = (
+            self.delivery_provider()
+            if self.delivery_provider is not None
+            else None
+        )
         state, allowed = self._state(
             ledger,
             director,
@@ -186,6 +200,8 @@ class ProductionEntryService:
             effect_fillback=effect_fillback_view,
             effect_jobs=effect_job_view,
             delivery_qc=delivery_qc_view,
+            project_version_comparison=version_comparison_view,
+            delivery=delivery_view,
             latest_result=latest,
             allowed_actions=allowed,
         )
