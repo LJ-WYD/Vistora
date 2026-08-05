@@ -4,7 +4,7 @@
   "roadmap_id": "vistora-original-optimization-o1-o32",
   "roadmap_digest": "sha256:143850f88a50bf6b43137723cff42c4f1f9132b2a12cceda369c659db5c5d618",
   "definitions_source": "ROADMAP.md",
-  "updated_at": "2026-08-05T06:49:00Z",
+  "updated_at": "2026-08-05T08:09:15Z",
   "change_requests": [
     {
       "change_request_id": "change_request_initial_authoritative_import_20260805",
@@ -159,12 +159,12 @@
     {
       "id": "O14",
       "original_summary": "补齐基础音频、自动闪避与响度能力",
-      "status": "in_progress",
-      "commits": ["5c9b73e8e4f0f96c764315aea80797dbdbd72856"],
+      "status": "complete",
+      "commits": ["5c9b73e8e4f0f96c764315aea80797dbdbd72856", "832f74542fc73faaca63146a0815094a8edc9a35"],
       "remote_verified": true,
-      "implementation_paths": ["src/audio_analysis", "src/skills/audio_timeline_edits.py"],
-      "validation_evidence": ["tests/test_audio_editing.py"],
-      "remaining_scope": ["背景音乐专用语义", "音效专用语义", "自动闪避"]
+      "implementation_paths": ["src/audio_analysis", "src/core/timeline.py", "src/timeline_edit/engine.py", "src/skills/audio_timeline_edits.py", "src/timeline_preview/static/app.js"],
+      "validation_evidence": ["tests/test_audio_editing.py", "tests/test_reference_workflow.py", "tests/run_validation.py", "tests/audio_visual_fixture.py"],
+      "remaining_scope": []
     },
     {
       "id": "O15",
