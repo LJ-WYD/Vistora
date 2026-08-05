@@ -21,6 +21,21 @@ from .models import (
 )
 
 
+# Stable semantic capabilities exposed by the production composition root.
+# These are provider-neutral names; no vendor or credential is implied.
+PRODUCTION_CAPABILITY_KINDS = {
+    "asset_search": "asset_search",
+    "audio_generation": "audio_generation",
+    "image_generation": "image_generation",
+    "local_capture": "capture",
+    "manual_import": "manual_import",
+    "music_generation": "music_generation",
+    "user_material_request": "user_material_request",
+    "video_generation": "video_generation",
+    "voice_synthesis": "voice_synthesis",
+}
+
+
 def _now():
     return datetime.now(timezone.utc)
 
@@ -100,6 +115,191 @@ class AdapterRegistry:
             candidates,
             key=lambda item: item.capability().adapter_id,
         )[0] if candidates else None
+
+
+class UnconfiguredProviderAdapter:
+    """Truthful production placeholder for an unavailable provider capability."""
+
+    def __init__(self, capability_id: str, *, clock=_now) -> None:
+        if capability_id not in PRODUCTION_CAPABILITY_KINDS:
+            raise ValueError("Unknown production capability")
+        if capability_id in {"manual_import", "user_material_request"}:
+            raise ValueError("Local capabilities cannot use provider placeholders")
+        self.capability_id = capability_id
+        self.clock = clock
+
+    def capability(self) -> AdapterCapability:
+        return AdapterCapability(
+            adapter_id=f"unconfigured_{self.capability_id}",
+            adapter_version="1.0.0",
+            capability_ids=(self.capability_id,),
+            configured=False,
+            execution_kind="external_provider",
+            max_concurrency=1,
+            limitation=(
+                f"No {self.capability_id.replace('_', '-')} provider is configured."
+            ),
+            input_schema_digest=_schema_digest(ProductionJobRequest),
+            result_schema_digest=_schema_digest(AdapterJobUpdate),
+        )
+
+    def _unavailable(self, request: ProductionJobRequest) -> AdapterJobUpdate:
+        return AdapterJobUpdate(
+            job_id=request.job_id,
+            adapter_id=self.capability().adapter_id,
+            provider_opaque_ref=f"unconfigured_{request.job_id}",
+            status="failed",
+            progress=0,
+            error_code="production_provider_unconfigured",
+            message=self.capability().limitation or "Provider is unavailable.",
+            updated_at=self.clock(),
+        )
+
+    def submit(self, request, *, staging_root):
+        return self._unavailable(request)
+
+    def poll(self, request, *, provider_opaque_ref, staging_root):
+        return self._unavailable(request)
+
+    def cancel(self, request, *, provider_opaque_ref):
+        return AdapterJobUpdate(
+            job_id=request.job_id,
+            adapter_id=self.capability().adapter_id,
+            provider_opaque_ref=provider_opaque_ref,
+            status="cancelled",
+            progress=0,
+            message="The unavailable provider request was cancelled.",
+            updated_at=self.clock(),
+        )
+
+
+class UserMaterialRequestAdapter:
+    """Audits a request for user-supplied material without fabricating media."""
+
+    def __init__(self, *, clock=_now) -> None:
+        self.clock = clock
+
+    def capability(self) -> AdapterCapability:
+        return AdapterCapability(
+            adapter_id="user_material_request_local",
+            adapter_version="1.0.0",
+            capability_ids=("user_material_request",),
+            configured=True,
+            execution_kind="human_request",
+            max_concurrency=64,
+            input_schema_digest=_schema_digest(ProductionJobRequest),
+            result_schema_digest=_schema_digest(AdapterJobUpdate),
+        )
+
+    def submit(self, request, *, staging_root):
+        return AdapterJobUpdate(
+            job_id=request.job_id,
+            adapter_id=self.capability().adapter_id,
+            provider_opaque_ref=(
+                "human_" + hashlib.sha256(
+                    request.idempotency_key.encode("utf-8")
+                ).hexdigest()[:20]
+            ),
+            status="needs_input",
+            progress=0,
+            message=(
+                "User-supplied material is required. No media was created or "
+                "imported; provide it through a separately confirmed import task."
+            ),
+            updated_at=self.clock(),
+        )
+
+    def poll(self, request, *, provider_opaque_ref, staging_root):
+        return self.submit(request, staging_root=staging_root)
+
+    def cancel(self, request, *, provider_opaque_ref):
+        return AdapterJobUpdate(
+            job_id=request.job_id,
+            adapter_id=self.capability().adapter_id,
+            provider_opaque_ref=provider_opaque_ref,
+            status="cancelled",
+            progress=0,
+            message="The user material request was cancelled.",
+            updated_at=self.clock(),
+        )
+
+
+def build_material_production_registry(
+    *,
+    import_resolver: Callable[[str], Path | None] | None = None,
+    registry_revision: int = 2,
+) -> AdapterRegistry:
+    """Build the only production adapter set; online providers remain absent."""
+
+    resolver = import_resolver or (lambda _token: None)
+    provider_capabilities = tuple(
+        capability_id
+        for capability_id in sorted(PRODUCTION_CAPABILITY_KINDS)
+        if capability_id not in {"manual_import", "user_material_request"}
+    )
+    return AdapterRegistry(
+        (
+            ManualImportAdapter(
+                resolver,
+                configured=import_resolver is not None,
+            ),
+            UserMaterialRequestAdapter(),
+            *tuple(
+                UnconfiguredProviderAdapter(capability_id)
+                for capability_id in provider_capabilities
+            ),
+        ),
+        registry_id="material_production_adapters",
+        registry_revision=registry_revision,
+    )
+
+
+def build_creation_capability_reference(registry: AdapterRegistry):
+    """Project the exact production adapters into Creation Planning facts."""
+
+    from creation_planning import (
+        CapabilityRegistryReference,
+        CapabilityRequirement,
+    )
+
+    adapters = tuple(registry.adapters.values())
+    capabilities = []
+    for capability_id, capability_kind in sorted(
+        PRODUCTION_CAPABILITY_KINDS.items()
+    ):
+        matching = tuple(
+            adapter.capability()
+            for adapter in adapters
+            if capability_id in adapter.capability().capability_ids
+        )
+        available = any(item.configured for item in matching)
+        limitations = sorted(
+            item.limitation
+            for item in matching
+            if item.limitation is not None
+        )
+        capabilities.append(
+            CapabilityRequirement(
+                capability_id=capability_id,
+                capability_kind=capability_kind,
+                availability="available" if available else "unconfigured",
+                limitation=(
+                    None
+                    if available
+                    else (
+                        limitations[0]
+                        if limitations
+                        else "No production adapter is configured."
+                    )
+                ),
+            )
+        )
+    reference = registry.reference()
+    return CapabilityRegistryReference.create(
+        registry_id="creation_capabilities_from_production",
+        registry_revision=reference.registry_revision,
+        capabilities=tuple(capabilities),
+    )
 
 
 class ManualImportAdapter:
@@ -349,5 +549,123 @@ class DeterministicLocalVideoAdapter:
             status="cancelled",
             progress=0,
             message="The deterministic fake job was cancelled.",
+            updated_at=self.clock(),
+        )
+
+
+class DeterministicLocalMediaAdapter:
+    """Test-only image/audio/video fixture adapter for provider-neutral flows."""
+
+    _MEDIA = {
+        "image": ("png", "image/png"),
+        "audio": ("wav", "audio/wav"),
+        "video": ("mp4", "video/mp4"),
+    }
+
+    def __init__(
+        self,
+        *,
+        adapter_id: str,
+        capability_id: str,
+        media_kind: str,
+        clock: Callable[[], datetime] = _now,
+    ) -> None:
+        if capability_id not in PRODUCTION_CAPABILITY_KINDS:
+            raise ValueError("Unknown deterministic production capability")
+        if media_kind not in self._MEDIA:
+            raise ValueError("Unsupported deterministic media kind")
+        self.adapter_id = adapter_id
+        self.capability_id = capability_id
+        self.media_kind = media_kind
+        self.clock = clock
+        self.submissions: dict[str, AdapterJobUpdate] = {}
+
+    def capability(self) -> AdapterCapability:
+        return AdapterCapability(
+            adapter_id=self.adapter_id,
+            adapter_version="1.0.0",
+            capability_ids=(self.capability_id,),
+            configured=True,
+            execution_kind="local_deterministic_test",
+            max_concurrency=8,
+            input_schema_digest=_schema_digest(ProductionJobRequest),
+            result_schema_digest=_schema_digest(AdapterJobUpdate),
+        )
+
+    def submit(self, request, *, staging_root):
+        if request.idempotency_key in self.submissions:
+            return self.submissions[request.idempotency_key]
+        extension, mime_type = self._MEDIA[self.media_kind]
+        relative = Path(request.run_id) / request.job_id / f"artifact.{extension}"
+        target = (staging_root / relative).resolve()
+        if staging_root.resolve() not in target.parents:
+            raise ValueError("Deterministic adapter target escapes staging")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        seed = int(hashlib.sha256(request.task_id.encode()).hexdigest()[:2], 16)
+        if self.media_kind == "video":
+            source = (
+                f"color=c=0x{seed:02x}5070:s=320x180:r=24:d=2"
+            )
+            command = [
+                "ffmpeg", "-y", "-f", "lavfi", "-i", source,
+                "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                str(target),
+            ]
+        elif self.media_kind == "image":
+            source = f"color=c=0x{seed:02x}5070:s=320x180:r=1"
+            command = [
+                "ffmpeg", "-y", "-f", "lavfi", "-i", source,
+                "-frames:v", "1", str(target),
+            ]
+        else:
+            frequency = 220 + seed
+            command = [
+                "ffmpeg", "-y", "-f", "lavfi", "-i",
+                f"sine=frequency={frequency}:sample_rate=48000:duration=2",
+                "-c:a", "pcm_s16le", str(target),
+            ]
+        subprocess.run(command, check=True, capture_output=True)
+        update = AdapterJobUpdate(
+            job_id=request.job_id,
+            adapter_id=self.adapter_id,
+            provider_opaque_ref=(
+                "fake_" + hashlib.sha256(
+                    request.idempotency_key.encode("utf-8")
+                ).hexdigest()[:20]
+            ),
+            status="succeeded",
+            progress=1,
+            artifacts=(
+                ArtifactCandidate(
+                    artifact_id=f"artifact_{request.job_id}",
+                    job_id=request.job_id,
+                    task_id=request.task_id,
+                    requirement_item_id=request.requirement_item_id,
+                    staging_relative_path=relative.as_posix(),
+                    claimed_mime_type=mime_type,
+                ),
+            ),
+            message=(
+                "The deterministic test adapter created a synthetic local fixture."
+            ),
+            updated_at=self.clock(),
+        )
+        self.submissions[request.idempotency_key] = update
+        return update
+
+    def poll(self, request, *, provider_opaque_ref, staging_root):
+        return self.submissions.get(
+            request.idempotency_key,
+            self.submit(request, staging_root=staging_root),
+        )
+
+    def cancel(self, request, *, provider_opaque_ref):
+        return AdapterJobUpdate(
+            job_id=request.job_id,
+            adapter_id=self.adapter_id,
+            provider_opaque_ref=provider_opaque_ref,
+            status="cancelled",
+            progress=0,
+            message="The deterministic test job was cancelled.",
             updated_at=self.clock(),
         )

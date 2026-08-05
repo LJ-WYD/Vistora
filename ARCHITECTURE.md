@@ -333,6 +333,9 @@ boundary below may consume it.
 ### Material-production and catalog boundary
 
 `src/material_production/` is the constrained provider/application boundary.
+`MaterialProductionAgent` is its non-creative production executor: it accepts
+one exact frozen run request, never invents tasks, and delegates only to
+`MaterialProductionOrchestrator`.
 `MaterialProductionOrchestrator.prepare_request` resolves an exact confirmed
 production plan and freezes the creation-planning ledger revision, material
 confirmation, plan/review/capability digests, and a sorted versioned adapter
@@ -343,10 +346,16 @@ Adapters expose provider-neutral `submit`, `poll`, `cancel`, and result
 contracts with opaque job/provider references, idempotency keys, attempts,
 progress, explicit cost state, timeout/rate-limit/failure/partial/recovery
 states, and bounded capability metadata. Domain contracts contain no vendor
-SDK types. The production factory registers only a truthful, unconfigured
-manual-import adapter. The deterministic local video adapter is exported for
-tests only and is never registered by the production factory. No credentials
-are collected or submitted.
+SDK types. The single production factory registers the provider-neutral
+capability names `image_generation`, `video_generation`, `voice_synthesis`,
+`music_generation`, `audio_generation`, `asset_search`, `local_capture`,
+`user_material_request`, and `manual_import`. All provider-backed capabilities
+are explicit unconfigured placeholders; manual import is unconfigured without
+an opaque-token resolver. The local user-request adapter records only
+`needs_input`, creates no artifact, and requires a separately confirmed import
+after the user supplies media. Deterministic local image/video/audio adapters
+are exported for tests only and are never registered by the production
+factory. No credentials are collected or submitted.
 
 Artifacts first land below an ignored project-scoped staging root. Validation
 rejects traversal and verifies request/task/requirement linkage, size/hash/

@@ -15,7 +15,7 @@ from creation_planning import (
 )
 from director import DirectorHistoryQuery, DirectorStore
 from material_requirements import MaterialRequirementsService
-from material_production import MaterialProductionOrchestrator
+from material_production import MaterialProductionAgent, MaterialProductionOrchestrator
 from workflow import WorkflowApplicationService, WorkflowHistoryQuery
 
 from .models import (
@@ -64,6 +64,7 @@ class ProductionEntryService:
         creation_planning_agent: CreationPlanningAgent | None = None,
         creation_planning: CreationPlanningService | None = None,
         material_production: MaterialProductionOrchestrator | None = None,
+        material_production_agent: MaterialProductionAgent | None = None,
         clock: Clock = _utc_now,
         id_factory: IdFactory = _random_id,
     ) -> None:
@@ -78,6 +79,15 @@ class ProductionEntryService:
         self.creation_planning_agent = creation_planning_agent
         self.creation_planning = creation_planning
         self.material_production = material_production
+        self.material_production_agent = material_production_agent or (
+            MaterialProductionAgent(
+                material_production,
+                clock=clock,
+                id_factory=id_factory,
+            )
+            if material_production is not None
+            else None
+        )
         self.clock = clock
         self.id_factory = id_factory
 
@@ -562,21 +572,25 @@ class ProductionEntryService:
                 "creation_planning_revision": updated.revision,
             }
         if command.action == "start_material_production":
-            if self.material_production is None:
+            if self.material_production_agent is None:
                 raise ProductEntryError(
                     "Material production workflow is unavailable"
                 )
-            request = self.material_production.prepare_request(
-                request_id=self.id_factory("production_request"),
+            request = self.material_production_agent.prepare_execution(
+                agent_request_id=self.id_factory("production_agent_request"),
+                production_request_id=self.id_factory("production_request"),
                 production_confirmation_id=command.target_id or "",
                 requested_by=command.actor_id,
             )
-            run = self.material_production.start(request)
-            status = self._production_status(run["status"])
-            return status, run["run_id"], {
-                "run_id": run["run_id"],
-                "status": run["status"],
-                "message": run["message"],
+            report = self.material_production_agent.execute(request)
+            if report.disposition == "rejected":
+                raise ProductEntryError(report.error.message)
+            status = self._production_status(report.status)
+            return status, report.run_id, {
+                "agent_report_id": report.report_id,
+                "run_id": report.run_id,
+                "status": report.status,
+                "message": report.message,
             }
         if command.action == "poll_material_production":
             if self.material_production is None:

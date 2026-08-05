@@ -354,6 +354,24 @@ def _view(state: str) -> ProductEntryView:
                 "catalog_revision": (
                     1 if state == "material_production_succeeded" else 0
                 ),
+                "capabilities": [
+                    {
+                        "capability_id": "user_material_request",
+                        "adapter_id": "user_material_request_local",
+                        "configured": True,
+                        "execution_kind": "human_request",
+                        "limitation": None,
+                    },
+                    {
+                        "capability_id": "video_generation",
+                        "adapter_id": "unconfigured_video_generation",
+                        "configured": False,
+                        "execution_kind": "external_provider",
+                        "limitation": (
+                            "No video-generation provider is configured."
+                        ),
+                    },
+                ],
                 "runs": [
                     {
                         "run_id": "production_run_visual",

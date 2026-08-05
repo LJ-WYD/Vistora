@@ -857,6 +857,20 @@ function renderProduct() {
   }
   const production = view.material_production;
   if (production) {
+    for (const capability of production.capabilities || []) {
+      ui.productSummary.append(
+        workflowEvent(
+          `Production capability ${capability.capability_id}`,
+          capability.configured ? "configured" : "not_configured",
+          [
+            `${capability.execution_kind} / ${capability.adapter_id}`,
+            capability.configured
+              ? "Available through the confirmed production Agent boundary."
+              : (capability.limitation || "No adapter is configured."),
+          ],
+        ),
+      );
+    }
     for (const run of production.runs || []) {
       ui.productSummary.append(
         workflowEvent(

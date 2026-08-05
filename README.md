@@ -244,15 +244,22 @@ Agent, or changes the Director's definition of what is required and why.
 
 ## Material production, validation, and catalog
 
-`src/material_production/` consumes only an exact confirmed
-`MaterialProductionPlan`. A versioned adapter registry freezes configured
+`src/material_production/` provides a constrained `MaterialProductionAgent`
+that consumes only an exact confirmed `MaterialProductionPlan` and delegates
+to the production orchestrator; it cannot add tasks or interpret creative
+intent. A versioned adapter registry freezes configured
 capabilities and request/result schemas before a run. The provider-neutral
 job boundary supports submit, poll, cancel, retry, idempotency, progress,
 explicit cost-known/unknown state, terminal failure, timeout, partial result,
-and `recovery_required`. The default product factory configures no online or
-paid provider. Its manual-import capability is also marked unconfigured until
-an embedding application supplies a secure opaque-token resolver; the UI
-therefore never pretends that generation or import succeeded.
+and `recovery_required`. The single default production factory publishes
+explicit capabilities for AI image, video, voice, music and general audio
+generation, asset search, local capture, user material requests, and manual
+import. No online or paid provider is configured. Manual import is also
+unconfigured until an embedding application supplies a secure opaque-token
+resolver. A user-material request is the sole always-local action: it records
+`needs_input` without creating or importing media. The UI shows every
+configured/unconfigured state and never pretends that generation, search,
+capture, or import succeeded.
 
 Provider results first enter an ignored, project-scoped staging directory.
 Vistora verifies path confinement, task/requirement linkage, file size and
@@ -272,10 +279,11 @@ mandatory. Only registered insertion tools (`VideoAddClipSkill` and
 `VideoInsertOverwriteClipSkill`) resolve an accepted catalog URI at the
 atomic mutation boundary.
 
-The `studio` surface displays the production queue, attempts, progress,
+The `studio` surface displays capability configuration, the production queue,
+attempts, progress,
 failure/recovery status, validated artifacts, explicit acceptance controls,
-catalog records, and “Return to Director.” Deterministic fake generation is
-used only by tests and the reference workflow. Real online AI provider
+catalog records, and “Return to Director.” Deterministic fake image/video/
+audio generation is used only by tests and reference workflows. Real online AI provider
 adapters, credentials, mature cost enforcement, complex AI packaging/effects,
 and richer editing skills are not implemented.
 

@@ -2,6 +2,7 @@ import ast
 import json
 import shutil
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -28,13 +29,19 @@ from material_production import (  # noqa: E402
     AdapterJobUpdate,
     AdapterRegistry,
     ArtifactCandidate,
+    DeterministicLocalMediaAdapter,
     DeterministicLocalVideoAdapter,
     ManualImportAdapter,
+    MaterialProductionAgent,
     MaterialCatalogStore,
     MaterialProductionIntegrityError,
     MaterialProductionOrchestrator,
     MaterialProductionStore,
     ProductionTaskInput,
+    PRODUCTION_CAPABILITY_KINDS,
+    UserMaterialRequestAdapter,
+    build_creation_capability_reference,
+    build_material_production_registry,
 )
 from core import timeline_manager  # noqa: E402
 from core.timeline import TimelineConfig, TrackConfig  # noqa: E402
@@ -713,6 +720,241 @@ def test_only_accepted_catalog_uri_can_reach_timeline_through_atomic_skill(
     )
 
 
+def test_default_production_capabilities_are_complete_and_truthful():
+    first = build_material_production_registry()
+    second = build_material_production_registry()
+    assert first.reference() == second.reference()
+    projected = build_creation_capability_reference(first)
+    expected = set(PRODUCTION_CAPABILITY_KINDS)
+    assert {item.capability_id for item in projected.capabilities} == expected
+    by_id = {item.capability_id: item for item in projected.capabilities}
+    assert by_id["user_material_request"].availability == "available"
+    assert by_id["manual_import"].availability == "unconfigured"
+    for capability_id in {
+        "image_generation",
+        "video_generation",
+        "voice_synthesis",
+        "music_generation",
+        "asset_search",
+        "local_capture",
+    }:
+        assert by_id[capability_id].availability == "unconfigured"
+        assert "No " in by_id[capability_id].limitation
+    serialized = first.reference().model_dump_json()
+    assert "api_key" not in serialized.lower()
+    assert ":\\" not in serialized
+
+
+def _confirmed_o23_plan(tmp_path):
+    deterministic, _, material_confirmation, planning = (
+        planning_fixture.__wrapped__(tmp_path)
+    )
+    unknown = ProductionEstimate(
+        status="unknown",
+        rationale="No external provider or billable estimate is configured.",
+    )
+    prompt = {
+        "subject": "A deterministic synthetic requirement fixture.",
+        "scene": "A local test-only scene.",
+        "camera": "Locked frame or neutral audio perspective.",
+        "action": "Produce only the declared fixture.",
+        "lighting": "Uniform synthetic lighting.",
+        "style": "Deterministic regression fixture.",
+        "negative_constraints": ["No external provider call."],
+    }
+
+    def task(
+        task_id,
+        capability_id,
+        method,
+        media_kind,
+        extension,
+        mime_type,
+        *,
+        requirement_id="requirement_hero",
+    ):
+        generated = method == "generate"
+        visual = media_kind in {"video", "image"}
+        timed = media_kind in {"video", "audio"}
+        return MaterialProductionTask(
+            task_id=task_id,
+            requirement_item_id=requirement_id,
+            title=f"Execute {capability_id}",
+            purpose="Exercise the exact confirmed provider-neutral capability.",
+            production_method=method,
+            status="planned",
+            capability_ids=(capability_id,),
+            prompt_spec=prompt if generated else None,
+            duration_seconds=2.0 if timed else None,
+            width=320 if visual else None,
+            height=180 if visual else None,
+            aspect_ratio="16:9" if visual else None,
+            fps=24.0 if media_kind == "video" else None,
+            seed=23 if generated else None,
+            batch_id="production_batch_o23",
+            cost_estimate=unknown,
+            time_estimate=unknown,
+            quality_gates=("Artifact remains locally reproducible.",),
+            retry_strategy=("Retry only after explicit review.",),
+            alternative_strategy="Request a validated user import.",
+            delivery=DeliveryFileSpecification(
+                media_kind=media_kind,
+                container_or_extension=extension,
+                mime_type=mime_type,
+                filename_pattern=f"{task_id}_{{attempt}}.{extension}",
+            ),
+        )
+
+    tasks = (
+        task("task_ai_image", "image_generation", "generate", "image", "png", "image/png"),
+        task("task_ai_video", "video_generation", "generate", "video", "mp4", "video/mp4"),
+        task("task_ai_voice", "voice_synthesis", "generate", "audio", "wav", "audio/wav", requirement_id="requirement_voice"),
+        task("task_ai_music", "music_generation", "generate", "audio", "wav", "audio/wav", requirement_id="requirement_voice"),
+        task("task_asset_search", "asset_search", "library_search", "image", "png", "image/png"),
+        task("task_local_capture", "local_capture", "capture", "video", "mp4", "video/mp4"),
+        task("task_user_request", "user_material_request", "manual", "video", "mp4", "video/mp4"),
+    )
+    capabilities = tuple(
+        CapabilityRequirement(
+            capability_id=capability_id,
+            capability_kind=PRODUCTION_CAPABILITY_KINDS[capability_id],
+            availability="available",
+        )
+        for capability_id in sorted(
+            {item.capability_ids[0] for item in tasks}
+        )
+    )
+    planning_registry = CapabilityRegistryReference.create(
+        registry_id="o23_test_capabilities",
+        registry_revision=1,
+        capabilities=capabilities,
+    )
+
+    def output(request):
+        return CreationPlanningReasoningOutput(
+            outcome="proposal",
+            message="The bounded O23 production plan is ready.",
+            material_confirmation_ref=request.material_confirmation_ref,
+            capability_registry_ref=request.capability_registry_ref,
+            plan_draft=MaterialProductionPlanDraft(
+                rationale="Exercise every original O23 production task kind.",
+                tasks=tasks,
+                delivery_summary=("Synthetic fixtures require human acceptance.",),
+                global_quality_gates=("No task invokes an online provider.",),
+                limitations=("All configured adapters are deterministic test doubles.",),
+            ),
+        ).model_dump(mode="json")
+
+    agent = CreationPlanningAgent(
+        adapter=Adapter([output]),
+        service=planning,
+        capability_provider=lambda: planning_registry,
+        clock=deterministic.clock,
+        id_factory=deterministic.identifier,
+    )
+    proposal = agent.plan(
+        agent.prepare_request(
+            request_id="creation_request_o23",
+            material_confirmation_id=material_confirmation.confirmation_id,
+        )
+    ).proposal
+    confirmation, _ = planning.decide(
+        proposal.review.review_id,
+        decision="confirmed",
+        confirmed_by="local_user",
+        expected_revision=1,
+    )
+    return deterministic, planning, confirmation
+
+
+def test_material_production_agent_executes_all_o23_task_kinds_without_online_provider(
+    tmp_path,
+):
+    deterministic, planning, confirmation = _confirmed_o23_plan(tmp_path)
+    adapter_specs = (
+        ("fake_image", "image_generation", "image"),
+        ("fake_video", "video_generation", "video"),
+        ("fake_voice", "voice_synthesis", "audio"),
+        ("fake_music", "music_generation", "audio"),
+        ("fake_search", "asset_search", "image"),
+        ("fake_capture", "local_capture", "video"),
+    )
+    adapters = AdapterRegistry(
+        (
+            *tuple(
+                DeterministicLocalMediaAdapter(
+                    adapter_id=adapter_id,
+                    capability_id=capability_id,
+                    media_kind=media_kind,
+                    clock=deterministic.clock,
+                )
+                for adapter_id, capability_id, media_kind in adapter_specs
+            ),
+            UserMaterialRequestAdapter(clock=deterministic.clock),
+        ),
+        registry_id="o23_test_adapters",
+        registry_revision=1,
+    )
+    orchestrator = MaterialProductionOrchestrator(
+        creation_planning=planning,
+        adapters=adapters,
+        store=MaterialProductionStore(tmp_path / "o23.production.json"),
+        catalog=MaterialCatalogStore(
+            tmp_path / "o23.catalog.json",
+            media_root=tmp_path / "o23_catalog_media",
+        ),
+        staging_root=tmp_path / "o23_staging",
+        project_id="project_creation_planning",
+        clock=deterministic.clock,
+        id_factory=deterministic.identifier,
+    )
+    production_agent = MaterialProductionAgent(
+        orchestrator,
+        clock=deterministic.clock,
+        id_factory=deterministic.identifier,
+    )
+    request = production_agent.prepare_execution(
+        agent_request_id="production_agent_request_o23",
+        production_request_id="production_request_o23",
+        production_confirmation_id=confirmation.confirmation_id,
+        requested_by="local_user",
+    )
+    assert request.model_validate_json(request.model_dump_json()) == request
+    report = production_agent.execute(request)
+    assert report.disposition == "executed"
+    assert report.status == "running"
+    assert report.model_validate_json(report.model_dump_json()) == report
+    view = orchestrator.view()
+    assert len(view.jobs) == 7
+    assert len(view.artifacts) == 6
+    assert all(item["passed"] for item in view.artifacts)
+    assert view.catalog_revision == 0
+    user_job = next(
+        item for item in view.jobs if item["task_id"] == "task_user_request"
+    )
+    assert user_job["status"] == "needs_input"
+    assert "No media was created" in user_job["message"]
+    serialized = view.model_dump_json()
+    assert str(tmp_path) not in serialized
+    assert "provider_opaque_ref" not in serialized
+
+    drifted = request.model_copy(
+        update={
+            "run_request": request.run_request.model_copy(
+                update={
+                    "adapter_registry_ref": request.run_request.adapter_registry_ref.model_copy(
+                        update={"registry_revision": 2}
+                    )
+                }
+            )
+        }
+    )
+    rejected = production_agent.execute(drifted)
+    assert rejected.disposition == "rejected"
+    assert rejected.error.code == "adapter_registry_stale"
+    assert len(orchestrator.view().jobs) == 7
+
+
 def test_material_production_import_boundary_has_no_mutation_engines():
     forbidden_modules = {
         "core.timeline_manager",
@@ -727,5 +969,5 @@ def test_material_production_import_boundary_has_no_mutation_engines():
             if isinstance(node, ast.Import):
                 imports.extend(alias.name for alias in node.names)
             elif isinstance(node, ast.ImportFrom):
-                imports.append(node.module or "")
+                imports.append(("." * node.level) + (node.module or ""))
         assert not forbidden_modules.intersection(imports)

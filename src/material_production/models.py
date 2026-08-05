@@ -42,6 +42,7 @@ class AdapterCapability(ProductionModel):
         "manual_import",
         "local_deterministic_test",
         "external_provider",
+        "human_request",
     ]
     max_concurrency: int = Field(ge=1, le=64)
     rate_limit_per_minute: int | None = Field(default=None, ge=1)
@@ -588,6 +589,7 @@ class MaterialProductionView(ProductionModel):
     jobs: tuple[dict[str, Any], ...] = ()
     artifacts: tuple[dict[str, Any], ...] = ()
     catalog: tuple[dict[str, Any], ...] = ()
+    capabilities: tuple[dict[str, Any], ...] = ()
     limitations: tuple[str, ...] = (
         "Online provider adapters are not configured.",
         "Only accepted validated artifacts become Director-observable material.",

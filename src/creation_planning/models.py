@@ -72,9 +72,11 @@ class CapabilityRequirement(CreationPlanningModel):
         "image_generation",
         "audio_generation",
         "voice_synthesis",
+        "music_generation",
         "capture",
         "manual_import",
         "asset_search",
+        "user_material_request",
     ]
     required_features: tuple[str, ...] = ()
     availability: Literal[

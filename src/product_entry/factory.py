@@ -7,8 +7,6 @@ from typing import Any
 
 from agent import DirectorAgent, EditingAgent
 from creation_planning import (
-    CapabilityRegistryReference,
-    CapabilityRequirement,
     CreationPlanningAgent,
     CreationPlanningAdapter,
     CreationPlanningService,
@@ -31,11 +29,12 @@ from material_requirements import (
     MaterialRequirementsStore,
 )
 from material_production import (
-    AdapterRegistry,
-    ManualImportAdapter,
     MaterialCatalogStore,
+    MaterialProductionAgent,
     MaterialProductionOrchestrator,
     MaterialProductionStore,
+    build_creation_capability_reference,
+    build_material_production_registry,
 )
 
 from .service import ProductionEntryService
@@ -180,57 +179,10 @@ def build_current_product_entry(
         project_id=initial.project_id,
     )
 
+    production_adapters = build_material_production_registry()
+
     def capability_provider():
-        return CapabilityRegistryReference.create(
-            registry_id="creation_capabilities_local",
-            registry_revision=1,
-            capabilities=(
-                CapabilityRequirement(
-                    capability_id="manual_import",
-                    capability_kind="manual_import",
-                    availability="unconfigured",
-                    limitation=(
-                        "No secure local import-token resolver is configured."
-                    ),
-                ),
-                CapabilityRequirement(
-                    capability_id="local_capture",
-                    capability_kind="capture",
-                    availability="unconfigured",
-                    limitation="No capture adapter is configured.",
-                ),
-                CapabilityRequirement(
-                    capability_id="video_generation",
-                    capability_kind="video_generation",
-                    availability="unconfigured",
-                    limitation="No video-generation adapter is configured.",
-                ),
-                CapabilityRequirement(
-                    capability_id="image_generation",
-                    capability_kind="image_generation",
-                    availability="unconfigured",
-                    limitation="No image-generation adapter is configured.",
-                ),
-                CapabilityRequirement(
-                    capability_id="audio_generation",
-                    capability_kind="audio_generation",
-                    availability="unconfigured",
-                    limitation="No audio-generation adapter is configured.",
-                ),
-                CapabilityRequirement(
-                    capability_id="voice_synthesis",
-                    capability_kind="voice_synthesis",
-                    availability="unconfigured",
-                    limitation="No voice-synthesis adapter is configured.",
-                ),
-                CapabilityRequirement(
-                    capability_id="asset_search",
-                    capability_kind="asset_search",
-                    availability="unconfigured",
-                    limitation="No asset-library adapter is configured.",
-                ),
-            ),
-        )
+        return build_creation_capability_reference(production_adapters)
 
     creation_agent = CreationPlanningAgent(
         adapter=(
@@ -242,14 +194,7 @@ def build_current_product_entry(
     )
     production = MaterialProductionOrchestrator(
         creation_planning=creation_planning,
-        adapters=AdapterRegistry(
-            (
-                ManualImportAdapter(
-                    lambda _token: None,
-                    configured=False,
-                ),
-            ),
-        ),
+        adapters=production_adapters,
         store=MaterialProductionStore.for_project_file(
             timeline_manager.PROJECT_FILE
         ),
@@ -273,6 +218,7 @@ def build_current_product_entry(
         creation_planning_agent=creation_agent,
         creation_planning=creation_planning,
         material_production=production,
+        material_production_agent=MaterialProductionAgent(production),
     )
 
 

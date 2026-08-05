@@ -770,6 +770,17 @@ class MaterialProductionOrchestrator:
                 }
                 for entry in catalog.entries
             ),
+            capabilities=tuple(
+                {
+                    "capability_id": capability_id,
+                    "adapter_id": capability.adapter_id,
+                    "configured": capability.configured,
+                    "execution_kind": capability.execution_kind,
+                    "limitation": capability.limitation,
+                }
+                for capability in self.adapters.reference().adapters
+                for capability_id in capability.capability_ids
+            ),
         )
 
     @staticmethod
