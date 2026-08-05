@@ -327,13 +327,32 @@ and explicit acceptance criteria. Review resolves every target against the
 detached current snapshot and rejects stale ranges, evidence/source drift or
 missing/stale masks.
 
-The separate hash-chained effect ledger records deterministic task-level
+The separate hash-chained effect plan ledger records deterministic task-level
 reviews and immutable explicit confirmation or rejection. It invokes no
 provider, creates no job or artifact, and cannot mutate the timeline. Its
-public view always reports `not_configured` at this stage. O28 will add the
-approved high-value capability adapters; O29 will define confirmed timeline
-fill-back; O30 will add candidate/progress/retry/cache lifecycle. No real or
-paid AI provider and no credential is configured or implied by O27.
+public view reports provider configuration truthfully. O28 adds the approved
+high-value adapter boundary, O29 compiles accepted artifacts into the normal
+confirmed timeline path, and O30 records the operational job lifecycle. No
+real or paid AI provider and no credential is configured or implied.
+
+## AI effect job lifecycle (O30)
+
+`src/effect_jobs/` is an append-only, project-scoped lifecycle for an exact
+confirmed O28 execution request. It records monotonic progress, known or
+explicitly unknown cost, terminal failure/cancellation/restart recovery,
+contiguous candidate versions, bounded partial-redo scope, explicit human
+accept/reject/replace/rollback choices, and an exact-request content cache.
+Every event is hash chained and written with an optimistic revision guard,
+exclusive lock, `fsync`, and atomic replacement. Idempotency replay with drift,
+cross-project requests, corrupt history, unknown candidates, and invalid
+selection transitions fail closed.
+
+The browser-safe projection intentionally omits staging paths and exposes only
+opaque artifact/candidate IDs, status, cost, progress, cache state, and human
+selection history. Candidate rollback changes the selected version; it does
+not claim to delete an external artifact or reverse a timeline edit. Timeline
+fillback remains the separate O29 Director review → confirmation → EditingAgent
+→ registered-tool path. Production still has no configured online AI provider.
 
 `src/plan_review/` provides strict version `1.0.0` contracts and a deterministic read-only diff engine for the period before confirmation. A `PlanDiffRequest` binds an exact timeline snapshot ID/revision/digest, Director plan ID/version/digest, non-executable proposed execution-plan digest, and the exact registered tool-schema set. The engine validates proposed arguments with the current registry schemas, simulates supported semantics on detached clip data, and returns stable before/after changes, source-evidence links, provenance summaries, warnings, and net counts. Repeating the same request produces the same document and digest; snapshot or registry drift requires regeneration.
 

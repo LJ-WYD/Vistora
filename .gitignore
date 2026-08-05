@@ -35,7 +35,10 @@ venv/
 *.production.json.lock
 *.material-catalog.json
 *.material-catalog.json.lock
+*.effect-jobs.json
+*.effect-jobs.json.lock
 material_staging/
+effect_staging/
 materials/
 video/
 output/

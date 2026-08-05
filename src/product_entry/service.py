@@ -69,6 +69,7 @@ class ProductionEntryService:
         material_feedback: MaterialFeedbackService | None = None,
         effect_capability_provider: Callable[[], dict[str, Any]] | None = None,
         effect_fillback_provider: Callable[[], dict[str, Any]] | None = None,
+        effect_job_provider: Callable[[], dict[str, Any]] | None = None,
         clock: Clock = _utc_now,
         id_factory: IdFactory = _random_id,
     ) -> None:
@@ -86,6 +87,7 @@ class ProductionEntryService:
         self.material_feedback = material_feedback
         self.effect_capability_provider = effect_capability_provider
         self.effect_fillback_provider = effect_fillback_provider
+        self.effect_job_provider = effect_job_provider
         self.material_production_agent = material_production_agent or (
             MaterialProductionAgent(
                 material_production,
@@ -146,6 +148,11 @@ class ProductionEntryService:
             if self.effect_fillback_provider is not None
             else None
         )
+        effect_job_view = (
+            self.effect_job_provider()
+            if self.effect_job_provider is not None
+            else None
+        )
         state, allowed = self._state(
             ledger,
             director,
@@ -170,6 +177,7 @@ class ProductionEntryService:
             material_feedback=feedback_view,
             effect_packaging=effect_view,
             effect_fillback=effect_fillback_view,
+            effect_jobs=effect_job_view,
             latest_result=latest,
             allowed_actions=allowed,
         )

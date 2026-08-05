@@ -1214,5 +1214,26 @@ the production EditingAgent dispatches `VideoInsertOverwriteClipSkill` or
 checkpoint, trace, failure recovery, replay, and rollback semantics therefore
 remain the only write path. Standard audio/video, alpha image layers, and
 visual effects layers become normal timeline clip entities; no parallel effect
-timeline is introduced. Artifact deletion and O30 candidate/job lifecycle are
+timeline is introduced. Artifact deletion and candidate selection remain
 outside timeline rollback.
+
+### Original O30 effect jobs, candidates and cache
+
+`effect_jobs` owns the operational history after an exact O28 confirmation and
+before an O29 accepted artifact is compiled for timeline review. Its frozen
+contracts model one exact task attempt, monotonic progress, known/unknown cost,
+failure, cancellation, interruption recovery, bounded partial redo, contiguous
+candidate versions, human accept/reject/replace/rollback decisions, and exact
+request cache records. The project sidecar is append-only and hash-chained;
+exclusive locks, optimistic revisions, `fsync`, atomic replacement, strict
+Pydantic parsing, and idempotency drift checks provide fail-closed restart and
+concurrency behavior.
+
+This boundary can call only `EffectCapabilityExecutionService`, which itself
+has no timeline authority. It imports neither timeline/renderer nor atomic
+skills/gateway. Its product projection redacts staging-relative storage details
+and never returns absolute paths. A cached candidate is reused only for the
+same confirmed execution request, task and bounded redo scope. Candidate
+selection and rollback are audit decisions, not timeline mutation or external
+artifact deletion. Human acceptance still must enter O29 and then the ordinary
+review, immutable confirmation, EditingAgent and registered atomic-tool chain.

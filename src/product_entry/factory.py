@@ -38,6 +38,7 @@ from material_production import (
     build_material_production_registry,
 )
 from effect_workflow import build_effect_adapter_registry
+from effect_jobs import EffectJobLifecycleService, EffectJobStore
 
 from .service import ProductionEntryService
 from .store import ProductEntryStore
@@ -190,6 +191,9 @@ def build_current_product_entry(
 
     production_adapters = build_material_production_registry()
     effect_adapters = build_effect_adapter_registry()
+    effect_job_store = EffectJobStore.for_project_file(
+        timeline_manager.PROJECT_FILE
+    )
 
     def capability_provider():
         return build_creation_capability_reference(production_adapters)
@@ -241,6 +245,9 @@ def build_current_product_entry(
                 "independent workflow confirmation, EditingAgent, and registered atomic tools."
             ),
         },
+        effect_job_provider=lambda: EffectJobLifecycleService.project_view(
+            effect_job_store.load(project_id=initial.project_id)
+        ).model_dump(mode="json"),
     )
 
 

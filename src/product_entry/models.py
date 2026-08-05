@@ -265,6 +265,7 @@ class ProductEntryView(ProductEntryModel):
     material_feedback: dict[str, Any] | None = None
     effect_packaging: dict[str, Any] | None = None
     effect_fillback: dict[str, Any] | None = None
+    effect_jobs: dict[str, Any] | None = None
     latest_result: dict[str, Any] | None = None
     allowed_actions: tuple[ProductAction, ...] = ()
     limitations: tuple[str, ...] = (

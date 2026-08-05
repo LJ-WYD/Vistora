@@ -997,6 +997,27 @@ function renderProduct() {
       ),
     );
   }
+  if (view.effect_jobs) {
+    const jobs = view.effect_jobs;
+    ui.productSummary.append(
+      workflowEvent(
+        "AI effect candidate lifecycle",
+        jobs.state,
+        [
+          `${(jobs.attempts || []).length} attempts / ${(jobs.candidates || []).length} candidates`,
+          ...(jobs.attempts || []).map(
+            (item) =>
+              `${item.task_id} attempt ${item.attempt_number}: ${Math.round(item.progress * 100)}% / ${item.status} / cost ${item.cost.status}`,
+          ),
+          ...(jobs.candidates || []).map(
+            (item) =>
+              `${item.task_id} candidate v${item.candidate_version}: ${item.review_status}`,
+          ),
+          "Retry, partial redo, replacement and rollback remain explicit audited actions; no candidate mutates the timeline.",
+        ],
+      ),
+    );
+  }
   ui.productActions.replaceChildren();
   for (const action of view.allowed_actions) {
     if (action === "director_turn") {
