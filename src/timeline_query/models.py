@@ -7,8 +7,8 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-TIMELINE_SNAPSHOT_VERSION = "6.0.0"
-SnapshotVersion = Literal["2.0.0", "3.0.0", "4.0.0", "5.0.0", "6.0.0"]
+TIMELINE_SNAPSHOT_VERSION = "7.0.0"
+SnapshotVersion = Literal["2.0.0", "3.0.0", "4.0.0", "5.0.0", "6.0.0", "7.0.0"]
 SnapshotId = Annotated[
     str,
     Field(
@@ -165,6 +165,49 @@ class VisualAutomationSnapshot(ReadModel):
     automation_digest: Sha256Digest
 
 
+class MaskPointSnapshot(ReadModel):
+    point_id: SnapshotId
+    x: FiniteFloat
+    y: FiniteFloat
+
+
+class MaskAutomationSnapshot(ReadModel):
+    automation_id: SnapshotId
+    mask_id: SnapshotId
+    property_path: Literal[
+        "position_x", "position_y", "scale_x", "scale_y",
+        "rotation_degrees", "opacity", "feather",
+    ]
+    enabled: bool
+    keyframes: tuple[VisualKeyframeSnapshot, ...]
+
+
+class ClipMaskSnapshot(ReadModel):
+    schema_name: Literal["vistora.clip-mask-snapshot"] = "vistora.clip-mask-snapshot"
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    mask_id: SnapshotId
+    kind: Literal["rectangle", "ellipse", "polygon"]
+    operation: Literal["add", "subtract", "intersect"]
+    enabled: bool
+    invert: bool
+    opacity: FiniteFloat
+    feather: FiniteFloat
+    expand: FiniteFloat
+    position_x: FiniteFloat
+    position_y: FiniteFloat
+    scale_x: FiniteFloat
+    scale_y: FiniteFloat
+    rotation_degrees: FiniteFloat
+    width: FiniteFloat | None = None
+    height: FiniteFloat | None = None
+    points: tuple[MaskPointSnapshot, ...] = ()
+    automations: tuple[MaskAutomationSnapshot, ...] = ()
+
+
+class ClipCompositeSnapshot(ReadModel):
+    blend_mode: Literal["normal", "multiply", "screen"] = "normal"
+
+
 class ClipSnapshot(ReadModel):
     """Detached view of one clip and its declared timing."""
 
@@ -193,6 +236,9 @@ class ClipSnapshot(ReadModel):
     transform: ClipTransformSnapshot
     color: ClipColorSnapshot
     visual_automations: tuple[VisualAutomationSnapshot, ...] = ()
+    masks: tuple[ClipMaskSnapshot, ...] = ()
+    composite: ClipCompositeSnapshot = Field(default_factory=ClipCompositeSnapshot)
+    mask_digest: Sha256Digest
     automation_digest: Sha256Digest
     visual_digest: Sha256Digest
     provenance: ClipProvenanceSummary | None = None

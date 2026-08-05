@@ -265,7 +265,8 @@ split/trim/move/insert/overwrite/lift/ripple-delete/playback-property
 operations across arbitrary video/audio tracks, explicit current-only versus
 linked-group effects, clip/track audio mixing, linear gain envelopes,
 read-only loudness analysis with explicit evidenced gain application, track
-management, link/unlink, bounded visual keyframe curves, timeline clear/default
+management, link/unlink, bounded visual keyframe curves, validated clip masks,
+bounded compositing declarations, timeline clear/default
 project reset, and export timeline effects. Ripple, linked members, and
 overwrite-retained sides are shown as consequential changes. Locked-track
 proposals fail closed. Proxy-generating reverse operations, timelapse output,
@@ -297,7 +298,7 @@ The ledger keeps one stable logical identity for the workspace while every revie
 ## Atomic skill registry and execution gateway
 
 `src/atomic_runtime/` is the single production composition root for the
-thirty-five existing atomic skills. A fresh immutable `AtomicSkillRegistry` carries an
+thirty-nine existing atomic skills. A fresh immutable `AtomicSkillRegistry` carries an
 explicit ID, semantic version, revision, deterministic input-schema digest, and
 full descriptor digest. Every frozen `SkillDescriptor` declares the stable
 skill version, exact input and output schemas, timeline/media/file/external
@@ -366,7 +367,7 @@ legacy compatibility surfaces. Property-only edits can use
 reverse behavior is not expanded or promised transactionally reversible.
 Linked A/V and arbitrary video/audio track foundations are implemented.
 Automatic link inference, linked-source ingest as one operation,
-transcription/ASR, masks, denoise/de-reverb/source separation, plugin hosting, AI audio
+transcription/ASR, motion tracking, denoise/de-reverb/source separation, plugin hosting, AI audio
 providers, complex mastering, and effects remain unimplemented.
 
 ## Local audio editing and mix policy
@@ -439,15 +440,16 @@ processing, not a color-managed HDR, LUT, or secondary-grade pipeline.
 video clip IDs, reject locked/non-video targets, copy only to explicitly named
 clips, never spread through linked audio, and use the shared atomic timeline
 transaction. Detached review, confirmation/workflow, Editing Agent, trace,
-rollback, snapshot v6, Director context, and the manual draft UI carry the
+rollback, snapshot v7, Director context, and the manual draft UI carry the
 same visual state and digest. Browser video/CSS preview is labeled an
 approximation; final FFmpeg export is authoritative. Thumbnail analysis can
 request original or applied mode, and its cache key binds the complete visual
 digest and canvas settings.
 
 Visual keyframes for the bounded properties above are implemented by the
-separate automation system below. Masks/tracking, LUT import, secondary color,
-HDR, blend modes, animated titles, and AI effects remain unimplemented.
+separate automation system below. Clip masks are implemented by the bounded
+mask system below. Tracking, LUT import, secondary color, HDR, non-normal
+rendered blend modes, animated titles, and AI effects remain unimplemented.
 
 ## Deterministic video and audio transitions
 
@@ -474,7 +476,7 @@ changes remove any structurally invalid transition and expose its transition
 ID as a consequential tombstone instead of leaving an orphan.
 
 Detached Director review uses the same engine and registry validation but
-never dispatches a skill. Snapshot v6 exposes path-free stable transition
+never dispatches a skill. Snapshot v7 exposes path-free stable transition
 state and counts. Confirmed workflow and manual edits record transition
 creates/modifies/deletes in provenance; rollback restores the prior project
 document. The loopback timeline shows compact cut markers and a transition
@@ -493,7 +495,7 @@ primary video role only; overlay-track transitions are rejected as
 unsupported rather than rendered incorrectly. Source-handle extension never
 changes canonical clip trim or placement.
 
-Transition speed curves, masks/tracking, 3D/plugin/VST/OFX transitions,
+Transition speed curves, tracking, 3D/plugin/VST/OFX transitions,
 arbitrary filter strings, and AI effects are not implemented.
 
 ## Visual keyframes and parameter animation
@@ -514,7 +516,7 @@ keyframe applies only at its exact local time. A curve therefore overrides one
 static property only inside its explicit range and never creates a second
 hidden state.
 
-Five registry-revision-7 tools create/update/delete a keyframe, replace or
+Five production registry tools create/update/delete a keyframe, replace or
 clear a curve, and copy selected curves to explicitly named video clips. They
 reject locked/non-video targets and never spread through linked audio.
 Split samples the boundary and rebases the right curve; trim samples and keeps
@@ -529,14 +531,41 @@ final format conversion. This makes sequential and random-seek frame requests
 independent of evaluation history. Applied thumbnail requests bind the exact
 timeline sample time and automation digest into the cache key. Browser CSS
 preview is intentionally approximate; final FFmpeg export is authoritative.
-Snapshot v6 exposes fully detached curve/keyframe data and a stable automation
+Snapshot v7 exposes fully detached curve/keyframe data and a stable automation
 digest. The compact UI supports previous/next keyframe navigation and detached
 upsert/delete/clear/copy proposals, all behind structured diff and explicit
 confirmation.
 
-This first version does not provide masks/path animation, motion tracking,
+This first version does not provide path animation or motion tracking,
 speed-remapping curves, per-word subtitle animation, custom Bezier/expression
 editing, 3D, particles, plugins, or AI motion effects.
+
+## Masks and bounded compositing
+
+Original O16 now includes frozen version `1.0.0` rectangle, ellipse, and
+convex-polygon clip masks. Every mask and polygon point has a stable ID; masks
+support an ordered `add`/`subtract`/`intersect` set, invert, bounded opacity,
+feather, expand, normalized position/scale/rotation, and enabled state. Mask
+automation reuses the fixed seek-safe interpolation rules for a controlled
+property whitelist only. Arbitrary paths, expressions, filters, scripts,
+concave/self-intersecting polygons, and non-finite values are rejected.
+
+Four registry-revision-8 atomic tools upsert/remove one mask, replace the
+ordered mask set, copy selected masks to explicit clip IDs, or set/reset the
+bounded compositing declaration. They reject locked and non-video tracks,
+never propagate through linked audio, and use the shared atomic project-state
+transaction. Split and trim rebase mask curves deterministically, copy issues
+new mask/curve/keyframe IDs, and remove emits truthful mask tombstones.
+Detached plan/manual review, explicit confirmation, gateway execution,
+snapshot v7, provenance, and rollback share the same state.
+
+Final FFmpeg export generates its alpha expression only from validated mask
+fields and composites masked clips in deterministic track order. The browser
+uses a clearly approximate CSS preview; exported pixels are authoritative.
+The model reserves `multiply` and `screen` declarations for review, but the
+current renderer rejects them as unsupported instead of pretending to render
+them. Freeform paths, automatic tracking, matte media, rotoscoping, advanced
+blend modes, and arbitrary mask-point animation remain unimplemented.
 
 ## Constrained Editing Agent
 
@@ -586,6 +615,13 @@ application, render, pixel, audio and ffprobe regression:
 
 ```powershell
 python -m pytest -q tests/test_transitions.py
+```
+
+Run the original O16 mask contract, detached review, confirmed gateway/manual
+application, trace, transaction rollback, and real pixel regression:
+
+```powershell
+python -m pytest -q tests/test_masks.py
 ```
 
 This reference first confirms Director material requirements and a

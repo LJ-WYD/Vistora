@@ -17,6 +17,8 @@ from pydantic import (
 from core.timeline import (
     AppliedLoudnessNormalization,
     ClipColorAdjustment,
+    ClipCompositeSettings,
+    ClipMask,
     ClipTransform,
     SubtitleCue,
     SubtitleStyle,
@@ -782,6 +784,83 @@ class ManualVisualAutomationEdit(ContractModel):
         return self
 
 
+class ManualMaskEdit(ContractModel):
+    """User-authored mask/compositing proposal; execution remains atomic."""
+
+    operation_id: StableId
+    kind: Literal["clip_mask"] = "clip_mask"
+    action: Literal[
+        "upsert", "remove", "replace", "copy", "set_composite", "reset_composite"
+    ]
+    track_key: str = Field(min_length=1)
+    track_id: StableId
+    clip_id: StableId
+    mask: ClipMask | None = None
+    mask_id: StableId | None = None
+    masks: tuple[ClipMask, ...] = ()
+    targets: tuple[ManualClipReference, ...] = ()
+    mask_ids: tuple[StableId, ...] = ()
+    replace_existing: bool = False
+    composite: ClipCompositeSettings | None = None
+
+    @model_validator(mode="after")
+    def exact_mask_action(self) -> "ManualMaskEdit":
+        if self.action == "upsert" and not (
+            self.mask is not None
+            and self.mask_id is None
+            and not self.masks
+            and self.composite is None
+        ):
+            raise ValueError("Mask upsert requires only one exact mask")
+        if self.action == "remove" and not (
+            self.mask_id is not None
+            and self.mask is None
+            and not self.masks
+            and self.composite is None
+        ):
+            raise ValueError("Mask removal requires only one exact mask_id")
+        if self.action == "replace" and (
+            self.mask is not None
+            or self.mask_id is not None
+            or self.composite is not None
+        ):
+            raise ValueError("Mask replacement accepts only the ordered masks")
+        if self.action == "copy" and (
+            not self.targets
+            or self.mask is not None
+            or self.mask_id is not None
+            or self.masks
+            or self.composite is not None
+        ):
+            raise ValueError("Mask copy requires only explicit targets and selectors")
+        if self.action == "set_composite" and not (
+            self.composite is not None
+            and self.mask is None
+            and self.mask_id is None
+            and not self.masks
+        ):
+            raise ValueError("Composite set requires only exact settings")
+        if self.action == "reset_composite" and (
+            self.composite is not None
+            or self.mask is not None
+            or self.mask_id is not None
+            or self.masks
+        ):
+            raise ValueError("Composite reset accepts no mask or composite payload")
+        if self.action != "copy" and (
+            self.targets or self.mask_ids or self.replace_existing
+        ):
+            raise ValueError("Only mask copy accepts target fields")
+        identities = tuple((item.track_id, item.clip_id) for item in self.targets)
+        if len(identities) != len(set(identities)) or identities != tuple(sorted(identities)):
+            raise ValueError("Mask copy targets must be stable and unique")
+        if (self.track_id, self.clip_id) in identities:
+            raise ValueError("Mask copy source cannot also be a target")
+        if len(self.mask_ids) != len(set(self.mask_ids)) or self.mask_ids != tuple(sorted(self.mask_ids)):
+            raise ValueError("Mask selectors must be stable and unique")
+        return self
+
+
 ManualEditOperation = Annotated[
     ManualClipUpdate
     | ManualClipRemove
@@ -796,7 +875,8 @@ ManualEditOperation = Annotated[
     | ManualSubtitleTrack
     | ManualSubtitleCue
     | ManualTransitionEdit
-    | ManualVisualAutomationEdit,
+    | ManualVisualAutomationEdit
+    | ManualMaskEdit,
     Field(discriminator="kind"),
 ]
 
@@ -931,7 +1011,7 @@ class ManualEditChange(ContractModel):
 
     operation_id: StableId
     target_kind: Literal[
-        "clip", "track", "subtitle_track", "subtitle_cue", "transition", "automation"
+        "clip", "track", "subtitle_track", "subtitle_cue", "transition", "automation", "mask", "composite"
     ] = "clip"
     track_key: str = Field(min_length=1)
     track_id: StableId | None = None

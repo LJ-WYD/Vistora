@@ -21,6 +21,7 @@ from contracts import (
     ManualSubtitleTrack,
     ManualTransitionEdit,
     ManualVisualAutomationEdit,
+    ManualMaskEdit,
     PlanReference,
 )
 
@@ -71,7 +72,7 @@ class TraceEntityReference(TraceModel):
     """Opaque timeline or generated-media entity identity."""
 
     entity_kind: Literal[
-        "clip", "track", "subtitle_track", "subtitle_cue", "transition", "automation", "media_output"
+        "clip", "track", "subtitle_track", "subtitle_cue", "transition", "automation", "mask", "composite", "media_output"
     ]
     entity_id: str = Field(min_length=1, max_length=160)
     track_key: str | None = Field(default=None, min_length=1)
@@ -270,6 +271,8 @@ class ManualEntityRelation(TraceModel):
             "subtitle_cue",
             "transition",
             "automation",
+            "mask",
+            "composite",
         }:
             raise ValueError(
                 "Manual edit traces may reference timeline entities only"
@@ -381,6 +384,14 @@ class ManualEditTrace(TraceModel):
                     raise ValueError(
                         "Manual visual automation trace differs from proposal"
                     )
+                continue
+            if isinstance(edit, ManualMaskEdit):
+                expected_kind = "composite" if "composite" in edit.action else "mask"
+                if not direct or any(
+                    relation.entity.entity_kind != expected_kind
+                    for relation in direct
+                ):
+                    raise ValueError("Manual mask/composite trace differs from proposal")
                 continue
             if isinstance(edit, ManualClipLink):
                 expected = {

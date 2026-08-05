@@ -116,6 +116,31 @@ const ui = {
   clearAutomation: document.querySelector("#clear-automation"),
   clearAllAutomation: document.querySelector("#clear-all-automation"),
   copyAutomation: document.querySelector("#copy-automation"),
+  maskEditPanel: document.querySelector("#mask-edit-panel"),
+  maskId: document.querySelector("#mask-id"),
+  maskKind: document.querySelector("#mask-kind"),
+  maskOperation: document.querySelector("#mask-operation"),
+  maskX: document.querySelector("#mask-x"),
+  maskY: document.querySelector("#mask-y"),
+  maskWidth: document.querySelector("#mask-width"),
+  maskHeight: document.querySelector("#mask-height"),
+  maskFeather: document.querySelector("#mask-feather"),
+  maskExpand: document.querySelector("#mask-expand"),
+  maskOpacity: document.querySelector("#mask-opacity"),
+  maskInvert: document.querySelector("#mask-invert"),
+  maskPoints: document.querySelector("#mask-points"),
+  maskAutomationProperty: document.querySelector("#mask-automation-property"),
+  maskKeyframeTime: document.querySelector("#mask-keyframe-time"),
+  maskKeyframeValue: document.querySelector("#mask-keyframe-value"),
+  maskKeyframeInterpolation: document.querySelector("#mask-keyframe-interpolation"),
+  blendMode: document.querySelector("#blend-mode"),
+  maskCopyTargets: document.querySelector("#mask-copy-targets"),
+  maskFormMessage: document.querySelector("#mask-form-message"),
+  stageMask: document.querySelector("#stage-mask"),
+  stageMaskKeyframe: document.querySelector("#stage-mask-keyframe"),
+  removeMask: document.querySelector("#remove-mask"),
+  copyMasks: document.querySelector("#copy-masks"),
+  stageComposite: document.querySelector("#stage-composite"),
   transitionEditPanel: document.querySelector("#transition-edit-panel"),
   transitionToClip: document.querySelector("#transition-to-clip"),
   transitionKind: document.querySelector("#transition-kind"),
@@ -1685,6 +1710,54 @@ function showManualEditor(track, clip) {
     : track.kind !== "video"
       ? "Visual keyframes apply only to video/image clips."
       : `${automations.length} curve(s) · ${clip.automation_digest.slice(0, 23)}…`;
+  const masks = clip.masks || [];
+  const selectedMask = masks[0] || null;
+  ui.maskId.value = selectedMask?.mask_id || newStableId("mask");
+  ui.maskKind.value = selectedMask?.kind || "rectangle";
+  ui.maskOperation.value = selectedMask?.operation || "add";
+  ui.maskX.value = String(selectedMask?.position_x ?? 0.5);
+  ui.maskY.value = String(selectedMask?.position_y ?? 0.5);
+  ui.maskWidth.value = String(selectedMask?.width ?? 0.5);
+  ui.maskHeight.value = String(selectedMask?.height ?? 0.5);
+  ui.maskFeather.value = String(selectedMask?.feather ?? 0);
+  ui.maskExpand.value = String(selectedMask?.expand ?? 0);
+  ui.maskOpacity.value = String(selectedMask?.opacity ?? 1);
+  ui.maskInvert.checked = Boolean(selectedMask?.invert);
+  ui.maskPoints.value = (selectedMask?.points || [])
+    .map((point) => `${point.x},${point.y}`).join("\n");
+  ui.maskKeyframeTime.value = Math.min(
+    clip.effective_duration_seconds,
+    Math.max(0, state.currentTime - clip.timeline_start_seconds),
+  ).toFixed(3);
+  ui.blendMode.value = clip.composite?.blend_mode || "normal";
+  ui.maskCopyTargets.replaceChildren();
+  for (const candidateTrack of state.snapshot.tracks) {
+    if (candidateTrack.kind !== "video") continue;
+    for (const candidateClip of candidateTrack.clips) {
+      if (candidateClip.clip_id === clip.clip_id) continue;
+      const option = document.createElement("option");
+      option.value = JSON.stringify({
+        track_key: candidateTrack.track_key,
+        track_id: candidateTrack.track_id,
+        clip_id: candidateClip.clip_id,
+      });
+      option.textContent = `${candidateTrack.track_id} / ${candidateClip.clip_id}`;
+      option.disabled = candidateTrack.locked;
+      ui.maskCopyTargets.append(option);
+    }
+  }
+  for (const control of [
+    ui.stageMask, ui.stageMaskKeyframe, ui.removeMask,
+    ui.copyMasks, ui.stageComposite,
+  ]) control.disabled = visualDisabled;
+  ui.removeMask.disabled = visualDisabled || !selectedMask;
+  ui.copyMasks.disabled = visualDisabled || !masks.length || !ui.maskCopyTargets.options.length;
+  ui.maskFormMessage.classList.toggle("error", visualDisabled);
+  ui.maskFormMessage.textContent = track.locked
+    ? "Locked tracks reject mask and compositing changes."
+    : track.kind !== "video"
+      ? "Masks apply only to video/image clips."
+      : `${masks.length} mask(s) · ${clip.mask_digest.slice(0, 23)}…`;
   const orderedClips = [...track.clips].sort(
     (left, right) =>
       left.timeline_start_seconds - right.timeline_start_seconds ||
@@ -1874,6 +1947,25 @@ function approximateVisualPreview(clip, transform = clip?.transform, color = cli
   ui.previewVideo.style.clipPath =
     `inset(${transform.crop_top * 100}% ${transform.crop_right * 100}% ` +
     `${transform.crop_bottom * 100}% ${transform.crop_left * 100}%)`;
+  const previewMask = (clip.masks || []).find(
+    (item) => item.enabled && item.operation === "add" && !item.invert,
+  );
+  if (previewMask?.kind === "ellipse") {
+    ui.previewVideo.style.clipPath =
+      `ellipse(${(previewMask.width || 0.5) * 50}% ` +
+      `${(previewMask.height || 0.5) * 50}% at ` +
+      `${previewMask.position_x * 100}% ${previewMask.position_y * 100}%)`;
+  } else if (previewMask?.kind === "rectangle") {
+    const left = (previewMask.position_x - (previewMask.width || 0.5) / 2) * 100;
+    const top = (previewMask.position_y - (previewMask.height || 0.5) / 2) * 100;
+    const right = 100 - (previewMask.position_x + (previewMask.width || 0.5) / 2) * 100;
+    const bottom = 100 - (previewMask.position_y + (previewMask.height || 0.5) / 2) * 100;
+    ui.previewVideo.style.clipPath = `inset(${top}% ${right}% ${bottom}% ${left}%)`;
+  } else if (previewMask?.kind === "polygon") {
+    ui.previewVideo.style.clipPath = `polygon(${previewMask.points.map(
+      (point) => `${point.x * 100}% ${point.y * 100}%`,
+    ).join(",")})`;
+  }
   ui.previewVideo.style.filter = [
     `brightness(${Math.pow(2, color.exposure)})`,
     `contrast(${1 + color.contrast})`,
@@ -1928,6 +2020,20 @@ function changedFieldLines(change) {
       }
     }
     return lines.length ? lines : ["Visual automation metadata updated"];
+  }
+  if (change.target_kind === "mask") {
+    const beforeMasks = change.before?.masks || [];
+    const afterMasks = change.after?.masks || [];
+    return [
+      `Masks: ${beforeMasks.length} → ${afterMasks.length}`,
+      "Mask definitions/keyframes digest changed",
+    ];
+  }
+  if (change.target_kind === "composite") {
+    return [
+      `Blend: ${change.before?.composite?.blend_mode || "normal"} → ` +
+      `${change.after?.composite?.blend_mode || "normal"}`,
+    ];
   }
   if (change.action === "create") {
     if (change.target_kind === "transition") {
@@ -2341,6 +2447,11 @@ function showDetails(track, clip) {
     detailRow(
       "Visual automation",
       `${clip.visual_automations?.length || 0} curves · ${clip.automation_digest}`,
+    ),
+    detailRow(
+      "Masks / composite",
+      `${clip.masks?.length || 0} masks · ${clip.composite?.blend_mode || "normal"} · ` +
+        `${clip.mask_digest}`,
     ),
     detailRow(
       "Media access",
@@ -3566,6 +3677,137 @@ ui.copyAutomation.addEventListener("click", () => {
     });
     automationMessage(`Automation copy staged for ${targets.length} explicit target(s).`);
   } catch (error) { automationMessage(error.message || String(error), true); }
+});
+
+function maskMessage(message, error = false) {
+  ui.maskFormMessage.classList.toggle("error", error);
+  ui.maskFormMessage.textContent = message;
+}
+
+function maskFromUi(automations = []) {
+  const kind = ui.maskKind.value;
+  const maskId = ui.maskId.value.trim();
+  if (!/^[A-Za-z][A-Za-z0-9._:-]{2,159}$/.test(maskId)) {
+    throw new Error("Mask ID must be a stable safe identifier.");
+  }
+  const points = kind === "polygon"
+    ? ui.maskPoints.value.split(/\r?\n/).filter((line) => line.trim()).map((line, index) => {
+      const values = line.split(",").map((item) => Number(item.trim()));
+      if (values.length !== 2 || values.some((value) => !Number.isFinite(value))) {
+        throw new Error("Polygon points must use one finite x,y pair per line.");
+      }
+      return {schema_name: "vistora.mask-point", schema_version: "1.0.0", point_id: `maskpoint_${maskId}_${index}`, x: values[0], y: values[1]};
+    })
+    : [];
+  return {
+    schema_name: "vistora.clip-mask",
+    schema_version: "1.0.0",
+    mask_id: maskId,
+    kind,
+    operation: ui.maskOperation.value,
+    enabled: true,
+    invert: ui.maskInvert.checked,
+    opacity: readFiniteInput(ui.maskOpacity, "Mask opacity"),
+    feather: readFiniteInput(ui.maskFeather, "Mask feather"),
+    expand: readFiniteInput(ui.maskExpand, "Mask expand"),
+    position_x: readFiniteInput(ui.maskX, "Mask position X"),
+    position_y: readFiniteInput(ui.maskY, "Mask position Y"),
+    scale_x: 1,
+    scale_y: 1,
+    rotation_degrees: 0,
+    width: kind === "polygon" ? null : readFiniteInput(ui.maskWidth, "Mask width"),
+    height: kind === "polygon" ? null : readFiniteInput(ui.maskHeight, "Mask height"),
+    points,
+    automations,
+  };
+}
+
+function stageMaskEdit(edit) {
+  if (!state.selected || state.selected.track.locked || state.selected.track.kind !== "video") {
+    throw new Error("Select an unlocked video clip.");
+  }
+  stageEdit({
+    schema_version: "1.0.0",
+    operation_id: newStableId("manual_mask"),
+    kind: "clip_mask",
+    track_key: state.selected.track.track_key,
+    track_id: state.selected.track.track_id,
+    clip_id: state.selected.clip.clip_id,
+    ...edit,
+  });
+}
+
+ui.stageMask.addEventListener("click", () => {
+  try {
+    stageMaskEdit({action: "upsert", mask: maskFromUi()});
+    maskMessage("Mask staged locally; review and confirmation are required.");
+  } catch (error) { maskMessage(error.message || String(error), true); }
+});
+
+ui.stageMaskKeyframe.addEventListener("click", () => {
+  try {
+    if (!state.selected) throw new Error("Select a clip first.");
+    const time = readFiniteInput(ui.maskKeyframeTime, "Mask keyframe time");
+    if (time < 0 || time > state.selected.clip.effective_duration_seconds + 1e-6) {
+      throw new Error("Mask keyframe time must be inside the selected clip.");
+    }
+    const property = ui.maskAutomationProperty.value;
+    const existingMask = (state.selected.clip.masks || []).find((item) => item.mask_id === ui.maskId.value.trim());
+    const automations = [...(existingMask?.automations || [])];
+    const curveIndex = automations.findIndex((item) => item.property_path === property);
+    const curve = curveIndex >= 0 ? {...automations[curveIndex]} : {
+      schema_name: "vistora.mask-automation", schema_version: "1.0.0",
+      automation_id: newStableId("maskauto"), mask_id: ui.maskId.value.trim(),
+      property_path: property, enabled: true, keyframes: [],
+    };
+    const points = [...curve.keyframes];
+    const occupied = points.findIndex((point) => Math.abs(point.offset_seconds - time) <= 1e-6);
+    const point = {
+      schema_name: "vistora.visual-keyframe", schema_version: "1.0.0",
+      keyframe_id: occupied >= 0 ? points[occupied].keyframe_id : newStableId("maskkey"),
+      offset_seconds: time,
+      value: readFiniteInput(ui.maskKeyframeValue, "Mask keyframe value"),
+      interpolation: ui.maskKeyframeInterpolation.value,
+    };
+    if (occupied >= 0) points[occupied] = point; else points.push(point);
+    curve.keyframes = points.sort((left, right) => left.offset_seconds - right.offset_seconds || left.keyframe_id.localeCompare(right.keyframe_id));
+    if (curveIndex >= 0) automations[curveIndex] = curve; else automations.push(curve);
+    automations.sort((left, right) => left.property_path.localeCompare(right.property_path) || left.automation_id.localeCompare(right.automation_id));
+    stageMaskEdit({action: "upsert", mask: maskFromUi(automations)});
+    maskMessage("Mask keyframe staged locally; review is required.");
+  } catch (error) { maskMessage(error.message || String(error), true); }
+});
+
+ui.removeMask.addEventListener("click", () => {
+  try {
+    stageMaskEdit({action: "remove", mask_id: ui.maskId.value.trim()});
+    maskMessage("Mask removal staged locally.");
+  } catch (error) { maskMessage(error.message || String(error), true); }
+});
+
+ui.copyMasks.addEventListener("click", () => {
+  try {
+    const targets = Array.from(ui.maskCopyTargets.selectedOptions)
+      .map((option) => JSON.parse(option.value))
+      .sort((left, right) => `${left.track_id}/${left.clip_id}`.localeCompare(`${right.track_id}/${right.clip_id}`));
+    if (!targets.length) throw new Error("Select explicit target clips.");
+    stageMaskEdit({action: "copy", targets, mask_ids: [], replace_existing: false});
+    maskMessage(`Mask copy staged for ${targets.length} explicit target(s).`);
+  } catch (error) { maskMessage(error.message || String(error), true); }
+});
+
+ui.stageComposite.addEventListener("click", () => {
+  try {
+    stageMaskEdit({
+      action: ui.blendMode.value === "normal" ? "reset_composite" : "set_composite",
+      composite: ui.blendMode.value === "normal" ? null : {
+        schema_name: "vistora.clip-composite-settings",
+        schema_version: "1.0.0",
+        blend_mode: ui.blendMode.value,
+      },
+    });
+    maskMessage("Blend mode staged; restricted modes may be blocked at review/export.");
+  } catch (error) { maskMessage(error.message || String(error), true); }
 });
 
 ui.visualPreviewMode.addEventListener("change", () => {

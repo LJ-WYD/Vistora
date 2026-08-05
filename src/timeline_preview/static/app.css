@@ -1016,6 +1016,16 @@ button.track-label-row:focus-visible {
   justify-content: flex-start;
 }
 
+.mask-edit-panel .editor-actions {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.mask-edit-panel .editor-actions .button {
+  flex: 1 1 112px;
+  min-width: 0;
+}
+
 .automation-edit-panel .editor-actions .button {
   flex: 1 1 92px;
   min-width: 0;

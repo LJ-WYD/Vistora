@@ -13,7 +13,10 @@ from core.timeline import (
     ClipAudioSettings,
     ClipConfig,
     ClipColorAdjustment,
+    ClipCompositeSettings,
     ClipTransform,
+    ClipMask,
+    MaskAutomation,
     TimelineConfig,
     TimelineTransition,
     TrackConfig,
@@ -461,6 +464,81 @@ class TimelineEditEngine:
             for automation in curves
         )
 
+    def _mask_boundary(
+        self,
+        curve: MaskAutomation,
+        mask: ClipMask,
+        offset: float,
+        *,
+        new_offset: float,
+    ) -> VisualKeyframe:
+        exact = next(
+            (point for point in curve.keyframes if abs(point.offset_seconds - offset) <= TIME_EPSILON),
+            None,
+        )
+        return VisualKeyframe(
+            keyframe_id=exact.keyframe_id if exact else self.id_factory("maskkey"),
+            offset_seconds=new_offset,
+            value=evaluate_curve(curve, offset, float(getattr(mask, curve.property_path))),
+            interpolation=exact.interpolation if exact else "linear",
+        )
+
+    def _split_masks(
+        self, clip: ClipConfig, split_offset: float
+    ) -> tuple[tuple[ClipMask, ...], tuple[ClipMask, ...]]:
+        left_masks: list[ClipMask] = []
+        right_masks: list[ClipMask] = []
+        for mask in clip.masks:
+            right_mask_id = self.id_factory("mask")
+            left_curves: list[MaskAutomation] = []
+            right_curves: list[MaskAutomation] = []
+            for curve in mask.automations:
+                boundary = self._mask_boundary(curve, mask, split_offset, new_offset=split_offset)
+                left_points = [point for point in curve.keyframes if point.offset_seconds < split_offset - TIME_EPSILON]
+                left_points.append(boundary)
+                right_points = [boundary.model_copy(update={"keyframe_id": self.id_factory("maskkey"), "offset_seconds": 0.0})]
+                right_points.extend(
+                    point.model_copy(update={"keyframe_id": self.id_factory("maskkey"), "offset_seconds": point.offset_seconds - split_offset})
+                    for point in curve.keyframes
+                    if point.offset_seconds > split_offset + TIME_EPSILON
+                )
+                left_curves.append(curve.model_copy(update={"keyframes": tuple(left_points)}))
+                right_curves.append(curve.model_copy(update={
+                    "automation_id": self.id_factory("maskauto"),
+                    "mask_id": right_mask_id,
+                    "keyframes": tuple(right_points),
+                }))
+            left_masks.append(mask.model_copy(update={"automations": tuple(left_curves)}))
+            right_masks.append(mask.model_copy(update={"mask_id": right_mask_id, "automations": tuple(right_curves)}))
+        return tuple(left_masks), tuple(right_masks)
+
+    def _trim_masks(
+        self,
+        clip: ClipConfig,
+        *,
+        removed_start: float,
+        new_duration: float,
+    ) -> tuple[ClipMask, ...]:
+        result: list[ClipMask] = []
+        end_offset = removed_start + new_duration
+        for mask in clip.masks:
+            curves: list[MaskAutomation] = []
+            for curve in mask.automations:
+                start = self._mask_boundary(curve, mask, removed_start, new_offset=0.0)
+                points = [start]
+                points.extend(
+                    point.model_copy(update={"offset_seconds": point.offset_seconds - removed_start})
+                    for point in curve.keyframes
+                    if removed_start + TIME_EPSILON < point.offset_seconds < end_offset - TIME_EPSILON
+                )
+                end = self._mask_boundary(curve, mask, end_offset, new_offset=new_duration)
+                if end.keyframe_id == start.keyframe_id:
+                    end = end.model_copy(update={"keyframe_id": self.id_factory("maskkey")})
+                points.append(end)
+                curves.append(curve.model_copy(update={"keyframes": tuple(points)}))
+            result.append(mask.model_copy(update={"automations": tuple(curves)}))
+        return tuple(result)
+
     def _resolve_track(
         self,
         track_reference: str,
@@ -571,6 +649,9 @@ class TimelineEditEngine:
         created_automations: Iterable[str] = (),
         modified_automations: Iterable[str] = (),
         deleted_automations: Iterable[str] = (),
+        created_masks: Iterable[str] = (),
+        modified_masks: Iterable[str] = (),
+        deleted_masks: Iterable[str] = (),
     ) -> tuple[TimelineConfig, TimelineEditOutcome]:
         self._sort_all()
         invalidated = self._remove_invalid_transitions()
@@ -593,6 +674,9 @@ class TimelineEditEngine:
             created_automation_ids=tuple(dict.fromkeys(created_automations)),
             modified_automation_ids=tuple(sorted(set(modified_automations))),
             deleted_automation_ids=tuple(sorted(set(deleted_automations))),
+            created_mask_ids=tuple(dict.fromkeys(created_masks)),
+            modified_mask_ids=tuple(sorted(set(modified_masks))),
+            deleted_mask_ids=tuple(sorted(set(deleted_masks))),
             warnings=tuple(warnings) + (
                 (
                     "Structurally invalid transitions were removed and "
@@ -966,6 +1050,8 @@ class TimelineEditEngine:
         consequential: list[str] = []
         created_automations: list[str] = []
         modified_automations: list[str] = []
+        created_masks: list[str] = []
+        modified_masks: list[str] = []
         direct: list[str] = [clip_id]
         for key, track, clip in members:
             new_id = (
@@ -991,9 +1077,11 @@ class TimelineEditEngine:
             left_automation, right_automation = self._split_visual(
                 clip, split_offset, new_id
             )
+            left_masks, right_masks = self._split_masks(clip, split_offset)
             clip.trim_out = source_split
             clip.audio = left_audio
             clip.visual_automations = left_automation
+            clip.masks = left_masks
             right = clip.model_copy(deep=True)
             right.id = new_id
             right.trim_in = source_split
@@ -1001,6 +1089,7 @@ class TimelineEditEngine:
             right.timeline_start = split_at
             right.audio = right_audio
             right.visual_automations = right_automation
+            right.masks = right_masks
             right.link_group_id = right_group_id
             track.clips.append(right)
             for transition_id, transition in tuple(
@@ -1023,6 +1112,8 @@ class TimelineEditEngine:
             created_automations.extend(
                 item.automation_id for item in right_automation
             )
+            modified_masks.extend(item.mask_id for item in left_masks)
+            created_masks.extend(item.mask_id for item in right_masks)
             if clip.id == clip_id:
                 direct.append(new_id)
             else:
@@ -1037,6 +1128,8 @@ class TimelineEditEngine:
             modified=modified,
             created_automations=created_automations,
             modified_automations=modified_automations,
+            created_masks=created_masks,
+            modified_masks=modified_masks,
         )
 
     def trim(
@@ -1080,6 +1173,7 @@ class TimelineEditEngine:
         modified: list[str] = []
         consequential: list[str] = []
         modified_automations: list[str] = []
+        modified_masks: list[str] = []
         ripple_specs: list[tuple[TrackConfig, float, float]] = []
         for _, track, clip in members:
             old_end = clip_end(clip)
@@ -1103,9 +1197,15 @@ class TimelineEditEngine:
                 removed_start=left_delta_seconds,
                 new_duration=clip_duration(clip),
             )
+            clip.masks = self._trim_masks(
+                clip,
+                removed_start=left_delta_seconds,
+                new_duration=clip_duration(clip),
+            )
             modified_automations.extend(
                 item.automation_id for item in clip.visual_automations
             )
+            modified_masks.extend(item.mask_id for item in clip.masks)
             delta = clip_duration(clip) - old_duration
             ripple_specs.append((track, old_end, delta))
             modified.append(clip.id)
@@ -1139,6 +1239,7 @@ class TimelineEditEngine:
             modified=modified,
             subtitle_cues=subtitle_cues,
             modified_automations=modified_automations,
+            modified_masks=modified_masks,
         )
 
     def move(
@@ -1240,6 +1341,7 @@ class TimelineEditEngine:
         affected_ids = {clip.id for _, _, clip in members}
         deleted: list[str] = []
         deleted_automations: list[str] = []
+        deleted_masks: list[str] = []
         modified: list[str] = []
         consequential: list[str] = []
         subtitle_cues: tuple[str, ...] = ()
@@ -1257,6 +1359,7 @@ class TimelineEditEngine:
             deleted_automations.extend(
                 item.automation_id for item in clip.visual_automations
             )
+            deleted_masks.extend(item.mask_id for item in clip.masks)
             if clip.id != clip_id:
                 consequential.append(clip.id)
             if ripple:
@@ -1280,6 +1383,7 @@ class TimelineEditEngine:
             deleted=deleted,
             subtitle_cues=subtitle_cues,
             deleted_automations=deleted_automations,
+            deleted_masks=deleted_masks,
         )
 
     def insert_overwrite(
@@ -1918,6 +2022,180 @@ class TimelineEditEngine:
         except Exception:
             self.timeline = prior
             raise
+
+    def set_clip_mask(
+        self,
+        track_reference: str,
+        clip_id: str,
+        *,
+        mask: ClipMask | None = None,
+        mask_id: str | None = None,
+    ):
+        key, track, clip = self._clip(track_reference, clip_id)
+        if track.kind != "video":
+            raise TimelineEditError("Masks require a video/image clip")
+        current = list(clip.masks)
+        if mask is not None:
+            matches = [item for item in current if item.mask_id == mask.mask_id]
+            if len(matches) > 1:
+                raise TimelineEditError("Mask ID is ambiguous")
+            if matches and matches[0] == mask:
+                raise TimelineEditError("Mask edit changes nothing")
+            if matches:
+                current[current.index(matches[0])] = mask
+                created, modified = (), (mask.mask_id,)
+            else:
+                current.append(mask)
+                created, modified = (mask.mask_id,), ()
+            deleted = ()
+        elif mask_id is not None:
+            matches = [item for item in current if item.mask_id == mask_id]
+            if len(matches) != 1:
+                raise TimelineEditError("Mask ID must identify exactly one mask")
+            current.remove(matches[0])
+            created, modified, deleted = (), (), (mask_id,)
+        else:
+            raise TimelineEditError("Mask upsert or removal payload is required")
+        clip.masks = tuple(sorted(current, key=lambda item: item.mask_id))
+        return self._finish(
+            operation="set_clip_mask",
+            primary_key=key,
+            primary_track=track,
+            direct=(clip_id,),
+            modified=(clip_id,),
+            created_masks=created,
+            modified_masks=modified,
+            deleted_masks=deleted,
+        )
+
+    def replace_clip_masks(
+        self,
+        track_reference: str,
+        clip_id: str,
+        masks: tuple[ClipMask, ...],
+    ):
+        key, track, clip = self._clip(track_reference, clip_id)
+        if track.kind != "video":
+            raise TimelineEditError("Masks require a video/image clip")
+        ordered = tuple(sorted(masks, key=lambda item: item.mask_id))
+        if clip.masks == ordered:
+            raise TimelineEditError("Mask replacement changes nothing")
+        before = {item.mask_id: item for item in clip.masks}
+        after = {item.mask_id: item for item in ordered}
+        clip.masks = ordered
+        return self._finish(
+            operation="replace_clip_masks",
+            primary_key=key,
+            primary_track=track,
+            direct=(clip_id,),
+            modified=(clip_id,),
+            created_masks=sorted(after.keys() - before.keys()),
+            deleted_masks=sorted(before.keys() - after.keys()),
+            modified_masks=sorted(
+                identity
+                for identity in before.keys() & after.keys()
+                if before[identity] != after[identity]
+            ),
+        )
+
+    def copy_clip_masks(
+        self,
+        source_track_id: str,
+        source_clip_id: str,
+        targets: Iterable[tuple[str, str]],
+        *,
+        mask_ids: tuple[str, ...] = (),
+        replace_existing: bool = False,
+    ):
+        source_key, source_track, source = self._clip(source_track_id, source_clip_id)
+        if source_track.kind != "video":
+            raise TimelineEditError("Mask copy source must be a video clip")
+        selected = tuple(
+            item for item in source.masks if not mask_ids or item.mask_id in set(mask_ids)
+        )
+        if not selected or (mask_ids and len(selected) != len(mask_ids)):
+            raise TimelineEditError("Mask selectors must identify exact source masks")
+        prior = self.timeline.model_copy(deep=True)
+        modified: list[str] = []
+        created_masks: list[str] = []
+        deleted_masks: list[str] = []
+        try:
+            for target_track_id, target_clip_id in targets:
+                _, target_track, target = self._clip(target_track_id, target_clip_id)
+                if target_track.kind != "video":
+                    raise TimelineEditError("Mask copy targets must be video clips")
+                copied: list[ClipMask] = []
+                for item in selected:
+                    copied_id = self._copy_identity("mask", item.mask_id, target.id)
+                    copied.append(
+                        item.model_copy(
+                            update={
+                                "mask_id": copied_id,
+                                "automations": tuple(
+                                    curve.model_copy(
+                                        update={
+                                            "automation_id": self._copy_identity("maskauto", curve.automation_id, target.id),
+                                            "mask_id": copied_id,
+                                            "keyframes": tuple(
+                                                point.model_copy(
+                                                    update={"keyframe_id": self._copy_identity("maskkey", point.keyframe_id, target.id)}
+                                                )
+                                                for point in curve.keyframes
+                                            ),
+                                        }
+                                    )
+                                    for curve in item.automations
+                                ),
+                            }
+                        )
+                    )
+                if replace_existing:
+                    deleted_masks.extend(item.mask_id for item in target.masks)
+                    target.masks = tuple(copied)
+                else:
+                    occupied = {item.mask_id for item in target.masks}
+                    if any(item.mask_id in occupied for item in copied):
+                        raise TimelineEditError("Copied mask identity already exists")
+                    target.masks = tuple(sorted((*target.masks, *copied), key=lambda item: item.mask_id))
+                created_masks.extend(item.mask_id for item in copied)
+                modified.append(target.id)
+            return self._finish(
+                operation="copy_clip_masks",
+                primary_key=source_key,
+                primary_track=source_track,
+                direct=(source_clip_id, *modified),
+                modified=modified,
+                created_masks=created_masks,
+                deleted_masks=deleted_masks,
+                warnings=("Masks copy only to explicit clip IDs; linked audio is unchanged.",),
+            )
+        except Exception:
+            self.timeline = prior
+            raise
+
+    def set_clip_composite(
+        self,
+        track_reference: str,
+        clip_id: str,
+        composite: ClipCompositeSettings,
+    ):
+        key, track, clip = self._clip(track_reference, clip_id)
+        if track.kind != "video":
+            raise TimelineEditError("Compositing requires a video/image clip")
+        if clip.composite == composite:
+            raise TimelineEditError("Composite edit changes nothing")
+        clip.composite = composite
+        warnings = () if composite.blend_mode == "normal" else (
+            "Multiply/screen are restricted to full-canvas opaque clips by the current renderer.",
+        )
+        return self._finish(
+            operation="set_clip_composite",
+            primary_key=key,
+            primary_track=track,
+            direct=(clip_id,),
+            modified=(clip_id,),
+            warnings=warnings,
+        )
 
     def set_clip_audio(
         self,

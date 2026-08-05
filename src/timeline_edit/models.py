@@ -394,6 +394,10 @@ class TimelineEditOutcome(TimelineEditModel):
         "replace_visual_automation",
         "clear_visual_automation",
         "copy_visual_automation",
+        "set_clip_mask",
+        "replace_clip_masks",
+        "copy_clip_masks",
+        "set_clip_composite",
     ]
     track_id: StableTrackId
     track_key: str
@@ -409,4 +413,7 @@ class TimelineEditOutcome(TimelineEditModel):
     created_automation_ids: tuple[str, ...] = ()
     modified_automation_ids: tuple[str, ...] = ()
     deleted_automation_ids: tuple[str, ...] = ()
+    created_mask_ids: tuple[str, ...] = ()
+    modified_mask_ids: tuple[str, ...] = ()
+    deleted_mask_ids: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()

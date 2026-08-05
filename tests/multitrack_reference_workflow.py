@@ -1,4 +1,4 @@
-"""Deterministic STEP 18 multi-track/link execution reference."""
+"""Deterministic multi-track/link/audio/visual execution reference."""
 
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ from core import timeline_manager  # noqa: E402
 from core.timeline import (  # noqa: E402
     AppliedLoudnessNormalization,
     ClipConfig,
+    ClipMask,
     TimelineConfig,
     TimelineTransition,
     TrackConfig,
@@ -573,6 +574,24 @@ def run_multitrack_reference_workflow() -> dict:
                     expected_effect="Animate overlay opacity without affecting linked audio.",
                 ),
                 DirectorOperation(
+                    operation_id="operation_overlay_mask",
+                    tool_name="VideoSetClipMaskSkill",
+                    arguments={
+                        "track_id": "track_video_overlay",
+                        "clip_id": "clip_video_overlay",
+                        "action": "upsert",
+                        "mask": ClipMask(
+                            mask_id="mask_reference_overlay",
+                            kind="ellipse",
+                            width=.72,
+                            height=.72,
+                            feather=.04,
+                        ).model_dump(mode="json"),
+                    },
+                    rationale="Constrain the overlay with a reviewed soft ellipse.",
+                    expected_effect="Create one exact bounded mask on the overlay only.",
+                ),
+                DirectorOperation(
                     operation_id="operation_copy_overlay_visual",
                     tool_name="VideoCopyClipVisualSkill",
                     arguments={
@@ -818,6 +837,12 @@ def run_multitrack_reference_workflow() -> dict:
                 for relation in confirmed_trace.relations
                 if relation.entity.entity_kind == "automation"
             )
+            mask_relations = tuple(
+                relation
+                for confirmed_trace in trace.confirmed_traces
+                for relation in confirmed_trace.relations
+                if relation.entity.entity_kind == "mask"
+            )
             if not any(
                 relation.relation_type == "creates"
                 for relation in subtitle_relations
@@ -851,6 +876,7 @@ def run_multitrack_reference_workflow() -> dict:
                 "visual_trace_count": len(visual_relations),
                 "transition_trace_count": len(transition_relations),
                 "automation_trace_count": len(automation_relations),
+                "mask_trace_count": len(mask_relations),
                 "subtitle_tombstone_count": sum(
                     relation.relation_type == "deletes"
                     for relation in subtitle_relations

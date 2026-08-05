@@ -120,6 +120,9 @@ class TimelineEditTransaction:
                 "deleted_automation_ids": list(
                     outcome.deleted_automation_ids
                 ),
+                "created_mask_ids": list(outcome.created_mask_ids),
+                "modified_mask_ids": list(outcome.modified_mask_ids),
+                "deleted_mask_ids": list(outcome.deleted_mask_ids),
                 "warnings": list(outcome.warnings),
                 "before_snapshot_id": before.snapshot_id,
                 "after_snapshot_id": after.snapshot_id,

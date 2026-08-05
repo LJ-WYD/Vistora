@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from core.timeline import ClipColorAdjustment, ClipConfig
 from visual_automation.runtime import ffmpeg_property_expressions
+from masks.runtime import mask_alpha_expression
 
 
 def _number(value: float) -> str:
@@ -153,6 +154,13 @@ def clip_visual_filter_chain(
         )
     elif transform.opacity < 1:
         chain.append(f"colorchannelmixer=aa={_number(transform.opacity)}")
+    mask_expression = mask_alpha_expression(clip.masks, variable="T")
+    if mask_expression is not None:
+        chain.append(
+            "geq="
+            "r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':"
+            f"a='clip(alpha(X,Y)*({mask_expression}),0,255)'"
+        )
     overlay = (
         f"x='({value('transform.position_x', transform.position_x)})*main_w-"
         f"{_number(transform.anchor_x)}*overlay_w':"

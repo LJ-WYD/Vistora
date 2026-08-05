@@ -323,6 +323,38 @@
                   <button id="copy-automation" class="button" type="button">Copy curves</button>
                 </div>
               </fieldset>
+              <fieldset id="mask-edit-panel" class="audio-edit-panel mask-edit-panel">
+                <legend>Masks &amp; compositing</legend>
+                <p class="form-message">Normalized, deterministic masks. Preview is approximate; confirmed FFmpeg export is exact.</p>
+                <div class="field-grid">
+                  <label><span>Mask ID</span><input id="mask-id" maxlength="160"></label>
+                  <label><span>Shape</span><select id="mask-kind"><option value="rectangle">Rectangle</option><option value="ellipse">Ellipse</option><option value="polygon">Convex polygon</option></select></label>
+                  <label><span>Combine</span><select id="mask-operation"><option value="add">Add</option><option value="subtract">Subtract</option><option value="intersect">Intersect</option></select></label>
+                  <label><span>Position X</span><input id="mask-x" type="number" min="-2" max="3" step="0.01" value="0.5"></label>
+                  <label><span>Position Y</span><input id="mask-y" type="number" min="-2" max="3" step="0.01" value="0.5"></label>
+                  <label><span>Width</span><input id="mask-width" type="number" min="0.01" max="4" step="0.01" value="0.5"></label>
+                  <label><span>Height</span><input id="mask-height" type="number" min="0.01" max="4" step="0.01" value="0.5"></label>
+                  <label><span>Feather</span><input id="mask-feather" type="number" min="0" max="0.25" step="0.005" value="0"></label>
+                  <label><span>Expand</span><input id="mask-expand" type="number" min="-0.25" max="0.25" step="0.005" value="0"></label>
+                  <label><span>Opacity</span><input id="mask-opacity" type="number" min="0" max="1" step="0.01" value="1"></label>
+                  <label class="editor-check"><input id="mask-invert" type="checkbox"> Invert mask</label>
+                  <label><span>Polygon points (local x,y per line)</span><textarea id="mask-points" rows="3" placeholder="-0.3,-0.2&#10;0.3,-0.2&#10;0,0.3"></textarea></label>
+                  <label><span>Animated property</span><select id="mask-automation-property"><option value="opacity">Opacity</option><option value="position_x">Position X</option><option value="position_y">Position Y</option><option value="scale_x">Scale X</option><option value="scale_y">Scale Y</option><option value="rotation_degrees">Rotation</option><option value="feather">Feather</option></select></label>
+                  <label><span>Keyframe time</span><input id="mask-keyframe-time" type="number" min="0" step="0.001" value="0"></label>
+                  <label><span>Keyframe value</span><input id="mask-keyframe-value" type="number" step="0.01" value="1"></label>
+                  <label><span>Interpolation</span><select id="mask-keyframe-interpolation"><option value="hold">Hold</option><option value="linear" selected>Linear</option><option value="ease_in">Ease in</option><option value="ease_out">Ease out</option><option value="ease_in_out">Ease in/out</option></select></label>
+                  <label><span>Blend mode</span><select id="blend-mode"><option value="normal">Normal</option><option value="multiply">Multiply (restricted)</option><option value="screen">Screen (restricted)</option></select></label>
+                  <label><span>Explicit copy targets</span><select id="mask-copy-targets" multiple></select></label>
+                </div>
+                <p id="mask-form-message" class="form-message" aria-live="polite">No mask draft staged.</p>
+                <div class="editor-actions">
+                  <button id="stage-mask" class="button" type="button">Add / update mask</button>
+                  <button id="stage-mask-keyframe" class="button" type="button">Add mask keyframe</button>
+                  <button id="remove-mask" class="button danger" type="button">Remove mask</button>
+                  <button id="copy-masks" class="button" type="button">Copy masks</button>
+                  <button id="stage-composite" class="button" type="button">Stage blend mode</button>
+                </div>
+              </fieldset>
               <fieldset id="transition-edit-panel" class="audio-edit-panel transition-edit-panel">
                 <legend>Cut transition</legend>
                 <p class="form-message">

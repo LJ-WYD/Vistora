@@ -1,4 +1,4 @@
-"""Local deterministic STEP 20 browser-regression fixture server."""
+"""Local deterministic browser-regression fixture server."""
 
 from __future__ import annotations
 
@@ -17,12 +17,14 @@ from core import timeline_manager  # noqa: E402
 from core.timeline import (  # noqa: E402
     ClipColorAdjustment,
     ClipConfig,
+    ClipMask,
     ClipTransform,
     SubtitleCue,
     SubtitleTrackConfig,
     TimelineConfig,
     TimelineTransition,
     TrackConfig,
+    MaskAutomation,
     VisualAutomation,
     VisualKeyframe,
 )
@@ -96,6 +98,36 @@ def _timeline(root: Path, mode: str) -> tuple[TimelineConfig, Path]:
                                         offset_seconds=1.8,
                                         value=0.75,
                                         interpolation="linear",
+                                    ),
+                                ),
+                            ),
+                        ),
+                        masks=(
+                            ClipMask(
+                                mask_id="mask_fixture_subject",
+                                kind="ellipse",
+                                width=.68,
+                                height=.72,
+                                feather=.035,
+                                automations=(
+                                    MaskAutomation(
+                                        automation_id="maskauto_fixture_opacity",
+                                        mask_id="mask_fixture_subject",
+                                        property_path="opacity",
+                                        keyframes=(
+                                            VisualKeyframe(
+                                                keyframe_id="maskkey_fixture_start",
+                                                offset_seconds=0,
+                                                value=.7,
+                                                interpolation="ease_in_out",
+                                            ),
+                                            VisualKeyframe(
+                                                keyframe_id="maskkey_fixture_end",
+                                                offset_seconds=1.8,
+                                                value=1,
+                                                interpolation="linear",
+                                            ),
+                                        ),
                                     ),
                                 ),
                             ),

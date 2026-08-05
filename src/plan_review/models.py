@@ -316,6 +316,12 @@ class PreviewClipState(ReviewModel):
     transform: ClipTransformSnapshot = Field(default_factory=ClipTransformSnapshot)
     color: ClipColorSnapshot = Field(default_factory=ClipColorSnapshot)
     visual_automations: tuple[dict[str, Any], ...] = ()
+    masks: tuple[dict[str, Any], ...] = ()
+    composite: dict[str, Any] = Field(default_factory=lambda: {"blend_mode": "normal"})
+    mask_digest: Sha256Digest = (
+        "sha256:e3b0c44298fc1c149afbf4c8996fb924"
+        "27ae41e4649b934ca495991b7852b855"
+    )
     automation_digest: Sha256Digest = (
         "sha256:e3b0c44298fc1c149afbf4c8996fb924"
         "27ae41e4649b934ca495991b7852b855"
@@ -403,6 +409,8 @@ class PlanChange(ReviewModel):
         "clip_transform",
         "clip_color",
         "visual_automation",
+        "clip_mask",
+        "clip_composite",
         "clip_linkage",
         "clip_audio",
         "audio_envelope",

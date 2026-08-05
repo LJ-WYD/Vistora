@@ -25,9 +25,10 @@ from contracts import (
     ManualSubtitleTrack,
     ManualTransitionEdit,
     ManualVisualAutomationEdit,
+    ManualMaskEdit,
 )
 from core import timeline_manager
-from core.timeline import ClipColorAdjustment, ClipTransform, TimelineConfig
+from core.timeline import ClipColorAdjustment, ClipCompositeSettings, ClipTransform, TimelineConfig
 from timeline_query import TimelineSnapshotService
 from timeline_edit import TimelineEditEngine, TimelineEditTransaction
 from traceability.recording import ManualTraceRecorder
@@ -223,6 +224,28 @@ class VideoApplyManualEditsSkill(BaseSkill):
                         edit.clip_id,
                         ((item.track_id, item.clip_id) for item in edit.targets),
                         property_paths=edit.property_paths,
+                    )
+                continue
+            if isinstance(edit, ManualMaskEdit):
+                if edit.action == "upsert":
+                    engine.set_clip_mask(edit.track_id, edit.clip_id, mask=edit.mask)
+                elif edit.action == "remove":
+                    engine.set_clip_mask(edit.track_id, edit.clip_id, mask_id=edit.mask_id)
+                elif edit.action == "replace":
+                    engine.replace_clip_masks(edit.track_id, edit.clip_id, edit.masks)
+                elif edit.action == "copy":
+                    engine.copy_clip_masks(
+                        edit.track_id,
+                        edit.clip_id,
+                        ((item.track_id, item.clip_id) for item in edit.targets),
+                        mask_ids=edit.mask_ids,
+                        replace_existing=edit.replace_existing,
+                    )
+                else:
+                    engine.set_clip_composite(
+                        edit.track_id,
+                        edit.clip_id,
+                        edit.composite or ClipCompositeSettings(),
                     )
                 continue
             if isinstance(edit, ManualTransitionEdit):

@@ -18,6 +18,10 @@ from .models import (
     TransitionSnapshot,
     VisualAutomationSnapshot,
     VisualKeyframeSnapshot,
+    ClipMaskSnapshot,
+    ClipCompositeSnapshot,
+    MaskAutomationSnapshot,
+    MaskPointSnapshot,
 )
 from .service import (
     TimelineSnapshotError,
@@ -46,4 +50,8 @@ __all__ = [
     "TransitionSnapshot",
     "VisualAutomationSnapshot",
     "VisualKeyframeSnapshot",
+    "ClipMaskSnapshot",
+    "ClipCompositeSnapshot",
+    "MaskAutomationSnapshot",
+    "MaskPointSnapshot",
 ]

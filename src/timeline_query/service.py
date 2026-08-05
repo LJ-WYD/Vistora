@@ -19,6 +19,10 @@ from .models import (
     ClipSnapshot,
     VisualAutomationSnapshot,
     VisualKeyframeSnapshot,
+    ClipMaskSnapshot,
+    ClipCompositeSnapshot,
+    MaskAutomationSnapshot,
+    MaskPointSnapshot,
     ClipTransformSnapshot,
     MediaSourceReference,
     TimelineSnapshot,
@@ -120,6 +124,10 @@ def _clip_snapshot(clip: ClipConfig, order_index: int) -> ClipSnapshot:
         item.model_dump(mode="json") for item in clip.visual_automations
     ]
     automation_digest = "sha256:" + _sha256(automation_payload)
+    mask_payload = [item.model_dump(mode="json") for item in clip.masks]
+    mask_digest = "sha256:" + _sha256(
+        {"masks": mask_payload, "composite": clip.composite.model_dump(mode="json")}
+    )
     return ClipSnapshot(
         clip_id=clip_id,
         order_index=order_index,
@@ -185,6 +193,44 @@ def _clip_snapshot(clip: ClipConfig, order_index: int) -> ClipSnapshot:
             )
             for automation in clip.visual_automations
         ),
+        masks=tuple(
+            ClipMaskSnapshot(
+                mask_id=mask.mask_id,
+                kind=mask.kind,
+                operation=mask.operation,
+                enabled=mask.enabled,
+                invert=mask.invert,
+                opacity=mask.opacity,
+                feather=mask.feather,
+                expand=mask.expand,
+                position_x=mask.position_x,
+                position_y=mask.position_y,
+                scale_x=mask.scale_x,
+                scale_y=mask.scale_y,
+                rotation_degrees=mask.rotation_degrees,
+                width=mask.width,
+                height=mask.height,
+                points=tuple(MaskPointSnapshot(point_id=point.point_id, x=point.x, y=point.y) for point in mask.points),
+                automations=tuple(
+                    MaskAutomationSnapshot(
+                        automation_id=curve.automation_id,
+                        mask_id=curve.mask_id,
+                        property_path=curve.property_path,
+                        enabled=curve.enabled,
+                        keyframes=tuple(
+                            VisualKeyframeSnapshot(
+                                keyframe_id=point.keyframe_id,
+                                offset_seconds=point.offset_seconds,
+                                value=point.value,
+                                interpolation=point.interpolation,
+                            ) for point in curve.keyframes
+                        ),
+                    ) for curve in mask.automations
+                ),
+            ) for mask in clip.masks
+        ),
+        composite=ClipCompositeSnapshot(blend_mode=clip.composite.blend_mode),
+        mask_digest=mask_digest,
         automation_digest=automation_digest,
         visual_digest=(
             "sha256:"
@@ -193,6 +239,8 @@ def _clip_snapshot(clip: ClipConfig, order_index: int) -> ClipSnapshot:
                     "transform": clip.transform.model_dump(mode="json"),
                     "color": clip.color.model_dump(mode="json"),
                     "visual_automations": automation_payload,
+                    "masks": mask_payload,
+                    "composite": clip.composite.model_dump(mode="json"),
                 }
             )
         ),

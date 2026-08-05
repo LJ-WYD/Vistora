@@ -35,12 +35,17 @@ from contracts import (
     ManualSubtitleTrack,
     ManualTransitionEdit,
     ManualVisualAutomationEdit,
+    ManualMaskEdit,
     PlanReference,
 )
 from core.timeline import (
     AudioEnvelopePoint,
     ClipAudioSettings,
     ClipColorAdjustment,
+    ClipCompositeSettings,
+    ClipMask,
+    MaskAutomation,
+    MaskPoint,
     ClipConfig,
     ClipTransform,
     TimelineConfig,
@@ -106,6 +111,9 @@ def _clip_state(clip: Any, order_index: int) -> dict[str, Any]:
             item.model_dump(mode="json") for item in clip.visual_automations
         ),
         "automation_digest": clip.automation_digest,
+        "masks": tuple(item.model_dump(mode="json") for item in clip.masks),
+        "composite": clip.composite.model_dump(mode="json"),
+        "mask_digest": clip.mask_digest,
     }
 
 
@@ -405,6 +413,55 @@ def _timeline_from_snapshot(snapshot: TimelineSnapshot) -> TimelineConfig:
                             )
                             for item in clip.visual_automations
                         ),
+                        masks=tuple(
+                            ClipMask(
+                                mask_id=item.mask_id,
+                                kind=item.kind,
+                                operation=item.operation,
+                                enabled=item.enabled,
+                                invert=item.invert,
+                                opacity=item.opacity,
+                                feather=item.feather,
+                                expand=item.expand,
+                                position_x=item.position_x,
+                                position_y=item.position_y,
+                                scale_x=item.scale_x,
+                                scale_y=item.scale_y,
+                                rotation_degrees=item.rotation_degrees,
+                                width=item.width,
+                                height=item.height,
+                                points=tuple(
+                                    MaskPoint(
+                                        point_id=point.point_id,
+                                        x=point.x,
+                                        y=point.y,
+                                    )
+                                    for point in item.points
+                                ),
+                                automations=tuple(
+                                    MaskAutomation(
+                                        automation_id=curve.automation_id,
+                                        mask_id=curve.mask_id,
+                                        property_path=curve.property_path,
+                                        enabled=curve.enabled,
+                                        keyframes=tuple(
+                                            VisualKeyframe(
+                                                keyframe_id=point.keyframe_id,
+                                                offset_seconds=point.offset_seconds,
+                                                value=point.value,
+                                                interpolation=point.interpolation,
+                                            )
+                                            for point in curve.keyframes
+                                        ),
+                                    )
+                                    for curve in item.automations
+                                ),
+                            )
+                            for item in clip.masks
+                        ),
+                        composite=ClipCompositeSettings.model_validate(
+                            clip.composite.model_dump(mode="python")
+                        ),
                     )
                     for clip in track.clips
                 ],
@@ -573,6 +630,54 @@ def review_manual_edit_proposal(
                         effect_kind=(
                             "direct"
                             if key[1] == edit.clip_id
+                            or any(item.clip_id == key[1] for item in edit.targets)
+                            else "consequential"
+                        ),
+                        before=old[1],
+                        after=new[1],
+                    ))
+                continue
+            if isinstance(edit, ManualMaskEdit):
+                if edit.action == "upsert":
+                    updated, outcome = engine.set_clip_mask(
+                        edit.track_id, edit.clip_id, mask=edit.mask
+                    )
+                elif edit.action == "remove":
+                    updated, outcome = engine.set_clip_mask(
+                        edit.track_id, edit.clip_id, mask_id=edit.mask_id
+                    )
+                elif edit.action == "replace":
+                    updated, outcome = engine.replace_clip_masks(
+                        edit.track_id, edit.clip_id, edit.masks
+                    )
+                elif edit.action == "copy":
+                    updated, outcome = engine.copy_clip_masks(
+                        edit.track_id,
+                        edit.clip_id,
+                        ((item.track_id, item.clip_id) for item in edit.targets),
+                        mask_ids=edit.mask_ids,
+                        replace_existing=edit.replace_existing,
+                    )
+                else:
+                    updated, outcome = engine.set_clip_composite(
+                        edit.track_id,
+                        edit.clip_id,
+                        edit.composite or ClipCompositeSettings(),
+                    )
+                after = _state_map(updated)
+                for key in sorted(before.keys() | after.keys()):
+                    old, new = before.get(key), after.get(key)
+                    if old == new:
+                        continue
+                    changes.append(ManualEditChange(
+                        operation_id=edit.operation_id,
+                        target_kind=("composite" if "composite" in edit.action else "mask"),
+                        track_key=key[0],
+                        track_id=(new or old)[0],
+                        clip_id=key[1],
+                        action="update",
+                        effect_kind=(
+                            "direct" if key[1] == edit.clip_id
                             or any(item.clip_id == key[1] for item in edit.targets)
                             else "consequential"
                         ),

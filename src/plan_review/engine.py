@@ -20,7 +20,11 @@ from timeline_edit import (
     AudioEnvelopePoint,
     ClipAudioSettings,
     ClipColorAdjustment,
+    ClipCompositeSettings,
     ClipConfig,
+    ClipMask,
+    MaskAutomation,
+    MaskPoint,
     ClipTransform,
     TimelineConfig,
     TimelineTransition,
@@ -133,6 +137,9 @@ def _clip_state(
             item.model_dump(mode="json") for item in clip.visual_automations
         ),
         automation_digest=clip.automation_digest,
+        masks=tuple(item.model_dump(mode="json") for item in clip.masks),
+        composite=clip.composite.model_dump(mode="json"),
+        mask_digest=clip.mask_digest,
     )
 
 
@@ -172,6 +179,59 @@ def _core_visual_automation(value: Any) -> VisualAutomation:
             for point in data["keyframes"]
         ),
     )
+
+
+def _core_mask(value: Any) -> ClipMask:
+    """Convert browser-safe mask state back to its strict core contract."""
+    if isinstance(value, ClipMask):
+        return value
+    data = value.model_dump(mode="python") if isinstance(value, BaseModel) else dict(value)
+    return ClipMask(
+        mask_id=data["mask_id"],
+        kind=data["kind"],
+        operation=data["operation"],
+        enabled=data.get("enabled", True),
+        invert=data.get("invert", False),
+        opacity=data.get("opacity", 1),
+        feather=data.get("feather", 0),
+        expand=data.get("expand", 0),
+        position_x=data.get("position_x", .5),
+        position_y=data.get("position_y", .5),
+        scale_x=data.get("scale_x", 1),
+        scale_y=data.get("scale_y", 1),
+        rotation_degrees=data.get("rotation_degrees", 0),
+        width=data.get("width"),
+        height=data.get("height"),
+        points=tuple(
+            MaskPoint(point_id=point["point_id"], x=point["x"], y=point["y"])
+            for point in data.get("points", ())
+        ),
+        automations=tuple(
+            MaskAutomation(
+                automation_id=curve["automation_id"],
+                mask_id=curve["mask_id"],
+                property_path=curve["property_path"],
+                enabled=curve.get("enabled", True),
+                keyframes=tuple(
+                    VisualKeyframe(
+                        keyframe_id=point["keyframe_id"],
+                        offset_seconds=point["offset_seconds"],
+                        value=point["value"],
+                        interpolation=point["interpolation"],
+                    )
+                    for point in curve["keyframes"]
+                ),
+            )
+            for curve in data.get("automations", ())
+        ),
+    )
+
+
+def _core_composite(value: Any) -> ClipCompositeSettings:
+    if isinstance(value, ClipCompositeSettings):
+        return value
+    data = value.model_dump(mode="python") if isinstance(value, BaseModel) else dict(value)
+    return ClipCompositeSettings(blend_mode=data.get("blend_mode", "normal"))
 
 
 def _snapshot_matches(
@@ -260,6 +320,8 @@ def _timeline_from_snapshot(snapshot: TimelineSnapshot) -> TimelineConfig:
                         )
                         for item in clip.visual_automations
                     ),
+                    masks=tuple(_core_mask(item) for item in clip.masks),
+                    composite=_core_composite(clip.composite),
                 )
                 for clip in track.clips
             ],
@@ -427,6 +489,12 @@ def _preview_state(
         automation_digest=digest_json(
             [item.model_dump(mode="json") for item in clip.visual_automations]
         ),
+        masks=tuple(item.model_dump(mode="json") for item in clip.masks),
+        composite=clip.composite.model_dump(mode="json"),
+        mask_digest=digest_json({
+            "masks": [item.model_dump(mode="json") for item in clip.masks],
+            "composite": clip.composite.model_dump(mode="json"),
+        }),
     )
 
 
@@ -697,6 +765,10 @@ class PlanDiffEngine:
                 "VideoReplaceVisualAutomationSkill",
                 "VideoClearVisualAutomationSkill",
                 "VideoCopyVisualAutomationSkill",
+                "VideoSetClipMaskSkill",
+                "VideoReplaceClipMasksSkill",
+                "VideoCopyClipMasksSkill",
+                "VideoSetClipCompositeSkill",
             }:
                 # Synchronize only the legacy primary-video view; every other
                 # stable multi-track declaration remains detached and intact.
@@ -740,6 +812,8 @@ class PlanDiffEngine:
                                 _core_visual_automation(item)
                                 for item in clip.visual_automations
                             ),
+                            masks=tuple(_core_mask(item) for item in clip.masks),
+                            composite=_core_composite(clip.composite),
                         )
                         for clip in clips
                     ]
@@ -1130,6 +1204,8 @@ class PlanDiffEngine:
                         _core_visual_automation(item)
                         for item in clip.visual_automations
                     ),
+                    masks=tuple(ClipMask.model_validate(item) for item in clip.masks),
+                    composite=ClipCompositeSettings.model_validate(clip.composite),
                 )
                 for clip in clips
             ],
@@ -1544,6 +1620,31 @@ class PlanDiffEngine:
                     ((item.track_id, item.clip_id) for item in params.targets),
                     property_paths=params.property_paths,
                 )
+            elif name == "VideoSetClipMaskSkill":
+                updated, outcome = engine.set_clip_mask(
+                    params.track_reference,
+                    params.clip_id,
+                    mask=params.mask,
+                    mask_id=params.mask_id,
+                )
+            elif name == "VideoReplaceClipMasksSkill":
+                updated, outcome = engine.replace_clip_masks(
+                    params.track_reference, params.clip_id, params.masks
+                )
+            elif name == "VideoCopyClipMasksSkill":
+                updated, outcome = engine.copy_clip_masks(
+                    params.source_track_id,
+                    params.source_clip_id,
+                    ((item.track_id, item.clip_id) for item in params.targets),
+                    mask_ids=params.mask_ids,
+                    replace_existing=params.replace_existing,
+                )
+            elif name == "VideoSetClipCompositeSkill":
+                updated, outcome = engine.set_clip_composite(
+                    params.track_reference,
+                    params.clip_id,
+                    params.composite or ClipCompositeSettings(),
+                )
             else:
                 material_id = _source_id(params.source_path)
                 fact = facts.get(material_id)
@@ -1656,6 +1757,12 @@ class PlanDiffEngine:
                 reason = (
                     "The edit changes seek-safe clip-local visual keyframes."
                 )
+            elif old.masks != new.masks:
+                category = "clip_mask"
+                reason = "The edit changes validated clip masks or mask keyframes."
+            elif old.composite != new.composite:
+                category = "clip_composite"
+                reason = "The edit changes the bounded clip compositing mode."
             elif old.transform != new.transform:
                 category = "clip_transform"
                 reason = (

@@ -24,6 +24,7 @@ from contracts import (
     ManualSubtitleTrack,
     ManualTransitionEdit,
     ManualVisualAutomationEdit,
+    ManualMaskEdit,
 )
 from timeline_query import TimelineSnapshot
 
@@ -95,6 +96,15 @@ def _automations(
         for track in snapshot.tracks
         for clip in track.clips
         for automation in clip.visual_automations
+    }
+
+
+def _masks(snapshot: TimelineSnapshot) -> dict[tuple[str, str, str], dict[str, Any]]:
+    return {
+        (track.track_key, clip.clip_id, mask.mask_id): mask.model_dump(mode="json")
+        for track in snapshot.tracks
+        for clip in track.clips
+        for mask in clip.masks
     }
 
 
@@ -216,6 +226,17 @@ class ConfirmedTraceRecorder:
                 effects.append(("deletes", "automation", track_key, automation_id))
             elif old != new:
                 effects.append(("modifies", "automation", track_key, automation_id))
+        before_masks = _masks(before_snapshot)
+        after_masks = _masks(after_snapshot)
+        for track_key, _clip_id, mask_id in sorted(before_masks.keys() | after_masks.keys()):
+            key = (track_key, _clip_id, mask_id)
+            old, new = before_masks.get(key), after_masks.get(key)
+            if old is None:
+                effects.append(("creates", "mask", track_key, mask_id))
+            elif new is None:
+                effects.append(("deletes", "mask", track_key, mask_id))
+            elif old != new:
+                effects.append(("modifies", "mask", track_key, mask_id))
 
         inherited: dict[tuple[str, str], str] = {}
         changed_before_ids = {
@@ -425,6 +446,8 @@ class ManualTraceRecorder:
         after_transitions = _transitions(after_snapshot)
         before_automations = _automations(before_snapshot)
         after_automations = _automations(after_snapshot)
+        before_masks = _masks(before_snapshot)
+        after_masks = _masks(after_snapshot)
         for edit in proposal.edits:
             if isinstance(edit, ManualVisualAutomationEdit):
                 target_ids = {edit.clip_id}
@@ -440,6 +463,23 @@ class ManualTraceRecorder:
                     raise ValueError(
                         "Manual visual automation trace has no exact state change"
                     )
+                continue
+            if isinstance(edit, ManualMaskEdit):
+                target_ids = {edit.clip_id}
+                target_ids.update(item.clip_id for item in edit.targets)
+                if edit.action in {"set_composite", "reset_composite"}:
+                    if not any(
+                        clip_id in target_ids
+                        and before_clips.get((track_key, clip_id)) != after_clips.get((track_key, clip_id))
+                        for track_key, clip_id in before_clips.keys() | after_clips.keys()
+                    ):
+                        raise ValueError("Manual composite trace has no exact state change")
+                elif not any(
+                    clip_id in target_ids
+                    and before_masks.get((track_key, clip_id, mask_id)) != after_masks.get((track_key, clip_id, mask_id))
+                    for track_key, clip_id, mask_id in before_masks.keys() | after_masks.keys()
+                ):
+                    raise ValueError("Manual mask trace has no exact state change")
                 continue
             if isinstance(edit, ManualTransitionEdit):
                 expected_ids = _manual_transition_ids(
@@ -585,6 +625,20 @@ class ManualTraceRecorder:
                         automation_id,
                         "direct",
                     ))
+                continue
+            if isinstance(edit, ManualMaskEdit):
+                if edit.action in {"set_composite", "reset_composite"}:
+                    effect_rows.append((edit, "modifies", edit.track_key, edit.clip_id, "direct"))
+                else:
+                    target_ids = {edit.clip_id}
+                    target_ids.update(item.clip_id for item in edit.targets)
+                    for track_key, clip_id, mask_id in sorted(before_masks.keys() | after_masks.keys()):
+                        if clip_id not in target_ids:
+                            continue
+                        old, new = before_masks.get((track_key, clip_id, mask_id)), after_masks.get((track_key, clip_id, mask_id))
+                        if old == new:
+                            continue
+                        effect_rows.append((edit, "creates" if old is None else "deletes" if new is None else "modifies", track_key, mask_id, "direct"))
                 continue
             if isinstance(edit, ManualTransitionEdit):
                 for transition_id in sorted(
@@ -863,6 +917,10 @@ class ManualTraceRecorder:
                         )
                         else "automation"
                         if isinstance(edit, ManualVisualAutomationEdit)
+                        else "composite"
+                        if isinstance(edit, ManualMaskEdit) and "composite" in edit.action
+                        else "mask"
+                        if isinstance(edit, ManualMaskEdit)
                         else "clip"
                     ),
                     entity_id=clip_id,
@@ -906,6 +964,7 @@ class ManualTraceRecorder:
                             ManualCopyClipVisual,
                             ManualTransitionEdit,
                             ManualVisualAutomationEdit,
+                            ManualMaskEdit,
                         ),
                     ) and clip_id not in transition_relation_ids
                     else None

@@ -58,6 +58,12 @@ from skills.video_visual_automation import (
     VideoReplaceVisualAutomationSkill,
     VideoUpsertVisualKeyframeSkill,
 )
+from skills.video_masks import (
+    VideoCopyClipMasksSkill,
+    VideoReplaceClipMasksSkill,
+    VideoSetClipCompositeSkill,
+    VideoSetClipMaskSkill,
+)
 
 from .models import SkillDescriptor, digest_json
 from .registry import AtomicSkillRegistry
@@ -150,6 +156,10 @@ class CoreTimelineEditResult(_Result):
         "replace_visual_automation",
         "clear_visual_automation",
         "copy_visual_automation",
+        "set_clip_mask",
+        "replace_clip_masks",
+        "copy_clip_masks",
+        "set_clip_composite",
     ]
     track_id: str
     track_key: str
@@ -165,6 +175,9 @@ class CoreTimelineEditResult(_Result):
     created_automation_ids: list[str] = []
     modified_automation_ids: list[str] = []
     deleted_automation_ids: list[str] = []
+    created_mask_ids: list[str] = []
+    modified_mask_ids: list[str] = []
+    deleted_mask_ids: list[str] = []
     warnings: list[str]
     before_snapshot_id: str
     after_snapshot_id: str
@@ -255,7 +268,7 @@ def build_production_registry(
     )
     return AtomicSkillRegistry(
         registry_id="registry_atomic_skills",
-        registry_revision=7,
+        registry_revision=8,
         entries=(
             _entry(
                 VideoAddClipSkill(),
@@ -419,6 +432,24 @@ def build_production_registry(
                     VideoReplaceVisualAutomationSkill(),
                     VideoClearVisualAutomationSkill(),
                     VideoCopyVisualAutomationSkill(),
+                )
+            ),
+            *tuple(
+                _entry(
+                    skill,
+                    CoreTimelineEditResult,
+                    side_effects=("files", "timeline"),
+                    transactionality="atomic_project_state",
+                    retry_safety="gateway_replay_only",
+                    preview_supported=True,
+                    rollback_support="checkpoint_restore",
+                    required_capabilities=("ffmpeg",),
+                )
+                for skill in (
+                    VideoSetClipMaskSkill(),
+                    VideoReplaceClipMasksSkill(),
+                    VideoCopyClipMasksSkill(),
+                    VideoSetClipCompositeSkill(),
                 )
             ),
             *tuple(

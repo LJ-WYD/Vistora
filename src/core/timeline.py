@@ -369,6 +369,147 @@ class VisualAutomation(BaseModel):
         return self
 
 
+MaskPropertyPath = Literal[
+    "position_x",
+    "position_y",
+    "scale_x",
+    "scale_y",
+    "rotation_degrees",
+    "opacity",
+    "feather",
+]
+
+
+MASK_PROPERTY_RANGES: dict[str, tuple[float, float]] = {
+    "position_x": (-2.0, 3.0),
+    "position_y": (-2.0, 3.0),
+    "scale_x": (0.05, 8.0),
+    "scale_y": (0.05, 8.0),
+    "rotation_degrees": (-360.0, 360.0),
+    "opacity": (0.0, 1.0),
+    "feather": (0.0, 0.25),
+}
+
+
+class MaskPoint(BaseModel):
+    """One stable normalized point in a controlled convex polygon mask."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    schema_name: Literal["vistora.mask-point"] = "vistora.mask-point"
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    point_id: str = Field(
+        min_length=3,
+        max_length=160,
+        pattern=r"^[A-Za-z][A-Za-z0-9._:-]*$",
+    )
+    x: float = Field(ge=-2, le=3, allow_inf_nan=False)
+    y: float = Field(ge=-2, le=3, allow_inf_nan=False)
+
+
+class MaskAutomation(BaseModel):
+    """STEP 23-compatible fixed-interpolation curve for one mask property."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    schema_name: Literal["vistora.mask-automation"] = "vistora.mask-automation"
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    automation_id: str = Field(
+        min_length=3,
+        max_length=160,
+        pattern=r"^[A-Za-z][A-Za-z0-9._:-]*$",
+    )
+    mask_id: str = Field(
+        min_length=3,
+        max_length=160,
+        pattern=r"^[A-Za-z][A-Za-z0-9._:-]*$",
+    )
+    property_path: MaskPropertyPath
+    keyframes: tuple[VisualKeyframe, ...] = Field(min_length=1, max_length=128)
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def stable_curve(self) -> "MaskAutomation":
+        ids = tuple(point.keyframe_id for point in self.keyframes)
+        offsets = tuple(point.offset_seconds for point in self.keyframes)
+        if len(ids) != len(set(ids)) or len(offsets) != len(set(offsets)):
+            raise ValueError("Mask keyframe IDs and times must be unique")
+        if self.keyframes != tuple(
+            sorted(self.keyframes, key=lambda point: (point.offset_seconds, point.keyframe_id))
+        ):
+            raise ValueError("Mask keyframes must use deterministic time ordering")
+        lower, upper = MASK_PROPERTY_RANGES[self.property_path]
+        if any(point.value < lower or point.value > upper for point in self.keyframes):
+            raise ValueError("Mask keyframe value is outside the property range")
+        return self
+
+
+class ClipMask(BaseModel):
+    """Frozen normalized mask applied after clip visual processing."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    schema_name: Literal["vistora.clip-mask"] = "vistora.clip-mask"
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    mask_id: str = Field(
+        min_length=3,
+        max_length=160,
+        pattern=r"^[A-Za-z][A-Za-z0-9._:-]*$",
+    )
+    kind: Literal["rectangle", "ellipse", "polygon"]
+    operation: Literal["add", "subtract", "intersect"] = "add"
+    enabled: bool = True
+    invert: bool = False
+    opacity: float = Field(1, ge=0, le=1, allow_inf_nan=False)
+    feather: float = Field(0, ge=0, le=0.25, allow_inf_nan=False)
+    expand: float = Field(0, ge=-0.25, le=0.25, allow_inf_nan=False)
+    position_x: float = Field(0.5, ge=-2, le=3, allow_inf_nan=False)
+    position_y: float = Field(0.5, ge=-2, le=3, allow_inf_nan=False)
+    scale_x: float = Field(1, ge=0.05, le=8, allow_inf_nan=False)
+    scale_y: float = Field(1, ge=0.05, le=8, allow_inf_nan=False)
+    rotation_degrees: float = Field(0, ge=-360, le=360, allow_inf_nan=False)
+    width: float | None = Field(default=None, gt=0, le=4, allow_inf_nan=False)
+    height: float | None = Field(default=None, gt=0, le=4, allow_inf_nan=False)
+    points: tuple[MaskPoint, ...] = Field(default=(), max_length=12)
+    automations: tuple[MaskAutomation, ...] = ()
+
+    @model_validator(mode="after")
+    def exact_shape(self) -> "ClipMask":
+        if self.kind in {"rectangle", "ellipse"}:
+            if self.width is None or self.height is None or self.points:
+                raise ValueError("Rectangle/ellipse masks require width and height only")
+        else:
+            if self.width is not None or self.height is not None or len(self.points) < 3:
+                raise ValueError("Polygon masks require three to twelve points only")
+            point_ids = tuple(point.point_id for point in self.points)
+            if len(point_ids) != len(set(point_ids)):
+                raise ValueError("Mask point IDs must be unique")
+            signs: list[float] = []
+            for index, point in enumerate(self.points):
+                nxt = self.points[(index + 1) % len(self.points)]
+                after = self.points[(index + 2) % len(self.points)]
+                cross = (nxt.x - point.x) * (after.y - nxt.y) - (nxt.y - point.y) * (after.x - nxt.x)
+                if abs(cross) > 1e-9:
+                    signs.append(cross)
+            if not signs or any(value * signs[0] < 0 for value in signs[1:]):
+                raise ValueError("Polygon masks must be non-degenerate and convex")
+        automation_ids = tuple(item.automation_id for item in self.automations)
+        properties = tuple(item.property_path for item in self.automations)
+        if len(automation_ids) != len(set(automation_ids)) or len(properties) != len(set(properties)):
+            raise ValueError("Mask automation IDs and properties must be unique")
+        if self.automations != tuple(sorted(self.automations, key=lambda item: (item.property_path, item.automation_id))):
+            raise ValueError("Mask automations must use stable property ordering")
+        if any(item.mask_id != self.mask_id for item in self.automations):
+            raise ValueError("Mask automation must target its containing mask")
+        return self
+
+
+class ClipCompositeSettings(BaseModel):
+    """Bounded clip compositing declaration; no raw backend expressions."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    schema_name: Literal["vistora.clip-composite-settings"] = "vistora.clip-composite-settings"
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    blend_mode: Literal["normal", "multiply", "screen"] = "normal"
+
+
 TransitionKind = Literal[
     "cut",
     "cross_dissolve",
@@ -507,6 +648,8 @@ class ClipConfig(BaseModel):
     transform: ClipTransform = Field(default_factory=ClipTransform)
     color: ClipColorAdjustment = Field(default_factory=ClipColorAdjustment)
     visual_automations: tuple[VisualAutomation, ...] = ()
+    masks: tuple[ClipMask, ...] = ()
+    composite: ClipCompositeSettings = Field(default_factory=ClipCompositeSettings)
 
     @model_validator(mode="after")
     def audio_timing_is_bounded(self) -> "ClipConfig":
@@ -554,6 +697,18 @@ class ClipConfig(BaseModel):
                 for item in automation.keyframes
             ):
                 raise ValueError("Visual keyframe exceeds effective clip duration")
+        mask_ids = tuple(mask.mask_id for mask in self.masks)
+        if len(mask_ids) != len(set(mask_ids)):
+            raise ValueError("Mask IDs must be unique per clip")
+        if self.masks != tuple(sorted(self.masks, key=lambda mask: mask.mask_id)):
+            raise ValueError("Masks must use deterministic mask-ID ordering")
+        for mask in self.masks:
+            if any(
+                point.offset_seconds > duration + 1e-6
+                for curve in mask.automations
+                for point in curve.keyframes
+            ):
+                raise ValueError("Mask keyframe exceeds effective clip duration")
         return self
 
 
@@ -821,6 +976,8 @@ class TimelineRenderer:
                 clip.transform == ClipTransform()
                 and clip.color == ClipColorAdjustment()
                 and not clip.visual_automations
+                and not clip.masks
+                and clip.composite == ClipCompositeSettings()
                 for clip in video_track.clips
             )
         ):
@@ -862,6 +1019,8 @@ class TimelineRenderer:
                 clip.transform != ClipTransform()
                 or clip.color != ClipColorAdjustment()
                 or bool(clip.visual_automations)
+                or bool(clip.masks)
+                or clip.composite != ClipCompositeSettings()
                 for track in video_tracks
                 for clip in track.clips
             )
@@ -1025,6 +1184,19 @@ class TimelineRenderer:
         if not video_items:
             raise ValueError(
                 "A multi-track export requires an enabled video clip"
+            )
+        unsupported_blend = next(
+            (
+                clip.composite.blend_mode
+                for _, clip in video_items
+                if clip.composite.blend_mode != "normal"
+            ),
+            None,
+        )
+        if unsupported_blend is not None:
+            raise RuntimeError(
+                "The deterministic renderer currently supports only normal "
+                f"clip compositing; {unsupported_blend!r} must be re-reviewed"
             )
         audio_items = [
             (track, clip)
