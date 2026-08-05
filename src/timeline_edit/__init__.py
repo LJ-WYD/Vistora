@@ -62,6 +62,8 @@ __all__ = [
     "TrackConfig",
     "TrackMixSettings",
     "TransitionParameters",
+    "VisualAutomation",
+    "VisualKeyframe",
     "TransitionCopyTarget",
     "TrimClipInput",
     "UpdateTransitionInput",
@@ -80,4 +82,6 @@ from core.timeline import (
     TrackConfig,
     TrackMixSettings,
     TransitionParameters,
+    VisualAutomation,
+    VisualKeyframe,
 )

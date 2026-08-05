@@ -17,6 +17,8 @@ from core.timeline_manager import TimelineManager as _TimelineManager
 from .models import (
     ClipColorSnapshot,
     ClipSnapshot,
+    VisualAutomationSnapshot,
+    VisualKeyframeSnapshot,
     ClipTransformSnapshot,
     MediaSourceReference,
     TimelineSnapshot,
@@ -114,6 +116,10 @@ def _clip_snapshot(clip: ClipConfig, order_index: int) -> ClipSnapshot:
     timeline_end = timeline_start + effective_duration
     source_digest = _sha256({"configured_path": source_value})
 
+    automation_payload = [
+        item.model_dump(mode="json") for item in clip.visual_automations
+    ]
+    automation_digest = "sha256:" + _sha256(automation_payload)
     return ClipSnapshot(
         clip_id=clip_id,
         order_index=order_index,
@@ -158,12 +164,35 @@ def _clip_snapshot(clip: ClipConfig, order_index: int) -> ClipSnapshot:
                 mode="python", exclude={"schema_name", "schema_version"}
             )
         ),
+        visual_automations=tuple(
+            VisualAutomationSnapshot(
+                automation_id=automation.automation_id,
+                clip_id=automation.clip_id,
+                property_path=automation.property_path,
+                enabled=automation.enabled,
+                keyframes=tuple(
+                    VisualKeyframeSnapshot(
+                        keyframe_id=point.keyframe_id,
+                        offset_seconds=point.offset_seconds,
+                        value=point.value,
+                        interpolation=point.interpolation,
+                    )
+                    for point in automation.keyframes
+                ),
+                automation_digest="sha256:" + _sha256(
+                    automation.model_dump(mode="json")
+                ),
+            )
+            for automation in clip.visual_automations
+        ),
+        automation_digest=automation_digest,
         visual_digest=(
             "sha256:"
             + _sha256(
                 {
                     "transform": clip.transform.model_dump(mode="json"),
                     "color": clip.color.model_dump(mode="json"),
+                    "visual_automations": automation_payload,
                 }
             )
         ),

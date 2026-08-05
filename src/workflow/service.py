@@ -106,6 +106,10 @@ def _clip_state(
         link_group_id=clip.link_group_id,
         transform=clip.transform,
         color=clip.color,
+        visual_automations=tuple(
+            item.model_dump(mode="json") for item in clip.visual_automations
+        ),
+        automation_digest=clip.automation_digest,
     )
 
 

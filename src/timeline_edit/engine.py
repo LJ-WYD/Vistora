@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import hashlib
 import uuid
 from collections.abc import Callable, Iterable
 
@@ -17,7 +18,10 @@ from core.timeline import (
     TimelineTransition,
     TrackConfig,
     TrackMixSettings,
+    VisualAutomation,
+    VisualKeyframe,
 )
+from visual_automation.runtime import evaluate_curve, static_visual_value
 
 from .models import TimelineEditOutcome, TimelineSubtitleRipplePolicy
 
@@ -67,6 +71,8 @@ class TimelineEditEngine:
     @staticmethod
     def validate(timeline: TimelineConfig) -> None:
         all_ids: list[str] = []
+        automation_ids: list[str] = []
+        keyframe_ids: list[str] = []
         track_ids: list[str] = []
         orders: list[int] = []
         for track_key, track in timeline.tracks.items():
@@ -86,6 +92,14 @@ class TimelineEditEngine:
                         f"Clip {clip.id} violates its versioned model: {exc}"
                     ) from exc
                 all_ids.append(clip.id)
+                automation_ids.extend(
+                    item.automation_id for item in clip.visual_automations
+                )
+                keyframe_ids.extend(
+                    point.keyframe_id
+                    for item in clip.visual_automations
+                    for point in item.keyframes
+                )
                 values = (
                     clip.trim_in,
                     clip.trim_out,
@@ -106,6 +120,35 @@ class TimelineEditEngine:
                     raise TimelineEditError(
                         f"Clip {clip.id} has zero effective duration"
                     )
+                crop_curves = {
+                    item.property_path: item
+                    for item in clip.visual_automations
+                    if item.enabled and item.property_path.startswith("transform.crop_")
+                }
+                crop_times = {
+                    point.offset_seconds
+                    for item in crop_curves.values()
+                    for point in item.keyframes
+                }
+                for offset in crop_times:
+                    values = {}
+                    for edge in ("left", "right", "top", "bottom"):
+                        path = f"transform.crop_{edge}"
+                        curve = crop_curves.get(path)
+                        baseline = float(getattr(clip.transform, f"crop_{edge}"))
+                        values[edge] = (
+                            evaluate_curve(curve, offset, baseline)
+                            if curve is not None
+                            else baseline
+                        )
+                    if values["left"] + values["right"] >= 0.99:
+                        raise TimelineEditError(
+                            "Animated horizontal crop must retain at least 1%"
+                        )
+                    if values["top"] + values["bottom"] >= 0.99:
+                        raise TimelineEditError(
+                            "Animated vertical crop must retain at least 1%"
+                        )
             expected = sorted(
                 track.clips,
                 key=lambda item: (item.timeline_start, item.id),
@@ -120,6 +163,10 @@ class TimelineEditEngine:
             raise TimelineEditError("Track order values must be unique")
         if len(all_ids) != len(set(all_ids)):
             raise TimelineEditError("Clip IDs must be unique across tracks")
+        if len(automation_ids) != len(set(automation_ids)):
+            raise TimelineEditError("Visual automation IDs must be project-unique")
+        if len(keyframe_ids) != len(set(keyframe_ids)):
+            raise TimelineEditError("Visual keyframe IDs must be project-unique")
         try:
             TimelineConfig.model_validate(timeline.model_dump(mode="python"))
         except ValueError as exc:
@@ -244,6 +291,176 @@ class TimelineEditEngine:
             }
         )
 
+    def _boundary_keyframe(
+        self,
+        automation: VisualAutomation,
+        clip: ClipConfig,
+        offset: float,
+        *,
+        new_offset: float,
+    ) -> VisualKeyframe:
+        exact = next(
+            (
+                point
+                for point in automation.keyframes
+                if abs(point.offset_seconds - offset) <= TIME_EPSILON
+            ),
+            None,
+        )
+        return VisualKeyframe(
+            keyframe_id=(
+                exact.keyframe_id if exact is not None else self.id_factory("keyframe")
+            ),
+            offset_seconds=new_offset,
+            value=evaluate_curve(
+                automation,
+                offset,
+                static_visual_value(clip, automation.property_path),
+            ),
+            interpolation=(exact.interpolation if exact is not None else "linear"),
+        )
+
+    def _split_visual(
+        self,
+        clip: ClipConfig,
+        split_offset: float,
+        right_clip_id: str,
+    ) -> tuple[tuple[VisualAutomation, ...], tuple[VisualAutomation, ...]]:
+        left_curves: list[VisualAutomation] = []
+        right_curves: list[VisualAutomation] = []
+        for automation in clip.visual_automations:
+            boundary = self._boundary_keyframe(
+                automation, clip, split_offset, new_offset=split_offset
+            )
+            left_points = [
+                point
+                for point in automation.keyframes
+                if point.offset_seconds < split_offset - TIME_EPSILON
+            ]
+            left_points.append(boundary)
+            right_boundary = boundary.model_copy(
+                update={
+                    "keyframe_id": self.id_factory("keyframe"),
+                    "offset_seconds": 0.0,
+                }
+            )
+            right_points = [right_boundary]
+            right_points.extend(
+                point.model_copy(
+                    update={
+                        "keyframe_id": self.id_factory("keyframe"),
+                        "offset_seconds": point.offset_seconds - split_offset,
+                    }
+                )
+                for point in automation.keyframes
+                if point.offset_seconds > split_offset + TIME_EPSILON
+            )
+            left_curves.append(
+                automation.model_copy(update={"keyframes": tuple(left_points)})
+            )
+            right_curves.append(
+                automation.model_copy(
+                    update={
+                        "automation_id": self.id_factory("automation"),
+                        "clip_id": right_clip_id,
+                        "keyframes": tuple(right_points),
+                    }
+                )
+            )
+        return tuple(left_curves), tuple(right_curves)
+
+    def _trim_visual(
+        self,
+        clip: ClipConfig,
+        *,
+        removed_start: float,
+        new_duration: float,
+    ) -> tuple[VisualAutomation, ...]:
+        curves: list[VisualAutomation] = []
+        end_offset = removed_start + new_duration
+        for automation in clip.visual_automations:
+            start_boundary = self._boundary_keyframe(
+                automation, clip, removed_start, new_offset=0.0
+            )
+            points: list[VisualKeyframe] = [start_boundary]
+            points.extend(
+                point.model_copy(
+                    update={"offset_seconds": point.offset_seconds - removed_start}
+                )
+                for point in automation.keyframes
+                if (
+                    point.offset_seconds > removed_start + TIME_EPSILON
+                    and point.offset_seconds < end_offset - TIME_EPSILON
+                )
+            )
+            if new_duration > TIME_EPSILON:
+                end_boundary = self._boundary_keyframe(
+                    automation, clip, end_offset, new_offset=new_duration
+                )
+                if end_boundary.keyframe_id == start_boundary.keyframe_id:
+                    end_boundary = end_boundary.model_copy(
+                        update={"keyframe_id": self.id_factory("keyframe")}
+                    )
+                points.append(end_boundary)
+            curves.append(automation.model_copy(update={"keyframes": tuple(points)}))
+        return tuple(curves)
+
+    def _retarget_visual(
+        self,
+        curves: tuple[VisualAutomation, ...],
+        clip_id: str,
+    ) -> tuple[VisualAutomation, ...]:
+        return tuple(
+            automation.model_copy(
+                update={
+                    "automation_id": self.id_factory("automation"),
+                    "clip_id": clip_id,
+                    "keyframes": tuple(
+                        point.model_copy(
+                            update={"keyframe_id": self.id_factory("keyframe")}
+                        )
+                        for point in automation.keyframes
+                    ),
+                }
+            )
+            for automation in curves
+        )
+
+    @staticmethod
+    def _copy_identity(prefix: str, *parts: str) -> str:
+        encoded = "\x1f".join(parts).encode("utf-8")
+        return f"{prefix}_{hashlib.sha256(encoded).hexdigest()[:20]}"
+
+    def _copy_visual_curves(
+        self,
+        curves: tuple[VisualAutomation, ...],
+        clip_id: str,
+    ) -> tuple[VisualAutomation, ...]:
+        return tuple(
+            automation.model_copy(
+                update={
+                    "automation_id": self._copy_identity(
+                        "automation", automation.automation_id, clip_id
+                    ),
+                    "clip_id": clip_id,
+                    "keyframes": tuple(
+                        point.model_copy(
+                            update={
+                                "keyframe_id": self._copy_identity(
+                                    "keyframe",
+                                    automation.automation_id,
+                                    point.keyframe_id,
+                                    clip_id,
+                                )
+                            }
+                        )
+                        for point in automation.keyframes
+                    ),
+                }
+            )
+            for automation in curves
+        )
+
     def _resolve_track(
         self,
         track_reference: str,
@@ -351,6 +568,9 @@ class TimelineEditEngine:
         created_transitions: Iterable[str] = (),
         modified_transitions: Iterable[str] = (),
         deleted_transitions: Iterable[str] = (),
+        created_automations: Iterable[str] = (),
+        modified_automations: Iterable[str] = (),
+        deleted_automations: Iterable[str] = (),
     ) -> tuple[TimelineConfig, TimelineEditOutcome]:
         self._sort_all()
         invalidated = self._remove_invalid_transitions()
@@ -370,6 +590,9 @@ class TimelineEditEngine:
             deleted_transition_ids=tuple(
                 sorted(set(deleted_transitions) | invalidated)
             ),
+            created_automation_ids=tuple(dict.fromkeys(created_automations)),
+            modified_automation_ids=tuple(sorted(set(modified_automations))),
+            deleted_automation_ids=tuple(sorted(set(deleted_automations))),
             warnings=tuple(warnings) + (
                 (
                     "Structurally invalid transitions were removed and "
@@ -741,6 +964,8 @@ class TimelineEditEngine:
         created: list[str] = []
         modified: list[str] = []
         consequential: list[str] = []
+        created_automations: list[str] = []
+        modified_automations: list[str] = []
         direct: list[str] = [clip_id]
         for key, track, clip in members:
             new_id = (
@@ -763,14 +988,19 @@ class TimelineEditEngine:
             left_audio, right_audio = self._split_audio(
                 clip.audio, split_offset, original_duration
             )
+            left_automation, right_automation = self._split_visual(
+                clip, split_offset, new_id
+            )
             clip.trim_out = source_split
             clip.audio = left_audio
+            clip.visual_automations = left_automation
             right = clip.model_copy(deep=True)
             right.id = new_id
             right.trim_in = source_split
             right.trim_out = original_out
             right.timeline_start = split_at
             right.audio = right_audio
+            right.visual_automations = right_automation
             right.link_group_id = right_group_id
             track.clips.append(right)
             for transition_id, transition in tuple(
@@ -787,6 +1017,12 @@ class TimelineEditEngine:
                     )
             created.append(new_id)
             modified.append(clip.id)
+            modified_automations.extend(
+                item.automation_id for item in left_automation
+            )
+            created_automations.extend(
+                item.automation_id for item in right_automation
+            )
             if clip.id == clip_id:
                 direct.append(new_id)
             else:
@@ -799,6 +1035,8 @@ class TimelineEditEngine:
             consequential=consequential,
             created=created,
             modified=modified,
+            created_automations=created_automations,
+            modified_automations=modified_automations,
         )
 
     def trim(
@@ -841,6 +1079,7 @@ class TimelineEditEngine:
         affected_ids = {clip.id for _, _, clip in members}
         modified: list[str] = []
         consequential: list[str] = []
+        modified_automations: list[str] = []
         ripple_specs: list[tuple[TrackConfig, float, float]] = []
         for _, track, clip in members:
             old_end = clip_end(clip)
@@ -858,6 +1097,14 @@ class TimelineEditEngine:
                 removed_start=left_delta_seconds,
                 new_duration=clip_duration(clip),
                 removed_end=right_delta_seconds,
+            )
+            clip.visual_automations = self._trim_visual(
+                clip,
+                removed_start=left_delta_seconds,
+                new_duration=clip_duration(clip),
+            )
+            modified_automations.extend(
+                item.automation_id for item in clip.visual_automations
             )
             delta = clip_duration(clip) - old_duration
             ripple_specs.append((track, old_end, delta))
@@ -891,6 +1138,7 @@ class TimelineEditEngine:
             consequential=consequential,
             modified=modified,
             subtitle_cues=subtitle_cues,
+            modified_automations=modified_automations,
         )
 
     def move(
@@ -991,6 +1239,7 @@ class TimelineEditEngine:
         target = next(item for item in members if item[2].id == clip_id)
         affected_ids = {clip.id for _, _, clip in members}
         deleted: list[str] = []
+        deleted_automations: list[str] = []
         modified: list[str] = []
         consequential: list[str] = []
         subtitle_cues: tuple[str, ...] = ()
@@ -1005,6 +1254,9 @@ class TimelineEditEngine:
             duration = clip_duration(clip)
             track.clips.remove(clip)
             deleted.append(clip.id)
+            deleted_automations.extend(
+                item.automation_id for item in clip.visual_automations
+            )
             if clip.id != clip_id:
                 consequential.append(clip.id)
             if ripple:
@@ -1027,6 +1279,7 @@ class TimelineEditEngine:
             modified=modified,
             deleted=deleted,
             subtitle_cues=subtitle_cues,
+            deleted_automations=deleted_automations,
         )
 
     def insert_overwrite(
@@ -1057,6 +1310,9 @@ class TimelineEditEngine:
         modified: list[str] = []
         deleted: list[str] = []
         consequential: list[str] = []
+        created_automations: list[str] = []
+        modified_automations: list[str] = []
+        deleted_automations: list[str] = []
         if mode == "insert":
             subtitle_cues = self._apply_subtitle_ripple(
                 anchor_seconds=start,
@@ -1076,21 +1332,36 @@ class TimelineEditEngine:
                     < start
                     < other_end - TIME_EPSILON
                 ):
+                    split_offset = start - other.timeline_start
                     source_split = other.trim_in + (
-                        start - other.timeline_start
+                        split_offset
                     ) * other.speed_factor
                     original_out = other.trim_out
+                    left_curves, right_curves = self._split_visual(
+                        other, split_offset, "pending"
+                    )
                     other.trim_out = source_split
+                    other.visual_automations = left_curves
                     right = other.model_copy(deep=True)
                     right.id = self.id_factory("clip")
                     right.trim_in = source_split
                     right.trim_out = original_out
                     right.timeline_start = start + duration
+                    right.visual_automations = tuple(
+                        item.model_copy(update={"clip_id": right.id})
+                        for item in right_curves
+                    )
                     replacements.append(right)
                     modified.append(other.id)
                     created.append(right.id)
                     derived_created.append(right.id)
                     consequential.extend((other.id, right.id))
+                    modified_automations.extend(
+                        item.automation_id for item in left_curves
+                    )
+                    created_automations.extend(
+                        item.automation_id for item in right.visual_automations
+                    )
             track.clips.extend(replacements)
         elif mode == "overwrite":
             subtitle_cues = ()
@@ -1103,6 +1374,7 @@ class TimelineEditEngine:
                 ):
                     continue
                 track.clips.remove(other)
+                original = other.model_copy(deep=True)
                 left_duration = max(0.0, start - other_start)
                 right_duration = max(0.0, other_end - end)
                 if left_duration > TIME_EPSILON:
@@ -1110,10 +1382,21 @@ class TimelineEditEngine:
                     left.trim_out = (
                         left.trim_in + left_duration * left.speed_factor
                     )
+                    left.visual_automations = self._trim_visual(
+                        original,
+                        removed_start=0.0,
+                        new_duration=left_duration,
+                    )
                     replacements.append(left)
                     modified.append(left.id)
+                    modified_automations.extend(
+                        item.automation_id for item in left.visual_automations
+                    )
                 else:
                     deleted.append(other.id)
+                    deleted_automations.extend(
+                        item.automation_id for item in original.visual_automations
+                    )
                 if right_duration > TIME_EPSILON:
                     right = other.model_copy(deep=True)
                     right.id = self.id_factory("clip")
@@ -1121,10 +1404,21 @@ class TimelineEditEngine:
                         other.trim_out - right_duration * other.speed_factor
                     )
                     right.timeline_start = end
+                    right.visual_automations = self._retarget_visual(
+                        self._trim_visual(
+                            original,
+                            removed_start=end - other_start,
+                            new_duration=right_duration,
+                        ),
+                        right.id,
+                    )
                     replacements.append(right)
                     created.append(right.id)
                     derived_created.append(right.id)
                     consequential.append(right.id)
+                    created_automations.extend(
+                        item.automation_id for item in right.visual_automations
+                    )
                 if left_duration <= TIME_EPSILON and right_duration <= TIME_EPSILON:
                     deleted.append(other.id)
             track.clips.extend(replacements)
@@ -1143,6 +1437,9 @@ class TimelineEditEngine:
             modified=modified,
             deleted=deleted,
             subtitle_cues=subtitle_cues,
+            created_automations=created_automations,
+            modified_automations=modified_automations,
+            deleted_automations=deleted_automations,
             warnings=(
                 (
                     "Linked insertion joins an explicit group; a separate "
@@ -1183,10 +1480,33 @@ class TimelineEditEngine:
             )
         modified: list[str] = []
         consequential: list[str] = []
+        modified_automations: list[str] = []
         for _, track, clip in members:
             before = clip.model_copy(deep=True)
             if speed_factor is not None:
+                old_duration = clip_duration(clip)
                 clip.speed_factor = speed_factor
+                new_duration = clip_duration(clip)
+                if clip.visual_automations:
+                    ratio = new_duration / old_duration
+                    clip.visual_automations = tuple(
+                        automation.model_copy(
+                            update={
+                                "keyframes": tuple(
+                                    point.model_copy(
+                                        update={
+                                            "offset_seconds": point.offset_seconds * ratio
+                                        }
+                                    )
+                                    for point in automation.keyframes
+                                )
+                            }
+                        )
+                        for automation in clip.visual_automations
+                    )
+                    modified_automations.extend(
+                        item.automation_id for item in clip.visual_automations
+                    )
             if volume is not None:
                 clip.volume = volume
             if keep_audio is not None:
@@ -1215,6 +1535,7 @@ class TimelineEditEngine:
             direct=(clip_id,),
             consequential=consequential,
             modified=modified,
+            modified_automations=modified_automations,
         )
 
     def set_clip_transform(
@@ -1300,6 +1621,298 @@ class TimelineEditEngine:
                 modified=tuple(modified),
                 warnings=(
                     "Visual attributes copy only to the explicit clip IDs; linked audio is unchanged.",
+                ),
+            )
+        except Exception:
+            self.timeline = prior
+            raise
+
+    def upsert_visual_keyframe(
+        self,
+        track_reference: str,
+        clip_id: str,
+        *,
+        automation_id: str,
+        property_path: str,
+        keyframe: VisualKeyframe,
+    ):
+        key, track, clip = self._clip(track_reference, clip_id)
+        if track.kind != "video":
+            raise TimelineEditError("Visual automation requires a video clip")
+        if keyframe.offset_seconds > clip_duration(clip) + TIME_EPSILON:
+            raise TimelineEditError("Visual keyframe exceeds clip-local duration")
+        curves = list(clip.visual_automations)
+        matches = [item for item in curves if item.automation_id == automation_id]
+        created: tuple[str, ...] = ()
+        modified: tuple[str, ...] = ()
+        if matches:
+            automation = matches[0]
+            if automation.property_path != property_path:
+                raise TimelineEditError(
+                    "Automation ID cannot change its property path"
+                )
+            points = [
+                point
+                for point in automation.keyframes
+                if point.keyframe_id != keyframe.keyframe_id
+            ]
+            duplicate_time = next(
+                (
+                    point
+                    for point in points
+                    if abs(point.offset_seconds - keyframe.offset_seconds)
+                    <= TIME_EPSILON
+                ),
+                None,
+            )
+            if duplicate_time is not None:
+                raise TimelineEditError(
+                    "Visual keyframe time is already occupied by another ID"
+                )
+            points.append(keyframe)
+            points.sort(key=lambda item: (item.offset_seconds, item.keyframe_id))
+            replacement = automation.model_copy(update={"keyframes": tuple(points)})
+            if replacement == automation:
+                raise TimelineEditError("Visual keyframe edit changes nothing")
+            curves[curves.index(automation)] = replacement
+            modified = (automation_id,)
+        else:
+            if any(item.property_path == property_path for item in curves):
+                raise TimelineEditError(
+                    "Visual property already has a different automation ID"
+                )
+            if any(
+                item.automation_id == automation_id
+                for candidate in self.timeline.tracks.values()
+                for current in candidate.clips
+                for item in current.visual_automations
+            ):
+                raise TimelineEditError("Visual automation ID already exists")
+            curves.append(
+                VisualAutomation(
+                    automation_id=automation_id,
+                    clip_id=clip_id,
+                    property_path=property_path,
+                    keyframes=(keyframe,),
+                )
+            )
+            created = (automation_id,)
+        clip.visual_automations = tuple(
+            sorted(curves, key=lambda item: (item.property_path, item.automation_id))
+        )
+        return self._finish(
+            operation="upsert_visual_keyframe",
+            primary_key=key,
+            primary_track=track,
+            direct=(clip_id,),
+            modified=(clip_id,),
+            created_automations=created,
+            modified_automations=modified,
+        )
+
+    def delete_visual_keyframe(
+        self,
+        track_reference: str,
+        clip_id: str,
+        *,
+        automation_id: str,
+        keyframe_id: str,
+    ):
+        key, track, clip = self._clip(track_reference, clip_id)
+        if track.kind != "video":
+            raise TimelineEditError("Visual automation requires a video clip")
+        automation = next(
+            (
+                item
+                for item in clip.visual_automations
+                if item.automation_id == automation_id
+            ),
+            None,
+        )
+        if automation is None:
+            raise TimelineEditError("Visual automation ID is unknown")
+        points = tuple(
+            point for point in automation.keyframes if point.keyframe_id != keyframe_id
+        )
+        if len(points) == len(automation.keyframes):
+            raise TimelineEditError("Visual keyframe ID is unknown")
+        deleted: tuple[str, ...] = ()
+        modified: tuple[str, ...] = ()
+        if points:
+            replacement = automation.model_copy(update={"keyframes": points})
+            clip.visual_automations = tuple(
+                replacement if item == automation else item
+                for item in clip.visual_automations
+            )
+            modified = (automation_id,)
+        else:
+            clip.visual_automations = tuple(
+                item for item in clip.visual_automations if item != automation
+            )
+            deleted = (automation_id,)
+        return self._finish(
+            operation="delete_visual_keyframe",
+            primary_key=key,
+            primary_track=track,
+            direct=(clip_id,),
+            modified=(clip_id,),
+            modified_automations=modified,
+            deleted_automations=deleted,
+        )
+
+    def replace_visual_automation(
+        self,
+        track_reference: str,
+        clip_id: str,
+        automation: VisualAutomation,
+    ):
+        key, track, clip = self._clip(track_reference, clip_id)
+        if track.kind != "video":
+            raise TimelineEditError("Visual automation requires a video clip")
+        if automation.clip_id != clip_id:
+            raise TimelineEditError("Automation must target the exact clip")
+        if any(
+            point.offset_seconds > clip_duration(clip) + TIME_EPSILON
+            for point in automation.keyframes
+        ):
+            raise TimelineEditError("Visual curve exceeds clip-local duration")
+        curves = list(clip.visual_automations)
+        existing = next(
+            (
+                item
+                for item in curves
+                if item.automation_id == automation.automation_id
+            ),
+            None,
+        )
+        if existing is None:
+            if any(item.property_path == automation.property_path for item in curves):
+                raise TimelineEditError(
+                    "Visual property already has a different automation ID"
+                )
+            curves.append(automation)
+            created = (automation.automation_id,)
+            modified: tuple[str, ...] = ()
+        else:
+            if existing.property_path != automation.property_path:
+                raise TimelineEditError(
+                    "Replacement cannot change an automation property path"
+                )
+            if existing == automation:
+                raise TimelineEditError("Automation replacement changes nothing")
+            curves[curves.index(existing)] = automation
+            created = ()
+            modified = (automation.automation_id,)
+        clip.visual_automations = tuple(
+            sorted(curves, key=lambda item: (item.property_path, item.automation_id))
+        )
+        return self._finish(
+            operation="replace_visual_automation",
+            primary_key=key,
+            primary_track=track,
+            direct=(clip_id,),
+            modified=(clip_id,),
+            created_automations=created,
+            modified_automations=modified,
+        )
+
+    def clear_visual_automation(
+        self,
+        track_reference: str,
+        clip_id: str,
+        *,
+        automation_id: str | None,
+        property_path: str | None,
+        clear_all: bool,
+    ):
+        key, track, clip = self._clip(track_reference, clip_id)
+        if track.kind != "video":
+            raise TimelineEditError("Visual automation requires a video clip")
+        if clear_all:
+            removed = clip.visual_automations
+        else:
+            removed = tuple(
+                item
+                for item in clip.visual_automations
+                if (
+                    (automation_id is not None and item.automation_id == automation_id)
+                    or (property_path is not None and item.property_path == property_path)
+                )
+            )
+        if not removed:
+            raise TimelineEditError("No matching visual automation exists")
+        clip.visual_automations = tuple(
+            item for item in clip.visual_automations if item not in removed
+        )
+        return self._finish(
+            operation="clear_visual_automation",
+            primary_key=key,
+            primary_track=track,
+            direct=(clip_id,),
+            modified=(clip_id,),
+            deleted_automations=(item.automation_id for item in removed),
+        )
+
+    def copy_visual_automation(
+        self,
+        source_track_id: str,
+        source_clip_id: str,
+        targets: Iterable[tuple[str, str]],
+        *,
+        property_paths: tuple[str, ...],
+    ):
+        _, source_track, source = self._clip(source_track_id, source_clip_id)
+        if source_track.kind != "video":
+            raise TimelineEditError("Automation copy source must be video")
+        selected = tuple(
+            item
+            for item in source.visual_automations
+            if not property_paths or item.property_path in property_paths
+        )
+        if not selected:
+            raise TimelineEditError("Source has no selected visual automation")
+        resolved = [self._clip(track_id, clip_id) for track_id, clip_id in targets]
+        prior = self.timeline.model_copy(deep=True)
+        created: list[str] = []
+        changed: list[str] = []
+        try:
+            for _, track, clip in resolved:
+                if track.kind != "video":
+                    raise TimelineEditError("Automation copy target must be video")
+                existing_paths = {
+                    item.property_path for item in clip.visual_automations
+                }
+                if any(item.property_path in existing_paths for item in selected):
+                    raise TimelineEditError(
+                        "Automation copy never overwrites an existing target curve"
+                    )
+                if any(
+                    point.offset_seconds > clip_duration(clip) + TIME_EPSILON
+                    for item in selected
+                    for point in item.keyframes
+                ):
+                    raise TimelineEditError(
+                        "Target clip is shorter than the copied automation curve"
+                    )
+                copied = self._copy_visual_curves(selected, clip.id)
+                clip.visual_automations = tuple(
+                    sorted(
+                        (*clip.visual_automations, *copied),
+                        key=lambda item: (item.property_path, item.automation_id),
+                    )
+                )
+                created.extend(item.automation_id for item in copied)
+                changed.append(clip.id)
+            primary_key, primary_track, _ = resolved[0]
+            return self._finish(
+                operation="copy_visual_automation",
+                primary_key=primary_key,
+                primary_track=primary_track,
+                direct=changed,
+                modified=changed,
+                created_automations=created,
+                warnings=(
+                    "Automation copied only to explicit video clip IDs; linked audio is unchanged.",
                 ),
             )
         except Exception:

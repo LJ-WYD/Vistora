@@ -20,6 +20,7 @@ from contracts import (
     ManualSubtitleCue,
     ManualSubtitleTrack,
     ManualTransitionEdit,
+    ManualVisualAutomationEdit,
     PlanReference,
 )
 
@@ -70,7 +71,7 @@ class TraceEntityReference(TraceModel):
     """Opaque timeline or generated-media entity identity."""
 
     entity_kind: Literal[
-        "clip", "track", "subtitle_track", "subtitle_cue", "transition", "media_output"
+        "clip", "track", "subtitle_track", "subtitle_cue", "transition", "automation", "media_output"
     ]
     entity_id: str = Field(min_length=1, max_length=160)
     track_key: str | None = Field(default=None, min_length=1)
@@ -263,10 +264,15 @@ class ManualEntityRelation(TraceModel):
     @model_validator(mode="after")
     def entity_is_a_clip(self) -> ManualEntityRelation:
         if self.entity.entity_kind not in {
-            "clip", "track", "subtitle_track", "subtitle_cue", "transition"
+            "clip",
+            "track",
+            "subtitle_track",
+            "subtitle_cue",
+            "transition",
+            "automation",
         }:
             raise ValueError(
-                "Manual edit traces may reference clips or tracks only"
+                "Manual edit traces may reference timeline entities only"
             )
         if (
             self.inherited_from_entity_id is not None
@@ -365,6 +371,15 @@ class ManualEditTrace(TraceModel):
                 ):
                     raise ValueError(
                         "Manual transition trace differs from proposal"
+                    )
+                continue
+            if isinstance(edit, ManualVisualAutomationEdit):
+                if not direct or any(
+                    relation.entity.entity_kind != "automation"
+                    for relation in direct
+                ):
+                    raise ValueError(
+                        "Manual visual automation trace differs from proposal"
                     )
                 continue
             if isinstance(edit, ManualClipLink):

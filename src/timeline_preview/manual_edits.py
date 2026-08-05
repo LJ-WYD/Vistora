@@ -34,6 +34,7 @@ from contracts import (
     ManualSubtitleCue,
     ManualSubtitleTrack,
     ManualTransitionEdit,
+    ManualVisualAutomationEdit,
     PlanReference,
 )
 from core.timeline import (
@@ -45,6 +46,8 @@ from core.timeline import (
     TimelineConfig,
     TimelineTransition,
     TransitionParameters,
+    VisualAutomation,
+    VisualKeyframe,
     TrackConfig,
     TrackMixSettings,
     SubtitleCue,
@@ -99,6 +102,10 @@ def _clip_state(clip: Any, order_index: int) -> dict[str, Any]:
         "transform": clip.transform.model_dump(mode="json"),
         "color": clip.color.model_dump(mode="json"),
         "visual_digest": clip.visual_digest,
+        "visual_automations": tuple(
+            item.model_dump(mode="json") for item in clip.visual_automations
+        ),
+        "automation_digest": clip.automation_digest,
     }
 
 
@@ -380,6 +387,24 @@ def _timeline_from_snapshot(snapshot: TimelineSnapshot) -> TimelineConfig:
                         color=ClipColorAdjustment.model_validate(
                             clip.color.model_dump(mode="python")
                         ),
+                        visual_automations=tuple(
+                            VisualAutomation(
+                                automation_id=item.automation_id,
+                                clip_id=item.clip_id,
+                                property_path=item.property_path,
+                                enabled=item.enabled,
+                                keyframes=tuple(
+                                    VisualKeyframe(
+                                        keyframe_id=point.keyframe_id,
+                                        offset_seconds=point.offset_seconds,
+                                        value=point.value,
+                                        interpolation=point.interpolation,
+                                    )
+                                    for point in item.keyframes
+                                ),
+                            )
+                            for item in clip.visual_automations
+                        ),
                     )
                     for clip in track.clips
                 ],
@@ -496,6 +521,65 @@ def review_manual_edit_proposal(
         before_transition_states = _transition_states(engine.timeline)
         try:
             outcomes = []
+            if isinstance(edit, ManualVisualAutomationEdit):
+                if edit.action == "upsert_keyframe":
+                    updated, outcome = engine.upsert_visual_keyframe(
+                        edit.track_id,
+                        edit.clip_id,
+                        automation_id=edit.automation_id,
+                        property_path=edit.property_path,
+                        keyframe=edit.keyframe,
+                    )
+                elif edit.action == "delete_keyframe":
+                    updated, outcome = engine.delete_visual_keyframe(
+                        edit.track_id,
+                        edit.clip_id,
+                        automation_id=edit.automation_id,
+                        keyframe_id=edit.keyframe_id,
+                    )
+                elif edit.action == "replace_curve":
+                    updated, outcome = engine.replace_visual_automation(
+                        edit.track_id, edit.clip_id, edit.automation
+                    )
+                elif edit.action in {"clear_curve", "clear_all"}:
+                    updated, outcome = engine.clear_visual_automation(
+                        edit.track_id,
+                        edit.clip_id,
+                        automation_id=edit.automation_id,
+                        property_path=edit.property_path,
+                        clear_all=edit.action == "clear_all",
+                    )
+                else:
+                    updated, outcome = engine.copy_visual_automation(
+                        edit.track_id,
+                        edit.clip_id,
+                        ((item.track_id, item.clip_id) for item in edit.targets),
+                        property_paths=edit.property_paths,
+                    )
+                after = _state_map(updated)
+                for key in sorted(before.keys() | after.keys()):
+                    old = before.get(key)
+                    new = after.get(key)
+                    if old == new:
+                        continue
+                    track_id = (new or old)[0]
+                    changes.append(ManualEditChange(
+                        operation_id=edit.operation_id,
+                        target_kind="automation",
+                        track_key=key[0],
+                        track_id=track_id,
+                        clip_id=key[1],
+                        action="update",
+                        effect_kind=(
+                            "direct"
+                            if key[1] == edit.clip_id
+                            or any(item.clip_id == key[1] for item in edit.targets)
+                            else "consequential"
+                        ),
+                        before=old[1],
+                        after=new[1],
+                    ))
+                continue
             if isinstance(edit, ManualTransitionEdit):
                 before_transitions = _transition_states(engine.timeline)
                 if edit.action == "add":

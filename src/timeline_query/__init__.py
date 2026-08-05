@@ -16,6 +16,8 @@ from .models import (
     TimelineSnapshotReference,
     TrackSnapshot,
     TransitionSnapshot,
+    VisualAutomationSnapshot,
+    VisualKeyframeSnapshot,
 )
 from .service import (
     TimelineSnapshotError,
@@ -42,4 +44,6 @@ __all__ = [
     "TimelineSnapshotService",
     "TrackSnapshot",
     "TransitionSnapshot",
+    "VisualAutomationSnapshot",
+    "VisualKeyframeSnapshot",
 ]

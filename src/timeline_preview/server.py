@@ -614,6 +614,24 @@ class PreviewApplication:
                     ),
                     transform=clip.transform.model_dump(mode="python"),
                     color=clip.color.model_dump(mode="python"),
+                    visual_automations=tuple(
+                        {
+                            "automation_id": automation.automation_id,
+                            "clip_id": automation.clip_id,
+                            "property_path": automation.property_path,
+                            "enabled": automation.enabled,
+                            "keyframes": tuple(
+                                {
+                                    "keyframe_id": point.keyframe_id,
+                                    "offset_seconds": point.offset_seconds,
+                                    "value": point.value,
+                                    "interpolation": point.interpolation,
+                                }
+                                for point in automation.keyframes
+                            ),
+                        }
+                        for automation in clip.visual_automations
+                    ) if track.kind == "video" and preview_mode == "applied" else (),
                 )
                 source = references.get(clip.source.source_id)
                 if source is None:

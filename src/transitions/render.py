@@ -229,7 +229,14 @@ def render_transition_timeline(config: TimelineConfig, output_path: str) -> str:
                 raw = f"vt_{track.order}_{group_index}_{clip_index}"
                 canvas = f"vc_{track.order}_{group_index}_{clip_index}"
                 output = f"vs_{track.order}_{group_index}_{clip_index}"
-                visual, overlay = clip_visual_filter_chain(clip, config.width, config.height)
+                visual, overlay = clip_visual_filter_chain(
+                    clip,
+                    config.width,
+                    config.height,
+                    local_time_expression=(
+                        "t" if incoming <= 1e-9 else f"(t-{incoming:.12g})"
+                    ),
+                )
                 chain = [
                     f"[{index}:v]trim=start={trim_start:.12g}:end={trim_end:.12g}",
                     f"setpts=(PTS-STARTPTS)/{clip.speed_factor:.12g}",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from core.timeline import ClipColorAdjustment, ClipConfig
+from visual_automation.runtime import ffmpeg_property_expressions
 
 
 def _number(value: float) -> str:
@@ -13,28 +14,48 @@ def clip_visual_filter_chain(
     clip: ClipConfig,
     canvas_width: int,
     canvas_height: int,
+    *,
+    local_time_expression: str = "t",
 ) -> tuple[list[str], str]:
     """Return validated filters and an overlay expression without raw input."""
 
     transform = clip.transform
     color = clip.color
+    animated = ffmpeg_property_expressions(
+        clip, variable=local_time_expression
+    )
+    animated_geq = ffmpeg_property_expressions(
+        clip, variable=local_time_expression.replace("t", "T")
+    )
+
+    def value(path: str, fallback: float) -> str:
+        return animated.get(path, _number(fallback))
+
     chain: list[str] = []
-    if any(
-        value > 0
-        for value in (
+    crop_paths = (
+        "transform.crop_left",
+        "transform.crop_right",
+        "transform.crop_top",
+        "transform.crop_bottom",
+    )
+    if any(path in animated for path in crop_paths) or any(
+        item > 0
+        for item in (
             transform.crop_left,
             transform.crop_right,
             transform.crop_top,
             transform.crop_bottom,
         )
     ):
-        width = 1 - transform.crop_left - transform.crop_right
-        height = 1 - transform.crop_top - transform.crop_bottom
+        left = value("transform.crop_left", transform.crop_left)
+        right = value("transform.crop_right", transform.crop_right)
+        top = value("transform.crop_top", transform.crop_top)
+        bottom = value("transform.crop_bottom", transform.crop_bottom)
         chain.append(
             "crop="
-            f"iw*{_number(width)}:ih*{_number(height)}:"
-            f"iw*{_number(transform.crop_left)}:"
-            f"ih*{_number(transform.crop_top)}"
+            f"w='max(2,iw*(1-({left})-({right})))':"
+            f"h='max(2,ih*(1-({top})-({bottom})))':"
+            f"x='iw*({left})':y='ih*({top})'"
         )
     if transform.flip_horizontal:
         chain.append("hflip")
@@ -46,10 +67,15 @@ def clip_visual_filter_chain(
         chain.extend(("transpose=1", "transpose=1"))
     elif clip.rotate == 270:
         chain.append("transpose=2")
-    if abs(transform.rotation_degrees) > 1e-9:
-        angle = _number(transform.rotation_degrees)
+    if (
+        "transform.rotation_degrees" in animated
+        or abs(transform.rotation_degrees) > 1e-9
+    ):
+        angle = value(
+            "transform.rotation_degrees", transform.rotation_degrees
+        )
         chain.append(
-            f"rotate={angle}*PI/180:ow=rotw(iw):oh=roth(ih):c=black@0"
+            f"rotate='({angle})*PI/180':ow=rotw(iw):oh=roth(ih):c=black@0"
         )
     if transform.fit == "contain":
         chain.append(
@@ -65,21 +91,73 @@ def clip_visual_filter_chain(
         ))
     else:
         chain.append(f"scale={canvas_width}:{canvas_height}")
-    if abs(transform.scale_x - 1) > 1e-9 or abs(transform.scale_y - 1) > 1e-9:
+    uniform = animated.get("transform.scale_uniform")
+    scale_x = uniform or value("transform.scale_x", transform.scale_x)
+    scale_y = uniform or value("transform.scale_y", transform.scale_y)
+    if uniform is not None or any(
+        path in animated
+        for path in ("transform.scale_x", "transform.scale_y")
+    ) or abs(transform.scale_x - 1) > 1e-9 or abs(transform.scale_y - 1) > 1e-9:
         chain.append(
             "scale="
-            f"'max(2,trunc(iw*{_number(transform.scale_x)}/2)*2)':"
-            f"'max(2,trunc(ih*{_number(transform.scale_y)}/2)*2)'"
+            f"w='max(2,trunc(iw*({scale_x})/2)*2)':"
+            f"h='max(2,trunc(ih*({scale_y})/2)*2)':eval=frame"
         )
-    chain.extend(color_filter_chain(color))
-    if transform.opacity < 1:
-        chain.append(f"colorchannelmixer=aa={_number(transform.opacity)}")
+    animated_color_fields = {
+        path.split(".", 1)[1]
+        for path in animated
+        if path.startswith("color.")
+    }
+    static_color = color.model_copy(
+        update={
+            field: (1.0 if field == "gamma" else 0.0)
+            for field in animated_color_fields
+        }
+    )
+    chain.extend(color_filter_chain(static_color))
+    dynamic_eq = any(
+        f"color.{field}" in animated
+        for field in ("exposure", "contrast", "saturation", "gamma")
+    )
+    if dynamic_eq:
+        exposure = value("color.exposure", color.exposure)
+        contrast = value("color.contrast", color.contrast)
+        saturation = value("color.saturation", color.saturation)
+        gamma = value("color.gamma", color.gamma)
+        chain.append(
+            "eq="
+            f"brightness='({exposure})/4':contrast='1+({contrast})':"
+            f"saturation='1+({saturation})':gamma='({gamma})':"
+            "gamma_weight=1:eval=frame"
+        )
     chain.append("format=rgba")
+    dynamic_balance = any(
+        path in animated
+        for path in ("color.temperature", "color.tint")
+    )
+    dynamic_opacity = "transform.opacity" in animated
+    if dynamic_balance or dynamic_opacity:
+        temperature = animated_geq.get(
+            "color.temperature", _number(color.temperature)
+        )
+        tint = animated_geq.get("color.tint", _number(color.tint))
+        opacity = animated_geq.get(
+            "transform.opacity", _number(transform.opacity)
+        )
+        chain.append(
+            "geq="
+            f"r='clip(r(X,Y)*(1+({temperature})*0.15),0,255)':"
+            f"g='clip(g(X,Y)*(1+({tint})*0.15),0,255)':"
+            f"b='clip(b(X,Y)*(1-({temperature})*0.15),0,255)':"
+            f"a='clip(alpha(X,Y)*({opacity}),0,255)'"
+        )
+    elif transform.opacity < 1:
+        chain.append(f"colorchannelmixer=aa={_number(transform.opacity)}")
     overlay = (
-        f"x={_number(transform.position_x)}*main_w-"
-        f"{_number(transform.anchor_x)}*overlay_w:"
-        f"y={_number(transform.position_y)}*main_h-"
-        f"{_number(transform.anchor_y)}*overlay_h"
+        f"x='({value('transform.position_x', transform.position_x)})*main_w-"
+        f"{_number(transform.anchor_x)}*overlay_w':"
+        f"y='({value('transform.position_y', transform.position_y)})*main_h-"
+        f"{_number(transform.anchor_y)}*overlay_h':eval=frame"
     )
     return chain, overlay
 

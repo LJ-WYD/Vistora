@@ -98,6 +98,24 @@ const ui = {
   stageColor: document.querySelector("#stage-color"),
   resetVisual: document.querySelector("#reset-visual"),
   copyVisual: document.querySelector("#copy-visual"),
+  automationEditPanel: document.querySelector("#automation-edit-panel"),
+  automationProperty: document.querySelector("#automation-property"),
+  automationTime: document.querySelector("#automation-time"),
+  automationValue: document.querySelector("#automation-value"),
+  automationInterpolation: document.querySelector("#automation-interpolation"),
+  automationId: document.querySelector("#automation-id"),
+  keyframeId: document.querySelector("#keyframe-id"),
+  automationExisting: document.querySelector("#automation-existing"),
+  automationCopyTargets: document.querySelector("#automation-copy-targets"),
+  automationPoints: document.querySelector("#automation-points"),
+  automationFormMessage: document.querySelector("#automation-form-message"),
+  previousKeyframe: document.querySelector("#previous-keyframe"),
+  nextKeyframe: document.querySelector("#next-keyframe"),
+  stageKeyframe: document.querySelector("#stage-keyframe"),
+  deleteKeyframe: document.querySelector("#delete-keyframe"),
+  clearAutomation: document.querySelector("#clear-automation"),
+  clearAllAutomation: document.querySelector("#clear-all-automation"),
+  copyAutomation: document.querySelector("#copy-automation"),
   transitionEditPanel: document.querySelector("#transition-edit-panel"),
   transitionToClip: document.querySelector("#transition-to-clip"),
   transitionKind: document.querySelector("#transition-kind"),
@@ -1598,6 +1616,75 @@ function showManualEditor(track, clip) {
     : track.kind !== "video"
       ? "Visual properties apply only to video/image clips."
       : `Visual digest ${clip.visual_digest.slice(0, 23)}… · export exact.`;
+  const automations = clip.visual_automations || [];
+  ui.automationExisting.replaceChildren();
+  const noneCurve = document.createElement("option");
+  noneCurve.value = "";
+  noneCurve.textContent = "New curve";
+  ui.automationExisting.append(noneCurve);
+  for (const automation of automations) {
+    const option = document.createElement("option");
+    option.value = automation.automation_id;
+    option.textContent = `${automation.property_path} · ${automation.keyframes.length}`;
+    ui.automationExisting.append(option);
+  }
+  ui.automationId.value = newStableId("automation");
+  ui.keyframeId.value = newStableId("keyframe");
+  ui.automationTime.value = Math.min(
+    clip.effective_duration_seconds,
+    Math.max(0, state.currentTime - clip.timeline_start_seconds),
+  ).toFixed(3);
+  ui.automationCopyTargets.replaceChildren();
+  for (const candidateTrack of state.snapshot.tracks) {
+    if (candidateTrack.kind !== "video") continue;
+    for (const candidateClip of candidateTrack.clips) {
+      if (candidateClip.clip_id === clip.clip_id) continue;
+      const option = document.createElement("option");
+      option.value = JSON.stringify({
+        track_key: candidateTrack.track_key,
+        track_id: candidateTrack.track_id,
+        clip_id: candidateClip.clip_id,
+      });
+      option.textContent = `${candidateTrack.track_id} / ${candidateClip.clip_id}`;
+      option.disabled = candidateTrack.locked;
+      ui.automationCopyTargets.append(option);
+    }
+  }
+  ui.automationPoints.replaceChildren();
+  for (const automation of automations) {
+    for (const point of automation.keyframes) {
+      const marker = document.createElement("button");
+      marker.type = "button";
+      marker.className = "automation-point-chip";
+      marker.textContent = `${automation.property_path} @ ${point.offset_seconds}s`;
+      marker.addEventListener("click", () => {
+        ui.automationExisting.value = automation.automation_id;
+        ui.automationProperty.value = automation.property_path;
+        ui.automationId.value = automation.automation_id;
+        ui.keyframeId.value = point.keyframe_id;
+        ui.automationTime.value = String(point.offset_seconds);
+        ui.automationValue.value = String(point.value);
+        ui.automationInterpolation.value = point.interpolation;
+      });
+      ui.automationPoints.append(marker);
+    }
+  }
+  const automationDisabled = track.locked || track.kind !== "video";
+  for (const control of [
+    ui.stageKeyframe, ui.deleteKeyframe, ui.clearAutomation,
+    ui.clearAllAutomation, ui.copyAutomation,
+  ]) control.disabled = automationDisabled;
+  ui.deleteKeyframe.disabled = automationDisabled || automations.length === 0;
+  ui.clearAutomation.disabled = automationDisabled || automations.length === 0;
+  ui.clearAllAutomation.disabled = automationDisabled || automations.length === 0;
+  ui.copyAutomation.disabled = automationDisabled || automations.length === 0 ||
+    ui.automationCopyTargets.options.length === 0;
+  ui.automationFormMessage.classList.toggle("error", automationDisabled);
+  ui.automationFormMessage.textContent = track.locked
+    ? "Locked tracks reject keyframe changes."
+    : track.kind !== "video"
+      ? "Visual keyframes apply only to video/image clips."
+      : `${automations.length} curve(s) · ${clip.automation_digest.slice(0, 23)}…`;
   const orderedClips = [...track.clips].sort(
     (left, right) =>
       left.timeline_start_seconds - right.timeline_start_seconds ||
@@ -1818,6 +1905,30 @@ function setDraftState(label, kind = "") {
 }
 
 function changedFieldLines(change) {
+  if (change.target_kind === "automation") {
+    const beforeCurves = change.before?.visual_automations || [];
+    const afterCurves = change.after?.visual_automations || [];
+    const beforeById = new Map(beforeCurves.map((curve) => [curve.automation_id, curve]));
+    const afterById = new Map(afterCurves.map((curve) => [curve.automation_id, curve]));
+    const curveIds = [...new Set([...beforeById.keys(), ...afterById.keys()])].sort();
+    const lines = [];
+    for (const curveId of curveIds) {
+      const before = beforeById.get(curveId);
+      const after = afterById.get(curveId);
+      if (JSON.stringify(before) === JSON.stringify(after)) continue;
+      if (!before) {
+        lines.push(`Create ${after.property_path} · ${after.keyframes.length} keyframe(s)`);
+      } else if (!after) {
+        lines.push(`Remove ${before.property_path} · ${before.keyframes.length} keyframe(s)`);
+      } else {
+        lines.push(
+          `${after.property_path}: ${before.keyframes.length} → ` +
+          `${after.keyframes.length} keyframe(s) · values/interpolation updated`,
+        );
+      }
+    }
+    return lines.length ? lines : ["Visual automation metadata updated"];
+  }
   if (change.action === "create") {
     if (change.target_kind === "transition") {
       return [
@@ -1895,7 +2006,7 @@ function changedFieldLines(change) {
   };
   const lines = [];
   for (const [field, label] of Object.entries(labels)) {
-    if (change.before[field] !== change.after[field]) {
+    if (JSON.stringify(change.before[field]) !== JSON.stringify(change.after[field])) {
       const timeField = [
         "trim_in_seconds",
         "trim_out_seconds",
@@ -2054,6 +2165,9 @@ function stageEdit(edit) {
     }
     if (value.kind === "transition") {
       return `transition:${value.transition?.transition_id || value.transition_id || value.source_transition_id}`;
+    }
+    if (value.kind === "visual_automation") {
+      return `automation:${value.track_id}/${value.clip_id}/${value.automation_id || value.property_path || value.action}/${value.keyframe?.keyframe_id || value.keyframe_id || value.action}`;
     }
     const domain = value.kind === "clip_audio" ? "audio" : "timing";
     return `clip:${domain}:${value.track_id || value.track_key}/${value.clip_id}`;
@@ -2224,6 +2338,10 @@ function showDetails(track, clip) {
       `tint ${clip.color.tint} · gamma ${clip.color.gamma}`,
     ),
     detailRow("Visual digest", clip.visual_digest),
+    detailRow(
+      "Visual automation",
+      `${clip.visual_automations?.length || 0} curves · ${clip.automation_digest}`,
+    ),
     detailRow(
       "Media access",
       availability?.available
@@ -2546,6 +2664,15 @@ function renderTimeline() {
         textElement("span", "", clipLabel(clip)),
       );
       block.append(clipVisualization(track, clip), copy);
+      for (const automation of clip.visual_automations || []) {
+        for (const point of automation.keyframes) {
+          const marker = document.createElement("span");
+          marker.className = "visual-keyframe-marker";
+          marker.style.left = `${Math.max(0, Math.min(100, point.offset_seconds / Math.max(clip.effective_duration_seconds, 0.001) * 100))}%`;
+          marker.title = `${automation.property_path} · ${point.offset_seconds}s · ${point.interpolation}`;
+          block.append(marker);
+        }
+      }
       if (
         state.selected?.track.track_key === track.track_key &&
         state.selected?.clip.clip_id === clip.clip_id
@@ -3285,6 +3412,160 @@ ui.copyVisual.addEventListener("click", () => {
     ui.visualFormMessage.classList.add("error");
     ui.visualFormMessage.textContent = error.message || String(error);
   }
+});
+
+function selectedAutomationCurve() {
+  if (!state.selected) return null;
+  const identity = ui.automationExisting.value;
+  return (state.selected.clip.visual_automations || []).find(
+    (item) => item.automation_id === identity,
+  ) || null;
+}
+
+function automationMessage(message, error = false) {
+  ui.automationFormMessage.classList.toggle("error", error);
+  ui.automationFormMessage.textContent = message;
+}
+
+ui.automationExisting.addEventListener("change", () => {
+  const curve = selectedAutomationCurve();
+  if (!curve) {
+    ui.automationId.value = newStableId("automation");
+    ui.keyframeId.value = newStableId("keyframe");
+    return;
+  }
+  ui.automationId.value = curve.automation_id;
+  ui.automationProperty.value = curve.property_path;
+  const point = curve.keyframes[0];
+  ui.keyframeId.value = point.keyframe_id;
+  ui.automationTime.value = String(point.offset_seconds);
+  ui.automationValue.value = String(point.value);
+  ui.automationInterpolation.value = point.interpolation;
+});
+
+function navigateKeyframe(direction) {
+  const curve = selectedAutomationCurve();
+  if (!curve) return automationMessage("Select an existing curve first.", true);
+  const current = readFiniteInput(ui.automationTime, "Keyframe time");
+  const ordered = [...curve.keyframes].sort(
+    (left, right) => left.offset_seconds - right.offset_seconds,
+  );
+  const candidates = direction < 0
+    ? ordered.filter((point) => point.offset_seconds < current - 1e-6).reverse()
+    : ordered.filter((point) => point.offset_seconds > current + 1e-6);
+  const point = candidates[0] || (direction < 0 ? ordered[0] : ordered.at(-1));
+  ui.keyframeId.value = point.keyframe_id;
+  ui.automationTime.value = String(point.offset_seconds);
+  ui.automationValue.value = String(point.value);
+  ui.automationInterpolation.value = point.interpolation;
+}
+
+ui.previousKeyframe.addEventListener("click", () => navigateKeyframe(-1));
+ui.nextKeyframe.addEventListener("click", () => navigateKeyframe(1));
+
+ui.stageKeyframe.addEventListener("click", () => {
+  try {
+    if (!state.selected || state.selected.track.locked || state.selected.track.kind !== "video") {
+      throw new Error("Select an unlocked video clip.");
+    }
+    const clip = state.selected.clip;
+    const offset = readFiniteInput(ui.automationTime, "Keyframe time");
+    if (offset < 0 || offset > clip.effective_duration_seconds + 1e-6) {
+      throw new Error("Keyframe time must be inside the selected clip.");
+    }
+    stageEdit({
+      schema_version: "1.0.0",
+      operation_id: newStableId("manual_keyframe"),
+      kind: "visual_automation",
+      action: "upsert_keyframe",
+      track_key: state.selected.track.track_key,
+      track_id: state.selected.track.track_id,
+      clip_id: clip.clip_id,
+      automation_id: ui.automationId.value.trim(),
+      property_path: ui.automationProperty.value,
+      keyframe: {
+        schema_name: "vistora.visual-keyframe",
+        schema_version: "1.0.0",
+        keyframe_id: ui.keyframeId.value.trim(),
+        offset_seconds: offset,
+        value: readFiniteInput(ui.automationValue, "Keyframe value"),
+        interpolation: ui.automationInterpolation.value,
+      },
+    });
+    automationMessage("Keyframe staged locally; review is required.");
+  } catch (error) { automationMessage(error.message || String(error), true); }
+});
+
+ui.deleteKeyframe.addEventListener("click", () => {
+  try {
+    if (!state.selected || !selectedAutomationCurve()) throw new Error("Select an existing curve.");
+    stageEdit({
+      schema_version: "1.0.0",
+      operation_id: newStableId("manual_keyframe_delete"),
+      kind: "visual_automation",
+      action: "delete_keyframe",
+      track_key: state.selected.track.track_key,
+      track_id: state.selected.track.track_id,
+      clip_id: state.selected.clip.clip_id,
+      automation_id: ui.automationId.value.trim(),
+      keyframe_id: ui.keyframeId.value.trim(),
+    });
+    automationMessage("Keyframe deletion staged locally.");
+  } catch (error) { automationMessage(error.message || String(error), true); }
+});
+
+ui.clearAutomation.addEventListener("click", () => {
+  try {
+    if (!state.selected || !selectedAutomationCurve()) throw new Error("Select an existing curve.");
+    stageEdit({
+      schema_version: "1.0.0",
+      operation_id: newStableId("manual_curve_clear"),
+      kind: "visual_automation",
+      action: "clear_curve",
+      track_key: state.selected.track.track_key,
+      track_id: state.selected.track.track_id,
+      clip_id: state.selected.clip.clip_id,
+      automation_id: ui.automationId.value.trim(),
+    });
+    automationMessage("Curve clear staged locally.");
+  } catch (error) { automationMessage(error.message || String(error), true); }
+});
+
+ui.clearAllAutomation.addEventListener("click", () => {
+  if (!state.selected) return;
+  stageEdit({
+    schema_version: "1.0.0",
+    operation_id: newStableId("manual_automation_clear_all"),
+    kind: "visual_automation",
+    action: "clear_all",
+    track_key: state.selected.track.track_key,
+    track_id: state.selected.track.track_id,
+    clip_id: state.selected.clip.clip_id,
+  });
+  automationMessage("All visual curves staged for removal.");
+});
+
+ui.copyAutomation.addEventListener("click", () => {
+  try {
+    if (!state.selected) throw new Error("Select a source clip.");
+    const targets = Array.from(ui.automationCopyTargets.selectedOptions)
+      .map((option) => JSON.parse(option.value))
+      .sort((left, right) => `${left.track_id}/${left.clip_id}`.localeCompare(`${right.track_id}/${right.clip_id}`));
+    if (!targets.length) throw new Error("Select explicit target clips.");
+    const curve = selectedAutomationCurve();
+    stageEdit({
+      schema_version: "1.0.0",
+      operation_id: newStableId("manual_automation_copy"),
+      kind: "visual_automation",
+      action: "copy",
+      track_key: state.selected.track.track_key,
+      track_id: state.selected.track.track_id,
+      clip_id: state.selected.clip.clip_id,
+      targets,
+      property_paths: curve ? [curve.property_path] : [],
+    });
+    automationMessage(`Automation copy staged for ${targets.length} explicit target(s).`);
+  } catch (error) { automationMessage(error.message || String(error), true); }
 });
 
 ui.visualPreviewMode.addEventListener("change", () => {

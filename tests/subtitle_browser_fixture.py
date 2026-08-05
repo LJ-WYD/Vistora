@@ -21,7 +21,10 @@ from core.timeline import (  # noqa: E402
     SubtitleCue,
     SubtitleTrackConfig,
     TimelineConfig,
+    TimelineTransition,
     TrackConfig,
+    VisualAutomation,
+    VisualKeyframe,
 )
 from timeline_preview import PreviewApplication, create_preview_server  # noqa: E402
 from timeline_query import TimelineSnapshotService  # noqa: E402
@@ -59,23 +62,54 @@ def _timeline(root: Path, mode: str) -> tuple[TimelineConfig, Path]:
                 id="video_main",
                 kind="video",
                 order=0,
-                clips=[ClipConfig(
-                    id="clip_available",
-                    source=str(source),
-                    trim_out=4,
-                    keep_audio=False,
-                    transform=ClipTransform(
-                        position_x=0.42,
-                        position_y=0.54,
-                        scale_x=0.86,
-                        scale_y=0.9,
+                clips=[
+                    ClipConfig(
+                        id="clip_available",
+                        source=str(source),
+                        trim_out=2,
+                        keep_audio=False,
+                        transform=ClipTransform(
+                            position_x=0.42,
+                            position_y=0.54,
+                            scale_x=0.86,
+                            scale_y=0.9,
+                        ),
+                        color=ClipColorAdjustment(
+                            exposure=0.15,
+                            contrast=0.12,
+                            saturation=0.18,
+                        ),
+                        visual_automations=(
+                            VisualAutomation(
+                                automation_id="automation_fixture_position",
+                                clip_id="clip_available",
+                                property_path="transform.position_x",
+                                keyframes=(
+                                    VisualKeyframe(
+                                        keyframe_id="keyframe_fixture_start",
+                                        offset_seconds=0,
+                                        value=0.25,
+                                        interpolation="ease_in_out",
+                                    ),
+                                    VisualKeyframe(
+                                        keyframe_id="keyframe_fixture_end",
+                                        offset_seconds=1.8,
+                                        value=0.75,
+                                        interpolation="linear",
+                                    ),
+                                ),
+                            ),
+                        ),
                     ),
-                    color=ClipColorAdjustment(
-                        exposure=0.15,
-                        contrast=0.12,
-                        saturation=0.18,
+                    ClipConfig(
+                        id="clip_available_second",
+                        source=str(source),
+                        trim_in=2,
+                        trim_out=4,
+                        timeline_start=2,
+                        keep_audio=False,
                     ),
-                )],
+                ],
             ),
             "video_locked": TrackConfig(
                 id="video_locked",
@@ -141,6 +175,15 @@ def _timeline(root: Path, mode: str) -> tuple[TimelineConfig, Path]:
                     language="en",
                 ),),
             ),
+        },
+        transitions={
+            "transition_fixture_cut": TimelineTransition(
+                transition_id="transition_fixture_cut",
+                track_id="video_main",
+                from_clip_id="clip_available",
+                to_clip_id="clip_available_second",
+                kind="cut",
+            )
         },
     ), media
 

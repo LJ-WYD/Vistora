@@ -24,6 +24,7 @@ from contracts import (
     ManualSubtitleCue,
     ManualSubtitleTrack,
     ManualTransitionEdit,
+    ManualVisualAutomationEdit,
 )
 from core import timeline_manager
 from core.timeline import ClipColorAdjustment, ClipTransform, TimelineConfig
@@ -188,6 +189,42 @@ class VideoApplyManualEditsSkill(BaseSkill):
             source_audio_resolver=probe_source_has_audio,
         )
         for edit in proposal.edits:
+            if isinstance(edit, ManualVisualAutomationEdit):
+                if edit.action == "upsert_keyframe":
+                    engine.upsert_visual_keyframe(
+                        edit.track_id,
+                        edit.clip_id,
+                        automation_id=edit.automation_id,
+                        property_path=edit.property_path,
+                        keyframe=edit.keyframe,
+                    )
+                elif edit.action == "delete_keyframe":
+                    engine.delete_visual_keyframe(
+                        edit.track_id,
+                        edit.clip_id,
+                        automation_id=edit.automation_id,
+                        keyframe_id=edit.keyframe_id,
+                    )
+                elif edit.action == "replace_curve":
+                    engine.replace_visual_automation(
+                        edit.track_id, edit.clip_id, edit.automation
+                    )
+                elif edit.action in {"clear_curve", "clear_all"}:
+                    engine.clear_visual_automation(
+                        edit.track_id,
+                        edit.clip_id,
+                        automation_id=edit.automation_id,
+                        property_path=edit.property_path,
+                        clear_all=edit.action == "clear_all",
+                    )
+                else:
+                    engine.copy_visual_automation(
+                        edit.track_id,
+                        edit.clip_id,
+                        ((item.track_id, item.clip_id) for item in edit.targets),
+                        property_paths=edit.property_paths,
+                    )
+                continue
             if isinstance(edit, ManualTransitionEdit):
                 if edit.action == "add":
                     engine.add_transition(

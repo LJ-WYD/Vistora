@@ -51,6 +51,13 @@ from skills.video_visual_edits import (
     VideoSetClipColorSkill,
     VideoSetClipTransformSkill,
 )
+from skills.video_visual_automation import (
+    VideoClearVisualAutomationSkill,
+    VideoCopyVisualAutomationSkill,
+    VideoDeleteVisualKeyframeSkill,
+    VideoReplaceVisualAutomationSkill,
+    VideoUpsertVisualKeyframeSkill,
+)
 
 from .models import SkillDescriptor, digest_json
 from .registry import AtomicSkillRegistry
@@ -138,6 +145,11 @@ class CoreTimelineEditResult(_Result):
         "update_transition",
         "remove_transition",
         "copy_transition",
+        "upsert_visual_keyframe",
+        "delete_visual_keyframe",
+        "replace_visual_automation",
+        "clear_visual_automation",
+        "copy_visual_automation",
     ]
     track_id: str
     track_key: str
@@ -150,6 +162,9 @@ class CoreTimelineEditResult(_Result):
     created_transition_ids: list[str] = []
     modified_transition_ids: list[str] = []
     deleted_transition_ids: list[str] = []
+    created_automation_ids: list[str] = []
+    modified_automation_ids: list[str] = []
+    deleted_automation_ids: list[str] = []
     warnings: list[str]
     before_snapshot_id: str
     after_snapshot_id: str
@@ -240,7 +255,7 @@ def build_production_registry(
     )
     return AtomicSkillRegistry(
         registry_id="registry_atomic_skills",
-        registry_revision=6,
+        registry_revision=7,
         entries=(
             _entry(
                 VideoAddClipSkill(),
@@ -385,6 +400,25 @@ def build_production_registry(
                     VideoSetClipTransformSkill(),
                     VideoSetClipColorSkill(),
                     VideoCopyClipVisualSkill(),
+                )
+            ),
+            *tuple(
+                _entry(
+                    skill,
+                    CoreTimelineEditResult,
+                    side_effects=("files", "timeline"),
+                    transactionality="atomic_project_state",
+                    retry_safety="gateway_replay_only",
+                    preview_supported=True,
+                    rollback_support="checkpoint_restore",
+                    required_capabilities=(),
+                )
+                for skill in (
+                    VideoUpsertVisualKeyframeSkill(),
+                    VideoDeleteVisualKeyframeSkill(),
+                    VideoReplaceVisualAutomationSkill(),
+                    VideoClearVisualAutomationSkill(),
+                    VideoCopyVisualAutomationSkill(),
                 )
             ),
             *tuple(

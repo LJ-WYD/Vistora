@@ -7,8 +7,8 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-TIMELINE_SNAPSHOT_VERSION = "5.0.0"
-SnapshotVersion = Literal["2.0.0", "3.0.0", "4.0.0", "5.0.0"]
+TIMELINE_SNAPSHOT_VERSION = "6.0.0"
+SnapshotVersion = Literal["2.0.0", "3.0.0", "4.0.0", "5.0.0", "6.0.0"]
 SnapshotId = Annotated[
     str,
     Field(
@@ -139,6 +139,32 @@ class ClipColorSnapshot(ReadModel):
     blur: FiniteFloat = 0
 
 
+class VisualKeyframeSnapshot(ReadModel):
+    schema_name: Literal["vistora.visual-keyframe-snapshot"] = (
+        "vistora.visual-keyframe-snapshot"
+    )
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    keyframe_id: SnapshotId
+    offset_seconds: FiniteFloat = Field(ge=0)
+    value: FiniteFloat
+    interpolation: Literal[
+        "hold", "linear", "ease_in", "ease_out", "ease_in_out"
+    ]
+
+
+class VisualAutomationSnapshot(ReadModel):
+    schema_name: Literal["vistora.visual-automation-snapshot"] = (
+        "vistora.visual-automation-snapshot"
+    )
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    automation_id: SnapshotId
+    clip_id: SnapshotId
+    property_path: str = Field(min_length=3, max_length=80)
+    enabled: bool
+    keyframes: tuple[VisualKeyframeSnapshot, ...]
+    automation_digest: Sha256Digest
+
+
 class ClipSnapshot(ReadModel):
     """Detached view of one clip and its declared timing."""
 
@@ -166,6 +192,8 @@ class ClipSnapshot(ReadModel):
     loudness_analysis_id: SnapshotId | None = None
     transform: ClipTransformSnapshot
     color: ClipColorSnapshot
+    visual_automations: tuple[VisualAutomationSnapshot, ...] = ()
+    automation_digest: Sha256Digest
     visual_digest: Sha256Digest
     provenance: ClipProvenanceSummary | None = None
 

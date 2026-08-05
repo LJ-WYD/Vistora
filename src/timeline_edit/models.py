@@ -389,6 +389,11 @@ class TimelineEditOutcome(TimelineEditModel):
         "update_transition",
         "remove_transition",
         "copy_transition",
+        "upsert_visual_keyframe",
+        "delete_visual_keyframe",
+        "replace_visual_automation",
+        "clear_visual_automation",
+        "copy_visual_automation",
     ]
     track_id: StableTrackId
     track_key: str
@@ -401,4 +406,7 @@ class TimelineEditOutcome(TimelineEditModel):
     created_transition_ids: tuple[str, ...] = ()
     modified_transition_ids: tuple[str, ...] = ()
     deleted_transition_ids: tuple[str, ...] = ()
+    created_automation_ids: tuple[str, ...] = ()
+    modified_automation_ids: tuple[str, ...] = ()
+    deleted_automation_ids: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()

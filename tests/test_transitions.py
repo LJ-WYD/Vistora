@@ -245,13 +245,13 @@ def test_structural_edits_transfer_or_tombstone_transitions_truthfully() -> None
     assert not trimmed.transitions
 
 
-def test_snapshot_v5_is_stable_detached_and_path_safe() -> None:
+def test_snapshot_v6_is_stable_detached_and_path_safe() -> None:
     timeline = _timeline()
     timeline.transitions = {"transition_video": _video_transition()}
     first = TimelineSnapshotService.snapshot(timeline)
     second = TimelineSnapshotService.snapshot(timeline)
     assert first == second
-    assert first.schema_version == "5.0.0"
+    assert first.schema_version == "6.0.0"
     assert first.transition_count == 1
     transition = first.transitions[0]
     assert transition.transition_id == "transition_video"

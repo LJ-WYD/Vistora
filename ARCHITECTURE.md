@@ -456,7 +456,7 @@ Rollback is a second workflow, never an automatic failure handler. The service r
 `src/core/timeline.py` defines the compatible media timeline models plus a
 separate first-class subtitle domain:
 
-- `ClipConfig`: stable clip ID, source, trim, timeline placement, optional explicit link-group ID, legacy audio flags/volume, frozen versioned clip-audio settings, speed, reverse, legacy rotation, and neutral-by-default frozen visual transform/color properties.
+- `ClipConfig`: stable clip ID, source, trim, timeline placement, optional explicit link-group ID, legacy audio flags/volume, frozen versioned clip-audio settings, speed, reverse, legacy rotation, neutral-by-default frozen visual transform/color properties, and optional frozen visual-automation curves.
 - `TrackConfig`: stable track ID, video/audio kind, role, unique order, enabled/muted/locked state, frozen versioned mix settings, and an ordered list of clips.
 - `SubtitleTrackConfig` / `SubtitleCue` / `SubtitleStyle`: frozen versioned text lanes, stable timed cues, and safe logical-font styling, separate from media clips.
 - `TimelineTransition`: a frozen version `1.0.0` exact-cut entity with stable ID, exact track/from/to clip IDs, whitelisted video/audio kind and parameters, bounded duration/alignment, enabled state, and reciprocal explicit audio pairing.
@@ -470,12 +470,12 @@ separate first-class subtitle domain:
 
 `src/timeline_query/` is the stable library boundary for future timeline/player visualization. `TimelineSnapshotService.snapshot` accepts a `TimelineConfig`, legacy timeline dictionary, or `TimelineProjectDocument`; `snapshot_current` delegates only to `TimelineManager.get_current_timeline`. Neither method saves, resets, renders, executes a skill, probes media, or writes files.
 
-The returned `vistora.timeline-snapshot` schema is version `5.0.0`. Its frozen, recursively detached read models expose:
+The returned `vistora.timeline-snapshot` schema is version `6.0.0`. Its frozen, recursively detached read models expose:
 
 - snapshot, project, revision, source-schema, migration, and timeline-digest identity;
 - output width, height, and frame rate;
 - every configured track with its mapping key, stable ID, video/audio kind, role, unique order, enabled/muted/locked state, gain/mix mute/pan, clips, count, and derived duration;
-- every clip with its configured ID, optional explicit link-group ID, source reference, trim, placement, speed-adjusted duration, legacy audio flags/volume, dB gain, mute, pan, fades, stable linear envelope, applied loudness evidence ID, reversal/legacy rotation, frozen transform/color state, and a deterministic visual digest;
+- every clip with its configured ID, optional explicit link-group ID, source reference, trim, placement, speed-adjusted duration, legacy audio flags/volume, dB gain, mute, pan, fades, stable linear envelope, applied loudness evidence ID, reversal/legacy rotation, frozen transform/color state, frozen visual automation/keyframes, and deterministic static/automation visual digests;
 - every subtitle/text track and cue with stable IDs, language/speaker metadata, timing, enable/lock/overlap state, safe style data, counts, and derived duration;
 - every transition with stable exact-cut identities, media/kind, bounded duration/alignment, controlled parameters, enabled state and reciprocal audio policy, without any source path;
 - a detached `vistora.clip-provenance-summary` for each clip, reporting recorded origin, latest change origin, mapping health, confirmed plan/operation/step/request/result identity, execution status, and browser-safe evidence locators;
@@ -492,7 +492,7 @@ Legacy timelines receive the existing content-derived `project_legacy_*` identit
 
 ### Traceability boundary
 
-`src/traceability/` adds provenance without changing legacy timeline JSON or rendering semantics. `current_timeline.trace.json` is a strict version `1.0.0` append-only sidecar. Its confirmed records embed the exact `EditingExecutionPlan`, atomic request, atomic result, and observed before/after snapshot references. Entity relations use explicit `creates`, `modifies`, `deletes`, or `generates` types for clips, tracks, subtitles, first-class transitions, and generated outputs; generated outputs carry a separate `generated_media` origin. Manual records embed the exact user proposal and confirmation and carry the `user_manual` origin.
+`src/traceability/` adds provenance without changing legacy timeline JSON or rendering semantics. `current_timeline.trace.json` is a strict version `1.0.0` append-only sidecar. Its confirmed records embed the exact `EditingExecutionPlan`, atomic request, atomic result, and observed before/after snapshot references. Entity relations use explicit `creates`, `modifies`, `deletes`, or `generates` types for clips, tracks, subtitles, first-class transitions, visual automation curves, and generated outputs; generated outputs carry a separate `generated_media` origin. Manual records embed the exact user proposal and confirmation and carry the `user_manual` origin.
 
 The trace contracts reject duplicate global IDs, non-contiguous event sequence, plan ID/version digest conflicts, confirmation or execution reuse across plans, requests that drift from the confirmed step, evidence that differs from the confirmed operation, failed results with entity effects, and manual effects that differ from the confirmed proposal. Evidence contains an opaque `source_*` material ID, a typed whole-material or bounded time-range locator, and an optional paired analysis-fact ID/digest. Absolute paths are not part of the browser provenance model.
 
@@ -646,6 +646,11 @@ The implemented mutation ownership is:
 | `TimelineUpdateTransitionSkill` | Atomically replaces one stable transition and reciprocal pair at the same exact validated boundary. | Read-only FFprobe duration facts. |
 | `TimelineRemoveTransitionSkill` | Atomically removes one exact transition and any reciprocal audio/video pair. | None. |
 | `TimelineCopyTransitionSkill` | Atomically copies controlled transition properties to an explicit stable list of exact adjacent cuts. | Read-only FFprobe duration facts. |
+| `VideoUpsertVisualKeyframeSkill` | Atomically creates or updates one exact keyframe on one validated visual curve. | None. |
+| `VideoDeleteVisualKeyframeSkill` | Atomically deletes one exact keyframe and removes an empty curve. | None. |
+| `VideoReplaceVisualAutomationSkill` | Atomically replaces one complete bounded curve after clip/time/property validation. | None. |
+| `VideoClearVisualAutomationSkill` | Atomically clears one curve/property or all visual curves on one exact clip. | None. |
+| `VideoCopyVisualAutomationSkill` | Atomically copies selected curves to an explicit stable target list without linked-group expansion. | None. |
 
 These are the only registered atomic mutation entry points. Tests may reset state directly as test-fixture setup. The CLI `render` command remains a documented nonconforming compatibility exception.
 
@@ -680,6 +685,13 @@ The static boundary check complements the dedicated production Director, confirm
 `tests/test_media_analysis.py` covers schema versions and JSON round trips, immutable requests/results, deterministic frame positions, normalized timeline-aligned peaks, missing/unsupported/decode-failed states, bounded in-memory cache reuse, opaque artifact validation, source isolation, and the absence of timeline/mutation imports or calls.
 
 `tests/test_plan_review.py` covers v1 round trips/digests, deterministic changes, exact snapshot and registry freshness, invalid/unregistered/unsupported steps, explicit unsupported reorder behavior, additions/removals/speed/export consequences, evidence and legacy provenance linkage, path redaction, revision-aware queries, GET-only browser delivery, no mutation, and import/call boundaries.
+
+`tests/test_visual_automation.py` covers frozen schemas and digests, every
+fixed interpolation, snapshot isolation, locked/invalid targets, deterministic
+CRUD/copy, split/trim/speed/move/ripple/remove curve semantics, detached review,
+confirmation/gateway replay, transactional and trace rollback, manual draft
+confirmation, real FFmpeg property animation, fixed-time frame differences,
+seek consistency, and transition-interval composition.
 
 `tests/test_material_production.py` covers exact production confirmation and
 adapter-registry binding, idempotent submission, staging traversal rejection,
@@ -822,7 +834,7 @@ Mutation-capable utilities and core objects are implementation details behind to
 | G-03 | Operator combines incompatible roles | `OperatorAgent` owns dialogue, planning, and execution. | Separate/retire the hybrid behind Director and Editing contracts. |
 | G-06 | Direct CLI render bypass | `render` instantiates `TimelineRenderer` directly. | Route mutations through an explicit atomic tool or clearly isolated maintenance interface. |
 | G-07 | Canonical timeline persistence remains legacy | Workflow checkpoints and confirmed restore add guarded history/recovery, but the canonical timeline is still one legacy JSON file with content-derived snapshot identity. | Introduce a first-class versioned project store only in a separately approved migration. |
-| G-11 | Professional controls remain intentionally bounded | The loopback UI provides arbitrary video/audio lanes, first-class subtitle/text lanes, track/link state, thumbnails/waveforms/subtitle overlay, confirmed exact-ID edits, bounded audio mixing, SRT/WebVTT import/export/burn-in, bounded clip transform/basic SDR color, and first-version exact-cut primary-video/audio transitions. Insert/overwrite remains available through structured Director plans. | Add ASR/transcription, translation, general keyframes, masks/tracking, LUT/secondary/HDR color, denoise/de-reverb/separation, overlay-track/3D/plugin transitions, plugin hosting, animated titles, and later professional controls only through separately approved contracts and atomic tools. |
+| G-11 | Professional controls remain intentionally bounded | The loopback UI provides arbitrary video/audio lanes, first-class subtitle/text lanes, track/link state, thumbnails/waveforms/subtitle overlay, confirmed exact-ID edits, bounded audio mixing, SRT/WebVTT import/export/burn-in, bounded clip transform/basic SDR color, first-version exact-cut primary-video/audio transitions, and fixed-interpolation visual keyframes. Insert/overwrite remains available through structured Director plans. | Add ASR/transcription, translation, masks/tracking, LUT/secondary/HDR color, denoise/de-reverb/separation, overlay-track/3D/plugin transitions, custom curves/expressions, plugin hosting, animated titles, and later professional controls only through separately approved contracts and atomic tools. |
 
 This gap register is descriptive. Closing any gap requires a separate approved implementation task.
 
@@ -868,16 +880,18 @@ The renderer applies dB gain, mute, pan, fades and linear automation before
 mixing, then uses a fixed peak limiter and 48 kHz stereo output. The extended
 reference covers analyzed dialogue gain, track mix, mute, pan, fades,
 automation, linked editing, confirmed Editing-Agent dispatch, ffprobe,
-provenance, and rollback. This is not a general keyframe system or mastering
-suite; ASR/translation, noise reduction, de-reverb, source separation, plugin
-hosting, AI audio providers, complex mastering, color, visual keyframes,
-masks, and effects remain out of scope. Controlled transitions were added in
-STEP 22; they do not expand the audio envelope into a general keyframe system.
+provenance, and rollback. Audio envelopes remain a separate bounded model
+rather than being silently migrated into the visual keyframe system; this is
+not a mastering suite. ASR/translation, noise reduction, de-reverb, source
+separation, plugin hosting, AI audio providers, complex mastering, masks, and
+effects remain out of scope. Controlled transitions were added in STEP 22;
+visual automation was added in STEP 23, and neither expands the audio envelope
+contract.
 
 STEP 20 adds four production registry entries (twenty-three total) for
 subtitle track management, exact cue editing, deterministic SRT/WebVTT
 import, and atomic sidecar export. Optional frozen subtitle tracks/cues/styles
-extend compatible timeline-v2 JSON; snapshot v5 retains and exposes detached subtitle
+extend compatible timeline-v2 JSON; snapshot v6 retains and exposes detached subtitle
 state. The detached review engine and manual proposal service simulate cue
 and track changes before confirmation, and confirmed workflow/EditingAgent
 dispatch records subtitle entity relations and tombstones through the same
@@ -908,12 +922,12 @@ new rotation, fit/scale, bounded SDR tone/color balance/detail, opacity, then
 deterministic track-order overlay. No caller filter/script/path is accepted.
 The browser's CSS/video treatment is explicitly approximate; authoritative
 export uses FFmpeg. Media-analysis thumbnails select original/applied mode and
-bind the visual digest plus canvas to the cache key. Snapshot v5, Director
+bind the visual digest plus canvas to the cache key. Snapshot v6, Director
 read context, detached plan/manual review, workflow/EditingAgent dispatch,
 trace relations, checkpoint rollback, and the inspector expose the same
 detached visual state.
 
-STEP 22 raises the production registry to revision 6 with thirty entries. A
+STEP 22 raised the production registry to revision 6 with thirty entries. A
 frozen version `1.0.0` `TimelineTransition` binds stable transition/track/from/
 to IDs to one exact adjacent cut. Video kinds are cut, dissolve, controlled
 black/white fade-through, four-direction wipe and four-direction slide/push;
@@ -944,13 +958,53 @@ uses deterministic layer/mix/limiter/output policies. Timelines with no
 enabled non-cut transition retain the previous paths and remain equivalent.
 Version one intentionally rejects video transitions on non-primary overlay
 tracks; it does not pretend that full-canvas overlay transition composition
-is supported. Snapshot v5, Director context, review, trace, rollback and the
+is supported. Snapshot v6, Director context, review, trace, rollback and the
 browser inspector/draft UI expose the same detached transition identities.
 The browser can run only a bounded, explicitly approximate local animation;
 it cannot dispatch or persist a transition without the normal confirmation
 gate. The deterministic multi-track reference covers confirmed reciprocal
 video/audio creation, rendering, trace relations, and checkpoint rollback.
 
-This step does not add general visual/audio keyframes or animation curves,
-masks/tracking, LUT import, secondary grading, HDR, complex blend modes, 3D or
-plugin/VST/OFX transitions, animated titles, or AI effects.
+This step does not add transition speed curves, masks/tracking, LUT import,
+secondary grading, HDR, complex blend modes, 3D or plugin/VST/OFX
+transitions, animated titles, or AI effects.
+
+STEP 23 raises the production registry to revision 7 with thirty-five entries
+and introduces frozen version `1.0.0` `VisualAutomation` and
+`VisualKeyframe` contracts. Curves bind stable IDs to one exact video/image
+clip and one whitelisted transform or basic-SDR-color property. Time is
+clip-local post-speed timeline seconds; values are finite and property-bounded;
+curve/keyframe IDs and times are unique and deterministically ordered.
+Whitelisted targets are position, axis/uniform scale, rotation, opacity, four
+crop edges, exposure, contrast, saturation, temperature, tint, and gamma.
+
+The pure evaluator supports only `hold`, `linear`, quadratic `ease_in`,
+quadratic `ease_out`, and smoothstep `ease_in_out`. The left keyframe owns its
+outgoing interpolation. Static visual state is the baseline outside the curve
+range (and away from a lone exact-time keyframe), avoiding a second hidden
+state. Evaluation depends only on absolute clip-local time, so frame order and
+random seek do not change a result.
+
+Five production tools upsert/delete one keyframe, replace/clear one curve, or
+copy selected curves to explicit targets. Locked and non-video tracks fail
+closed; visual automation never propagates through linked audio. The shared
+transaction and gateway preserve byte-for-byte timeline recovery and trace
+consistency. Split samples the boundary and rebases descendants; trim samples
+the retained boundaries; speed rescales offsets to preserve source-relative
+phase; move/ripple retain local offsets; remove creates curve tombstones.
+Detached review reports those direct and consequential effects before the
+independent confirmation gate.
+
+The final FFmpeg path evaluates schema-generated expressions before transition
+composition, stable track layering, subtitle burn-in, and final format output.
+No raw expression/filter/script enters from a plan or browser. Applied media
+analysis binds exact timeline sample time plus automation digest to its cache
+key. Snapshot v6, Director read context, plan/manual review, confirmed Editing
+Agent execution, provenance, rollback, and the compact browser inspector share
+the same detached automation data. The deterministic reference carries
+hold/linear/ease curves through review, explicit confirmation, gateway
+execution, render, trace, and checkpoint rollback.
+
+STEP 23 does not add masks/path animation, tracking, speed-remapping curves,
+per-word subtitle animation, arbitrary Bezier/expression editing, 3D,
+particles, plugins, or AI motion effects.

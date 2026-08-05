@@ -22,6 +22,9 @@ from core.timeline import (
     SubtitleStyle,
     TimelineConfig,
     TimelineTransition,
+    VisualAutomation,
+    VisualKeyframe,
+    VisualPropertyPath,
 )
 
 
@@ -726,6 +729,59 @@ class ManualTransitionEdit(ContractModel):
         return self
 
 
+class ManualVisualAutomationEdit(ContractModel):
+    """User-authored keyframe proposal; never a Director decision."""
+
+    operation_id: StableId
+    kind: Literal["visual_automation"] = "visual_automation"
+    action: Literal[
+        "upsert_keyframe",
+        "delete_keyframe",
+        "replace_curve",
+        "clear_curve",
+        "clear_all",
+        "copy",
+    ]
+    track_key: str = Field(min_length=1)
+    track_id: StableId
+    clip_id: StableId
+    automation_id: StableId | None = None
+    property_path: VisualPropertyPath | None = None
+    keyframe: VisualKeyframe | None = None
+    keyframe_id: StableId | None = None
+    automation: VisualAutomation | None = None
+    targets: tuple[ManualClipReference, ...] = ()
+    property_paths: tuple[VisualPropertyPath, ...] = ()
+
+    @model_validator(mode="after")
+    def exact_automation_action(self) -> "ManualVisualAutomationEdit":
+        if self.action == "upsert_keyframe" and any(
+            value is None
+            for value in (self.automation_id, self.property_path, self.keyframe)
+        ):
+            raise ValueError("Keyframe upsert requires curve, property, and keyframe")
+        if self.action == "delete_keyframe" and (
+            self.automation_id is None or self.keyframe_id is None
+        ):
+            raise ValueError("Keyframe delete requires curve and keyframe IDs")
+        if self.action == "replace_curve" and self.automation is None:
+            raise ValueError("Curve replacement requires exact automation")
+        if self.action == "clear_curve" and (
+            (self.automation_id is None) == (self.property_path is None)
+        ):
+            raise ValueError("Curve clear requires exactly one selector")
+        if self.action == "copy" and not self.targets:
+            raise ValueError("Automation copy requires explicit target clips")
+        if self.action != "copy" and (self.targets or self.property_paths):
+            raise ValueError("Only automation copy accepts target selections")
+        identities = tuple((item.track_id, item.clip_id) for item in self.targets)
+        if len(identities) != len(set(identities)) or identities != tuple(sorted(identities)):
+            raise ValueError("Automation copy targets must be stable and unique")
+        if len(self.property_paths) != len(set(self.property_paths)) or self.property_paths != tuple(sorted(self.property_paths)):
+            raise ValueError("Automation property selectors must be stable and unique")
+        return self
+
+
 ManualEditOperation = Annotated[
     ManualClipUpdate
     | ManualClipRemove
@@ -739,7 +795,8 @@ ManualEditOperation = Annotated[
     | ManualVolumeEnvelope
     | ManualSubtitleTrack
     | ManualSubtitleCue
-    | ManualTransitionEdit,
+    | ManualTransitionEdit
+    | ManualVisualAutomationEdit,
     Field(discriminator="kind"),
 ]
 
@@ -873,7 +930,9 @@ class ManualEditChange(ContractModel):
     """Reviewable before/after diff for one manual edit operation."""
 
     operation_id: StableId
-    target_kind: Literal["clip", "track", "subtitle_track", "subtitle_cue", "transition"] = "clip"
+    target_kind: Literal[
+        "clip", "track", "subtitle_track", "subtitle_cue", "transition", "automation"
+    ] = "clip"
     track_key: str = Field(min_length=1)
     track_id: StableId | None = None
     clip_id: str = Field(min_length=1)

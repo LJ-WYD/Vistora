@@ -25,6 +25,8 @@ from timeline_edit import (
     TimelineConfig,
     TimelineTransition,
     TransitionParameters,
+    VisualAutomation,
+    VisualKeyframe,
     TimelineEditEngine,
     TimelineEditError,
     TrackConfig,
@@ -127,6 +129,10 @@ def _clip_state(
         loudness_analysis_id=clip.loudness_analysis_id,
         transform=clip.transform.model_dump(mode="python"),
         color=clip.color.model_dump(mode="python"),
+        visual_automations=tuple(
+            item.model_dump(mode="json") for item in clip.visual_automations
+        ),
+        automation_digest=clip.automation_digest,
     )
 
 
@@ -144,6 +150,28 @@ def _replace_clip(
         values["timeline_start_seconds"] + duration
     )
     return PreviewClipState.model_validate(values)
+
+
+def _core_visual_automation(value: Any) -> VisualAutomation:
+    """Convert browser-safe snapshot/review data back to the core contract."""
+    if isinstance(value, VisualAutomation):
+        return value
+    data = value.model_dump(mode="python") if isinstance(value, BaseModel) else dict(value)
+    return VisualAutomation(
+        automation_id=data["automation_id"],
+        clip_id=data["clip_id"],
+        property_path=data["property_path"],
+        enabled=data.get("enabled", True),
+        keyframes=tuple(
+            VisualKeyframe(
+                keyframe_id=point["keyframe_id"],
+                offset_seconds=point["offset_seconds"],
+                value=point["value"],
+                interpolation=point["interpolation"],
+            )
+            for point in data["keyframes"]
+        ),
+    )
 
 
 def _snapshot_matches(
@@ -213,6 +241,24 @@ def _timeline_from_snapshot(snapshot: TimelineSnapshot) -> TimelineConfig:
                     ),
                     color=ClipColorAdjustment.model_validate(
                         clip.color.model_dump(mode="python")
+                    ),
+                    visual_automations=tuple(
+                        VisualAutomation(
+                            automation_id=item.automation_id,
+                            clip_id=item.clip_id,
+                            property_path=item.property_path,
+                            enabled=item.enabled,
+                            keyframes=tuple(
+                                VisualKeyframe(
+                                    keyframe_id=point.keyframe_id,
+                                    offset_seconds=point.offset_seconds,
+                                    value=point.value,
+                                    interpolation=point.interpolation,
+                                )
+                                for point in item.keyframes
+                            ),
+                        )
+                        for item in clip.visual_automations
                     ),
                 )
                 for clip in track.clips
@@ -374,6 +420,12 @@ def _preview_state(
         ),
         color=clip.color.model_dump(
             mode="python", exclude={"schema_name", "schema_version"}
+        ),
+        visual_automations=tuple(
+            item.model_dump(mode="json") for item in clip.visual_automations
+        ),
+        automation_digest=digest_json(
+            [item.model_dump(mode="json") for item in clip.visual_automations]
         ),
     )
 
@@ -640,6 +692,11 @@ class PlanDiffEngine:
                 "TimelineUpdateTransitionSkill",
                 "TimelineRemoveTransitionSkill",
                 "TimelineCopyTransitionSkill",
+                "VideoUpsertVisualKeyframeSkill",
+                "VideoDeleteVisualKeyframeSkill",
+                "VideoReplaceVisualAutomationSkill",
+                "VideoClearVisualAutomationSkill",
+                "VideoCopyVisualAutomationSkill",
             }:
                 # Synchronize only the legacy primary-video view; every other
                 # stable multi-track declaration remains detached and intact.
@@ -678,6 +735,10 @@ class PlanDiffEngine:
                             ),
                             color=ClipColorAdjustment.model_validate(
                                 clip.color.model_dump(mode="python")
+                            ),
+                            visual_automations=tuple(
+                                _core_visual_automation(item)
+                                for item in clip.visual_automations
                             ),
                         )
                         for clip in clips
@@ -1022,6 +1083,7 @@ class PlanDiffEngine:
                 "clip_properties",
                 "clip_transform",
                 "clip_color",
+                "visual_automation",
                 "clip_audio",
                 "audio_envelope",
                 "track_mix",
@@ -1063,6 +1125,10 @@ class PlanDiffEngine:
                     ),
                     color=ClipColorAdjustment.model_validate(
                         clip.color.model_dump(mode="python")
+                    ),
+                    visual_automations=tuple(
+                        _core_visual_automation(item)
+                        for item in clip.visual_automations
                     ),
                 )
                 for clip in clips
@@ -1442,6 +1508,42 @@ class PlanDiffEngine:
                     params.source_transition_id,
                     tuple(copied_pairs),
                 )
+            elif name == "VideoUpsertVisualKeyframeSkill":
+                updated, outcome = engine.upsert_visual_keyframe(
+                    params.track_reference,
+                    params.clip_id,
+                    automation_id=params.automation_id,
+                    property_path=params.property_path,
+                    keyframe=params.keyframe,
+                )
+            elif name == "VideoDeleteVisualKeyframeSkill":
+                updated, outcome = engine.delete_visual_keyframe(
+                    params.track_reference,
+                    params.clip_id,
+                    automation_id=params.automation_id,
+                    keyframe_id=params.keyframe_id,
+                )
+            elif name == "VideoReplaceVisualAutomationSkill":
+                updated, outcome = engine.replace_visual_automation(
+                    params.track_reference,
+                    params.clip_id,
+                    params.automation,
+                )
+            elif name == "VideoClearVisualAutomationSkill":
+                updated, outcome = engine.clear_visual_automation(
+                    params.track_reference,
+                    params.clip_id,
+                    automation_id=params.automation_id,
+                    property_path=params.property_path,
+                    clear_all=params.scope == "all",
+                )
+            elif name == "VideoCopyVisualAutomationSkill":
+                updated, outcome = engine.copy_visual_automation(
+                    params.source_track_id,
+                    params.source_clip_id,
+                    ((item.track_id, item.clip_id) for item in params.targets),
+                    property_paths=params.property_paths,
+                )
             else:
                 material_id = _source_id(params.source_path)
                 fact = facts.get(material_id)
@@ -1549,6 +1651,11 @@ class PlanDiffEngine:
             elif old.speed_factor != new.speed_factor:
                 category = "clip_speed"
                 reason = "The edit changes speed and effective duration."
+            elif old.visual_automations != new.visual_automations:
+                category = "visual_automation"
+                reason = (
+                    "The edit changes seek-safe clip-local visual keyframes."
+                )
             elif old.transform != new.transform:
                 category = "clip_transform"
                 reason = (

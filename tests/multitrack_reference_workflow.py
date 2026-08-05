@@ -30,6 +30,8 @@ from core.timeline import (  # noqa: E402
     TimelineTransition,
     TrackConfig,
     TransitionParameters,
+    VisualAutomation,
+    VisualKeyframe,
 )
 from plan_review import (  # noqa: E402
     PlanDiffRequest,
@@ -472,6 +474,105 @@ def run_multitrack_reference_workflow() -> dict:
                     expected_effect="Adjust SDR tone and color without raw filter input.",
                 ),
                 DirectorOperation(
+                    operation_id="operation_overlay_position_curve",
+                    tool_name="VideoReplaceVisualAutomationSkill",
+                    arguments={
+                        "track_id": "track_video_overlay",
+                        "clip_id": "clip_video_overlay",
+                        "automation": VisualAutomation(
+                            automation_id="automation_reference_position",
+                            clip_id="clip_video_overlay",
+                            property_path="transform.position_x",
+                            keyframes=(
+                                VisualKeyframe(
+                                    keyframe_id="keyframe_reference_hold",
+                                    offset_seconds=0,
+                                    value=0.25,
+                                    interpolation="hold",
+                                ),
+                                VisualKeyframe(
+                                    keyframe_id="keyframe_reference_linear",
+                                    offset_seconds=1,
+                                    value=0.5,
+                                    interpolation="linear",
+                                ),
+                                VisualKeyframe(
+                                    keyframe_id="keyframe_reference_position_end",
+                                    offset_seconds=3,
+                                    value=0.75,
+                                    interpolation="linear",
+                                ),
+                            ),
+                        ).model_dump(mode="json"),
+                    },
+                    rationale="Animate the overlay with explicit clip-local timing.",
+                    expected_effect="Apply seek-safe hold and linear position segments.",
+                ),
+                DirectorOperation(
+                    operation_id="operation_overlay_rotation_curve",
+                    tool_name="VideoReplaceVisualAutomationSkill",
+                    arguments={
+                        "track_id": "track_video_overlay",
+                        "clip_id": "clip_video_overlay",
+                        "automation": VisualAutomation(
+                            automation_id="automation_reference_rotation",
+                            clip_id="clip_video_overlay",
+                            property_path="transform.rotation_degrees",
+                            keyframes=(
+                                VisualKeyframe(
+                                    keyframe_id="keyframe_reference_ease_in",
+                                    offset_seconds=0,
+                                    value=-8,
+                                    interpolation="ease_in",
+                                ),
+                                VisualKeyframe(
+                                    keyframe_id="keyframe_reference_ease_out",
+                                    offset_seconds=1.5,
+                                    value=10,
+                                    interpolation="ease_out",
+                                ),
+                                VisualKeyframe(
+                                    keyframe_id="keyframe_reference_rotation_end",
+                                    offset_seconds=3,
+                                    value=0,
+                                    interpolation="linear",
+                                ),
+                            ),
+                        ).model_dump(mode="json"),
+                    },
+                    rationale="Exercise the fixed ease-in and ease-out curves.",
+                    expected_effect="Rotate only the explicit overlay clip deterministically.",
+                ),
+                DirectorOperation(
+                    operation_id="operation_overlay_opacity_curve",
+                    tool_name="VideoReplaceVisualAutomationSkill",
+                    arguments={
+                        "track_id": "track_video_overlay",
+                        "clip_id": "clip_video_overlay",
+                        "automation": VisualAutomation(
+                            automation_id="automation_reference_opacity",
+                            clip_id="clip_video_overlay",
+                            property_path="transform.opacity",
+                            keyframes=(
+                                VisualKeyframe(
+                                    keyframe_id="keyframe_reference_ease_in_out",
+                                    offset_seconds=0,
+                                    value=0.35,
+                                    interpolation="ease_in_out",
+                                ),
+                                VisualKeyframe(
+                                    keyframe_id="keyframe_reference_opacity_end",
+                                    offset_seconds=3,
+                                    value=0.9,
+                                    interpolation="linear",
+                                ),
+                            ),
+                        ).model_dump(mode="json"),
+                    },
+                    rationale="Exercise the fixed ease-in-out opacity curve.",
+                    expected_effect="Animate overlay opacity without affecting linked audio.",
+                ),
+                DirectorOperation(
                     operation_id="operation_copy_overlay_visual",
                     tool_name="VideoCopyClipVisualSkill",
                     arguments={
@@ -711,6 +812,12 @@ def run_multitrack_reference_workflow() -> dict:
                 for relation in confirmed_trace.relations
                 if relation.entity.entity_kind == "transition"
             )
+            automation_relations = tuple(
+                relation
+                for confirmed_trace in trace.confirmed_traces
+                for relation in confirmed_trace.relations
+                if relation.entity.entity_kind == "automation"
+            )
             if not any(
                 relation.relation_type == "creates"
                 for relation in subtitle_relations
@@ -743,6 +850,7 @@ def run_multitrack_reference_workflow() -> dict:
                 "subtitle_trace_count": len(subtitle_relations),
                 "visual_trace_count": len(visual_relations),
                 "transition_trace_count": len(transition_relations),
+                "automation_trace_count": len(automation_relations),
                 "subtitle_tombstone_count": sum(
                     relation.relation_type == "deletes"
                     for relation in subtitle_relations

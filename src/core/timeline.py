@@ -266,6 +266,109 @@ class ClipColorAdjustment(BaseModel):
         return self
 
 
+VisualPropertyPath = Literal[
+    "transform.position_x",
+    "transform.position_y",
+    "transform.scale_x",
+    "transform.scale_y",
+    "transform.scale_uniform",
+    "transform.rotation_degrees",
+    "transform.opacity",
+    "transform.crop_left",
+    "transform.crop_right",
+    "transform.crop_top",
+    "transform.crop_bottom",
+    "color.exposure",
+    "color.contrast",
+    "color.saturation",
+    "color.temperature",
+    "color.tint",
+    "color.gamma",
+]
+
+
+VISUAL_PROPERTY_RANGES: dict[str, tuple[float, float]] = {
+    "transform.position_x": (-2.0, 3.0),
+    "transform.position_y": (-2.0, 3.0),
+    "transform.scale_x": (0.05, 8.0),
+    "transform.scale_y": (0.05, 8.0),
+    "transform.scale_uniform": (0.05, 8.0),
+    "transform.rotation_degrees": (-360.0, 360.0),
+    "transform.opacity": (0.0, 1.0),
+    "transform.crop_left": (0.0, 0.95),
+    "transform.crop_right": (0.0, 0.95),
+    "transform.crop_top": (0.0, 0.95),
+    "transform.crop_bottom": (0.0, 0.95),
+    "color.exposure": (-2.0, 2.0),
+    "color.contrast": (-0.75, 1.0),
+    "color.saturation": (-1.0, 2.0),
+    "color.temperature": (-1.0, 1.0),
+    "color.tint": (-1.0, 1.0),
+    "color.gamma": (0.5, 2.0),
+}
+
+
+class VisualKeyframe(BaseModel):
+    """One frozen seek-safe value at clip-local output time."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    schema_name: Literal["vistora.visual-keyframe"] = "vistora.visual-keyframe"
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    keyframe_id: str = Field(
+        min_length=3,
+        max_length=160,
+        pattern=r"^[A-Za-z][A-Za-z0-9._:-]*$",
+    )
+    offset_seconds: float = Field(ge=0, allow_inf_nan=False)
+    value: float = Field(allow_inf_nan=False)
+    interpolation: Literal[
+        "hold", "linear", "ease_in", "ease_out", "ease_in_out"
+    ] = "linear"
+
+
+class VisualAutomation(BaseModel):
+    """Versioned animation curve for one whitelisted clip property."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    schema_name: Literal["vistora.visual-automation"] = (
+        "vistora.visual-automation"
+    )
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    automation_id: str = Field(
+        min_length=3,
+        max_length=160,
+        pattern=r"^[A-Za-z][A-Za-z0-9._:-]*$",
+    )
+    clip_id: str = Field(
+        min_length=3,
+        max_length=160,
+        pattern=r"^[A-Za-z][A-Za-z0-9._:-]*$",
+    )
+    property_path: VisualPropertyPath
+    keyframes: tuple[VisualKeyframe, ...] = Field(min_length=1, max_length=128)
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def stable_bounded_curve(self) -> "VisualAutomation":
+        identities = [item.keyframe_id for item in self.keyframes]
+        offsets = [item.offset_seconds for item in self.keyframes]
+        if len(identities) != len(set(identities)):
+            raise ValueError("Visual keyframe IDs must be unique within a curve")
+        if len(offsets) != len(set(offsets)):
+            raise ValueError("Visual keyframe times must be unique within a curve")
+        expected = tuple(
+            sorted(self.keyframes, key=lambda item: (item.offset_seconds, item.keyframe_id))
+        )
+        if self.keyframes != expected:
+            raise ValueError("Visual keyframes must use deterministic time ordering")
+        lower, upper = VISUAL_PROPERTY_RANGES[self.property_path]
+        if any(item.value < lower or item.value > upper for item in self.keyframes):
+            raise ValueError(
+                f"Visual keyframe value is outside {self.property_path} range"
+            )
+        return self
+
+
 TransitionKind = Literal[
     "cut",
     "cross_dissolve",
@@ -403,6 +506,7 @@ class ClipConfig(BaseModel):
     audio: ClipAudioSettings = Field(default_factory=ClipAudioSettings)
     transform: ClipTransform = Field(default_factory=ClipTransform)
     color: ClipColorAdjustment = Field(default_factory=ClipColorAdjustment)
+    visual_automations: tuple[VisualAutomation, ...] = ()
 
     @model_validator(mode="after")
     def audio_timing_is_bounded(self) -> "ClipConfig":
@@ -422,6 +526,34 @@ class ClipConfig(BaseModel):
             for point in self.audio.envelope
         ):
             raise ValueError("audio envelope point exceeds effective clip duration")
+        automation_ids = [item.automation_id for item in self.visual_automations]
+        properties = [item.property_path for item in self.visual_automations]
+        if len(automation_ids) != len(set(automation_ids)):
+            raise ValueError("Visual automation IDs must be unique per clip")
+        if len(properties) != len(set(properties)):
+            raise ValueError("A clip may have only one curve per visual property")
+        if "transform.scale_uniform" in properties and any(
+            item in properties
+            for item in ("transform.scale_x", "transform.scale_y")
+        ):
+            raise ValueError(
+                "Uniform scale automation cannot coexist with axis scale curves"
+            )
+        if tuple(self.visual_automations) != tuple(
+            sorted(
+                self.visual_automations,
+                key=lambda item: (item.property_path, item.automation_id),
+            )
+        ):
+            raise ValueError("Visual automations must use stable property ordering")
+        for automation in self.visual_automations:
+            if automation.clip_id != self.id:
+                raise ValueError("Visual automation must target its containing clip")
+            if any(
+                item.offset_seconds > duration + 1e-6
+                for item in automation.keyframes
+            ):
+                raise ValueError("Visual keyframe exceeds effective clip duration")
         return self
 
 
@@ -688,6 +820,7 @@ class TimelineRenderer:
             and all(
                 clip.transform == ClipTransform()
                 and clip.color == ClipColorAdjustment()
+                and not clip.visual_automations
                 for clip in video_track.clips
             )
         ):
@@ -728,6 +861,7 @@ class TimelineRenderer:
             or any(
                 clip.transform != ClipTransform()
                 or clip.color != ClipColorAdjustment()
+                or bool(clip.visual_automations)
                 for track in video_tracks
                 for clip in track.clips
             )

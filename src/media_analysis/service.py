@@ -327,15 +327,18 @@ class MediaAnalysisService:
                 dummy = ClipConfig(
                     id=request.clip_id,
                     source="opaque",
-                    trim_out=1,
+                    trim_out=timeline_duration,
                     rotate=request.rotate_degrees,
                     transform=request.transform,
                     color=request.color,
+                    visual_automations=request.visual_automations,
                 )
+                local_time = timeline_time - request.timeline_start_seconds
                 visual, overlay = clip_visual_filter_chain(
                     dummy,
                     request.canvas_width,
                     request.canvas_height,
+                    local_time_expression=f"{local_time:.12g}",
                 )
                 graph = (
                     f"color=c=black:s={request.canvas_width}x"

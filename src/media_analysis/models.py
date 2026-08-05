@@ -7,7 +7,7 @@ import json
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from core.timeline import ClipColorAdjustment, ClipTransform
+from core.timeline import ClipColorAdjustment, ClipTransform, VisualAutomation
 
 
 MEDIA_ANALYSIS_VERSION = "1.0.0"
@@ -68,6 +68,7 @@ class MediaAnalysisRequest(AnalysisModel):
     canvas_height: int | None = Field(default=None, gt=0)
     transform: ClipTransform = Field(default_factory=ClipTransform)
     color: ClipColorAdjustment = Field(default_factory=ClipColorAdjustment)
+    visual_automations: tuple[VisualAutomation, ...] = ()
     settings: MediaAnalysisSettings = Field(
         default_factory=MediaAnalysisSettings
     )
@@ -96,6 +97,13 @@ class MediaAnalysisRequest(AnalysisModel):
             )
         ):
             raise ValueError("Original preview cannot claim applied visual data")
+        if any(
+            automation.clip_id != self.clip_id
+            for automation in self.visual_automations
+        ):
+            raise ValueError("Preview automation must target request clip_id")
+        if self.preview_mode == "original" and self.visual_automations:
+            raise ValueError("Original preview cannot include automation")
         return self
 
     def digest(self) -> str:

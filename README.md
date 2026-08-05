@@ -265,7 +265,7 @@ split/trim/move/insert/overwrite/lift/ripple-delete/playback-property
 operations across arbitrary video/audio tracks, explicit current-only versus
 linked-group effects, clip/track audio mixing, linear gain envelopes,
 read-only loudness analysis with explicit evidenced gain application, track
-management, link/unlink, timeline clear/default
+management, link/unlink, bounded visual keyframe curves, timeline clear/default
 project reset, and export timeline effects. Ripple, linked members, and
 overwrite-retained sides are shown as consequential changes. Locked-track
 proposals fail closed. Proxy-generating reverse operations, timelapse output,
@@ -297,7 +297,7 @@ The ledger keeps one stable logical identity for the workspace while every revie
 ## Atomic skill registry and execution gateway
 
 `src/atomic_runtime/` is the single production composition root for the
-thirty existing atomic skills. A fresh immutable `AtomicSkillRegistry` carries an
+thirty-five existing atomic skills. A fresh immutable `AtomicSkillRegistry` carries an
 explicit ID, semantic version, revision, deterministic input-schema digest, and
 full descriptor digest. Every frozen `SkillDescriptor` declares the stable
 skill version, exact input and output schemas, timeline/media/file/external
@@ -366,8 +366,7 @@ legacy compatibility surfaces. Property-only edits can use
 reverse behavior is not expanded or promised transactionally reversible.
 Linked A/V and arbitrary video/audio track foundations are implemented.
 Automatic link inference, linked-source ingest as one operation,
-transcription/ASR, visual keyframes,
-masks, denoise/de-reverb/source separation, plugin hosting, AI audio
+transcription/ASR, masks, denoise/de-reverb/source separation, plugin hosting, AI audio
 providers, complex mastering, and effects remain unimplemented.
 
 ## Local audio editing and mix policy
@@ -395,7 +394,7 @@ track/cue/style contracts use stable IDs, millisecond timing, deterministic
 order, explicit overlap policy, language/speaker metadata, enabled/locked
 state, and a controlled logical-font style. Subtitle cues are never modeled
 as video clips. Legacy projects with no subtitle field load and render as
-before; the read-only snapshot is version `5.0.0` and adds detached subtitle
+before; the read-only snapshot is version `6.0.0` and adds detached subtitle
 track/cue counts and state.
 
 `SubtitleManageTrackSkill`, `SubtitleEditCueSkill`,
@@ -440,15 +439,15 @@ processing, not a color-managed HDR, LUT, or secondary-grade pipeline.
 video clip IDs, reject locked/non-video targets, copy only to explicitly named
 clips, never spread through linked audio, and use the shared atomic timeline
 transaction. Detached review, confirmation/workflow, Editing Agent, trace,
-rollback, snapshot v5, Director context, and the manual draft UI carry the
+rollback, snapshot v6, Director context, and the manual draft UI carry the
 same visual state and digest. Browser video/CSS preview is labeled an
 approximation; final FFmpeg export is authoritative. Thumbnail analysis can
 request original or applied mode, and its cache key binds the complete visual
 digest and canvas settings.
 
-General visual keyframes/curves, masks/tracking, LUT import,
-secondary color, HDR, blend modes, animated titles, and AI effects remain
-unimplemented.
+Visual keyframes for the bounded properties above are implemented by the
+separate automation system below. Masks/tracking, LUT import, secondary color,
+HDR, blend modes, animated titles, and AI effects remain unimplemented.
 
 ## Deterministic video and audio transitions
 
@@ -475,7 +474,7 @@ changes remove any structurally invalid transition and expose its transition
 ID as a consequential tombstone instead of leaving an orphan.
 
 Detached Director review uses the same engine and registry validation but
-never dispatches a skill. Snapshot v5 exposes path-free stable transition
+never dispatches a skill. Snapshot v6 exposes path-free stable transition
 state and counts. Confirmed workflow and manual edits record transition
 creates/modifies/deletes in provenance; rollback restores the prior project
 document. The loopback timeline shows compact cut markers and a transition
@@ -494,9 +493,50 @@ primary video role only; overlay-track transitions are rejected as
 unsupported rather than rendered incorrectly. Source-handle extension never
 changes canonical clip trim or placement.
 
-General visual/audio keyframes, transition speed curves, masks/tracking,
-3D/plugin/VST/OFX transitions, arbitrary filter strings, and AI effects are
-not implemented.
+Transition speed curves, masks/tracking, 3D/plugin/VST/OFX transitions,
+arbitrary filter strings, and AI effects are not implemented.
+
+## Visual keyframes and parameter animation
+
+Each video/image clip may carry frozen version `1.0.0` `VisualAutomation`
+curves with stable automation/keyframe IDs, an exact clip ID, a whitelisted
+property path, clip-local post-speed timeline seconds, finite bounded values,
+and deterministic ordering. The supported paths are position, axis/uniform
+scale, rotation, opacity, four crop edges, and exposure, contrast, saturation,
+temperature, tint, and gamma. Arbitrary property paths, expressions, scripts,
+Bezier data, and non-finite values are rejected.
+
+Interpolation is fixed and seek-safe: `hold`, `linear`, quadratic `ease_in`,
+quadratic `ease_out`, and smoothstep `ease_in_out`. The interpolation on the
+left keyframe defines its outgoing segment. Before the first and after the
+last keyframe the frozen static transform/color value is the baseline; one
+keyframe applies only at its exact local time. A curve therefore overrides one
+static property only inside its explicit range and never creates a second
+hidden state.
+
+Five registry-revision-7 tools create/update/delete a keyframe, replace or
+clear a curve, and copy selected curves to explicitly named video clips. They
+reject locked/non-video targets and never spread through linked audio.
+Split samples the boundary and rebases the right curve; trim samples and keeps
+the retained interval; speed rescales clip-local offsets to preserve the same
+source-relative phase; move/ripple keep local times; remove records automation
+tombstones. Every consequential curve change is included in detached review,
+confirmed trace, and checkpoint rollback.
+
+Final export evaluates validated FFmpeg expressions from absolute clip-local
+time before transition composition, track layering, subtitle burn-in, and
+final format conversion. This makes sequential and random-seek frame requests
+independent of evaluation history. Applied thumbnail requests bind the exact
+timeline sample time and automation digest into the cache key. Browser CSS
+preview is intentionally approximate; final FFmpeg export is authoritative.
+Snapshot v6 exposes fully detached curve/keyframe data and a stable automation
+digest. The compact UI supports previous/next keyframe navigation and detached
+upsert/delete/clear/copy proposals, all behind structured diff and explicit
+confirmation.
+
+This first version does not provide masks/path animation, motion tracking,
+speed-remapping curves, per-word subtitle animation, custom Bezier/expression
+editing, 3D, particles, plugins, or AI motion effects.
 
 ## Constrained Editing Agent
 

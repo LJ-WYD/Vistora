@@ -23,6 +23,7 @@ from contracts import (
     ManualSubtitleCue,
     ManualSubtitleTrack,
     ManualTransitionEdit,
+    ManualVisualAutomationEdit,
 )
 from timeline_query import TimelineSnapshot
 
@@ -82,6 +83,18 @@ def _transitions(snapshot: TimelineSnapshot) -> dict[str, dict[str, Any]]:
     return {
         transition.transition_id: transition.model_dump(mode="json")
         for transition in snapshot.transitions
+    }
+
+
+def _automations(
+    snapshot: TimelineSnapshot,
+) -> dict[tuple[str, str, str], dict[str, Any]]:
+    return {
+        (track.track_key, clip.clip_id, automation.automation_id):
+        automation.model_dump(mode="json")
+        for track in snapshot.tracks
+        for clip in track.clips
+        for automation in clip.visual_automations
     }
 
 
@@ -189,6 +202,20 @@ class ConfirmedTraceRecorder:
                 effects.append(("deletes", "transition", track_key, transition_id))
             elif old != new:
                 effects.append(("modifies", "transition", track_key, transition_id))
+        before_automations = _automations(before_snapshot)
+        after_automations = _automations(after_snapshot)
+        for track_key, _clip_id, automation_id in sorted(
+            before_automations.keys() | after_automations.keys()
+        ):
+            key = (track_key, _clip_id, automation_id)
+            old = before_automations.get(key)
+            new = after_automations.get(key)
+            if old is None:
+                effects.append(("creates", "automation", track_key, automation_id))
+            elif new is None:
+                effects.append(("deletes", "automation", track_key, automation_id))
+            elif old != new:
+                effects.append(("modifies", "automation", track_key, automation_id))
 
         inherited: dict[tuple[str, str], str] = {}
         changed_before_ids = {
@@ -286,6 +313,19 @@ class ConfirmedTraceRecorder:
                         item for item in raw_transitions
                         if isinstance(item, str)
                     )
+            if "Visual" not in request.tool_name:
+                for field in (
+                    "created_automation_ids",
+                    "modified_automation_ids",
+                    "deleted_automation_ids",
+                ):
+                    raw_automations = result.payload.get(field, ())
+                    if isinstance(raw_automations, (list, tuple)):
+                        consequential_ids.update(
+                            item
+                            for item in raw_automations
+                            if isinstance(item, str)
+                        )
         relations = tuple(
             ConfirmedEntityRelation(
                 relation_id=_stable_id(
@@ -383,7 +423,24 @@ class ManualTraceRecorder:
         after_subtitle_cues = _subtitle_cues(after_snapshot)
         before_transitions = _transitions(before_snapshot)
         after_transitions = _transitions(after_snapshot)
+        before_automations = _automations(before_snapshot)
+        after_automations = _automations(after_snapshot)
         for edit in proposal.edits:
+            if isinstance(edit, ManualVisualAutomationEdit):
+                target_ids = {edit.clip_id}
+                target_ids.update(item.clip_id for item in edit.targets)
+                if not any(
+                    clip_id in target_ids
+                    and before_automations.get((track_key, clip_id, automation_id))
+                    != after_automations.get((track_key, clip_id, automation_id))
+                    for track_key, clip_id, automation_id in (
+                        before_automations.keys() | after_automations.keys()
+                    )
+                ):
+                    raise ValueError(
+                        "Manual visual automation trace has no exact state change"
+                    )
+                continue
             if isinstance(edit, ManualTransitionEdit):
                 expected_ids = _manual_transition_ids(
                     edit, before_transitions
@@ -505,6 +562,30 @@ class ManualTraceRecorder:
         effect_rows: list[tuple[Any, str, str, str, str]] = []
         seen_effects: set[tuple[str, str, str]] = set()
         for edit in proposal.edits:
+            if isinstance(edit, ManualVisualAutomationEdit):
+                target_ids = {edit.clip_id}
+                target_ids.update(item.clip_id for item in edit.targets)
+                for track_key, clip_id, automation_id in sorted(
+                    before_automations.keys() | after_automations.keys()
+                ):
+                    if clip_id not in target_ids:
+                        continue
+                    old = before_automations.get(
+                        (track_key, clip_id, automation_id)
+                    )
+                    new = after_automations.get(
+                        (track_key, clip_id, automation_id)
+                    )
+                    if old == new:
+                        continue
+                    effect_rows.append((
+                        edit,
+                        "creates" if old is None else "deletes" if new is None else "modifies",
+                        track_key,
+                        automation_id,
+                        "direct",
+                    ))
+                continue
             if isinstance(edit, ManualTransitionEdit):
                 for transition_id in sorted(
                     _manual_transition_ids(edit, before_transitions)
@@ -780,6 +861,8 @@ class ManualTraceRecorder:
                             isinstance(edit, ManualTransitionEdit)
                             or clip_id in transition_relation_ids
                         )
+                        else "automation"
+                        if isinstance(edit, ManualVisualAutomationEdit)
                         else "clip"
                     ),
                     entity_id=clip_id,
@@ -822,6 +905,7 @@ class ManualTraceRecorder:
                             ManualSubtitleCue,
                             ManualCopyClipVisual,
                             ManualTransitionEdit,
+                            ManualVisualAutomationEdit,
                         ),
                     ) and clip_id not in transition_relation_ids
                     else None
