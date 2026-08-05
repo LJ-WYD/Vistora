@@ -315,6 +315,26 @@ audio generation is used only by tests and reference workflows. Real online AI p
 adapters, credentials, mature cost enforcement, complex AI packaging/effects,
 and richer editing skills are not implemented.
 
+## AI packaging task model (O27)
+
+`src/effect_workflow/` defines the first provider-neutral cloud-AI packaging
+planning boundary. A frozen `EffectIntent` binds one exact Director plan and
+its observed source evidence. A versioned `EffectProductionPlan` contains
+stable tasks with an exact shot, track, clip and timeline range; typed object,
+mask, tracking and style references; a structured prompt; capability/model
+requirements; white-listed parameters; output role; optional cost/time caps;
+and explicit acceptance criteria. Review resolves every target against the
+detached current snapshot and rejects stale ranges, evidence/source drift or
+missing/stale masks.
+
+The separate hash-chained effect ledger records deterministic task-level
+reviews and immutable explicit confirmation or rejection. It invokes no
+provider, creates no job or artifact, and cannot mutate the timeline. Its
+public view always reports `not_configured` at this stage. O28 will add the
+approved high-value capability adapters; O29 will define confirmed timeline
+fill-back; O30 will add candidate/progress/retry/cache lifecycle. No real or
+paid AI provider and no credential is configured or implied by O27.
+
 `src/plan_review/` provides strict version `1.0.0` contracts and a deterministic read-only diff engine for the period before confirmation. A `PlanDiffRequest` binds an exact timeline snapshot ID/revision/digest, Director plan ID/version/digest, non-executable proposed execution-plan digest, and the exact registered tool-schema set. The engine validates proposed arguments with the current registry schemas, simulates supported semantics on detached clip data, and returns stable before/after changes, source-evidence links, provenance summaries, warnings, and net counts. Repeating the same request produces the same document and digest; snapshot or registry drift requires regeneration.
 
 The current semantic adapters cover non-reverse legacy video add (with supplied

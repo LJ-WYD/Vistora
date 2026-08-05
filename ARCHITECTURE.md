@@ -412,6 +412,27 @@ Real online AI adapters, provider credentials, automatic license approval,
 external artifact cleanup, complex AI effects, and more mature atomic editing
 capabilities remain unimplemented.
 
+### Provider-neutral AI packaging plan boundary (O27)
+
+`src/effect_workflow/` is a planning and decision boundary only. Its strict
+version `1.0.0` contracts represent a Director-bound `EffectIntent` and an
+`EffectProductionPlan` whose ordered stable tasks identify the exact shot,
+track, clip and timeline range; observed object evidence; optional validated
+mask and tracking references; style evidence; structured prompt fields;
+provider-neutral model capability/features; bounded parameters, cost/time
+limits, output role and acceptance criteria. Raw paths, secrets, provider IDs,
+raw filters and scripts are excluded from the contracts.
+
+`EffectPlanService` resolves task targets against the current detached
+timeline snapshot, including clip bounds, source evidence and exact mask
+digest. It computes deterministic task diffs and persists review plus a
+separate immutable confirmation/rejection in an atomically replaced,
+hash-chained `*.effect-plans.json` sidecar. It imports no timeline manager,
+renderer, atomic gateway or provider SDK and exposes `not_configured` as the
+only provider state. O27 therefore defines what a reviewed packaging task is;
+it does not execute the task, create candidates or fill results into the
+timeline. Those remain O28-O30.
+
 ### Production product-entry composition
 
 `src/product_entry/` closes the existing-material composition gap without
