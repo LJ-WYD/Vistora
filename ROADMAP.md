@@ -57,7 +57,7 @@ Definitions digest: `sha256:143850f88a50bf6b43137723cff42c4f1f9132b2a12cceda369c
 | O8 | complete | `78c9fa0`；detached plan-review tests | 无 |
 | O9 | complete | `94105aa`；workflow/rollback tests | 无 |
 | O10 | complete | `9a93653`；registry/gateway/CLI tests | 无 |
-| O11 | partial | `eba5bdb`、`a0a4f75`、`5c9b73e` | 生产级倒放原子语义与冻结帧仍缺；需复核排序覆盖 |
+| O11 | complete | `eba5bdb`、`a0a4f75`、`5c9b73e`、`352ebf3`；timeline edit/render/reference tests | 无 |
 | O12 | partial | `80a460e` | 多规格输出仍缺 |
 | O13 | partial | `a16d060` | 词级时间、标题、图片、贴纸仍缺 |
 | O14 | partial | `5c9b73e` | 背景音乐/音效的专用语义与自动闪避仍缺 |

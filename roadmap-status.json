@@ -4,7 +4,7 @@
   "roadmap_id": "vistora-original-optimization-o1-o32",
   "roadmap_digest": "sha256:143850f88a50bf6b43137723cff42c4f1f9132b2a12cceda369c659db5c5d618",
   "definitions_source": "ROADMAP.md",
-  "updated_at": "2026-08-05T00:00:00Z",
+  "updated_at": "2026-08-05T06:29:45Z",
   "change_requests": [
     {
       "change_request_id": "change_request_initial_authoritative_import_20260805",
@@ -129,12 +129,12 @@
     {
       "id": "O11",
       "original_summary": "补齐基础剪辑原子能力",
-      "status": "in_progress",
-      "commits": ["eba5bdb3325f6eccfbb62c4632668c34c6ae4b5f", "a0a4f75f8485e0bd90c9900ca8bffcbe22b04c90", "5c9b73e8e4f0f96c764315aea80797dbdbd72856"],
+      "status": "complete",
+      "commits": ["eba5bdb3325f6eccfbb62c4632668c34c6ae4b5f", "a0a4f75f8485e0bd90c9900ca8bffcbe22b04c90", "5c9b73e8e4f0f96c764315aea80797dbdbd72856", "352ebf367aa81877f893208476b7b9b265adab63"],
       "remote_verified": true,
-      "implementation_paths": ["src/timeline_edit", "src/skills/video_timeline_edits.py", "src/audio_editing"],
-      "validation_evidence": ["tests/test_timeline_edits.py", "tests/test_multitrack.py", "tests/test_audio_editing.py"],
-      "remaining_scope": ["生产级倒放原子语义", "冻结帧", "复核排序能力是否完整覆盖原文"]
+      "implementation_paths": ["src/core/timeline.py", "src/timeline_edit", "src/skills/video_timeline_edits.py", "src/audio_analysis"],
+      "validation_evidence": ["tests/test_timeline_edits.py", "tests/test_multitrack.py", "tests/test_audio_editing.py", "tests/test_reference_workflow.py"],
+      "remaining_scope": []
     },
     {
       "id": "O12",
