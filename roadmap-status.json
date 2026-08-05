@@ -329,12 +329,12 @@
     {
       "id": "O31",
       "original_summary": "新增成片自动质检",
-      "status": "in_progress",
-      "commits": [],
-      "remote_verified": false,
-      "implementation_paths": [],
-      "validation_evidence": [],
-      "remaining_scope": ["时长", "画幅", "编码", "音轨", "黑帧", "静帧", "响度", "字幕", "完整解码"]
+      "status": "complete",
+      "commits": ["10a1b82b832483e91f197e907a2af247f0f3471a"],
+      "remote_verified": true,
+      "implementation_paths": ["src/delivery_qc", "src/main.py", "src/product_entry", "src/timeline_preview/static/app.js", "README.md", "ARCHITECTURE.md"],
+      "validation_evidence": ["tests/test_delivery_qc.py", "tests/test_reference_workflow.py", "tests/test_product_entry.py", "tests/run_validation.py", "tests/product_visual_fixture.py", "scripts/validate_roadmap.py"],
+      "remaining_scope": []
     },
     {
       "id": "O32",
