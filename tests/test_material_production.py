@@ -1,6 +1,8 @@
 import ast
+import hashlib
 import json
 import shutil
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,10 +31,14 @@ from material_production import (  # noqa: E402
     AdapterJobUpdate,
     AdapterRegistry,
     ArtifactCandidate,
+    ArtifactValidation,
     DeterministicLocalMediaAdapter,
     DeterministicLocalVideoAdapter,
     ManualImportAdapter,
     MaterialProductionAgent,
+    MaterialIngestError,
+    MaterialIngestPipeline,
+    MaterialDerivative,
     MaterialCatalogStore,
     MaterialProductionIntegrityError,
     MaterialProductionOrchestrator,
@@ -43,7 +49,9 @@ from material_production import (  # noqa: E402
     build_creation_capability_reference,
     build_material_production_registry,
 )
+import material_production.store as production_store_module  # noqa: E402
 from core import timeline_manager  # noqa: E402
+from director import digest_json  # noqa: E402
 from core.timeline import TimelineConfig, TrackConfig  # noqa: E402
 from skills.video_add_clip import VideoAddClipSkill  # noqa: E402
 from tests.test_creation_planning import (  # noqa: E402
@@ -262,6 +270,302 @@ def test_confirmed_run_validates_then_requires_acceptance_before_catalog(tmp_pat
     serialized_view = service.view().model_dump_json()
     assert str(tmp_path) not in serialized_view
     assert "staging_relative_path" not in serialized_view
+
+
+def test_catalog_acceptance_builds_proxy_transcode_analysis_tags_and_quality(tmp_path):
+    _, service, _, catalog, confirmation = _orchestrator(tmp_path)
+    request = service.prepare_request(
+        request_id="production_request_o24_ingest",
+        production_confirmation_id=confirmation.confirmation_id,
+        requested_by="local_user",
+    )
+    service.start(request)
+    artifact = service.view().artifacts[0]
+    _, entry = service.decide_artifact(
+        artifact["artifact_id"],
+        decision="accepted",
+        decided_by="local_user",
+        reason="Accept after complete local ingest checks.",
+    )
+    assert [item.role for item in entry.derivatives] == ["normalized", "proxy"]
+    assert entry.analysis.media_kind == "video"
+    assert entry.analysis.orientation == "landscape"
+    assert entry.analysis.width == 320
+    assert entry.analysis.height == 180
+    assert entry.quality_report.overall_status == "passed"
+    assert entry.quality_report.full_decode_passed is True
+    assert {item.check_id for item in entry.quality_report.checks} >= {
+        "check_full_decode",
+        "check_hash_binding",
+        "check_required_stream",
+        "check_specification",
+    }
+    assert {(item.namespace, item.name, item.value) for item in entry.tags} >= {
+        ("technical", "media_kind", "video"),
+        ("technical", "orientation", "landscape"),
+        ("workflow", "production_method", "generate"),
+    }
+    for role in ("normalized", "proxy"):
+        derivative = catalog.resolve_derivative(entry.material_id, role)
+        assert derivative is not None and derivative.is_file()
+        probe = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-show_entries",
+                "stream=codec_type,codec_name,width,height", "-of", "json",
+                str(derivative),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert any(
+            item["codec_type"] == "video"
+            for item in json.loads(probe.stdout)["streams"]
+        )
+    view = service.view().model_dump_json()
+    assert "material_analysis_" in view
+    assert '"overall_status":"passed"' in view
+    assert "managed_relative_path" not in view
+    assert str(tmp_path) not in view
+    assert type(entry).model_validate_json(entry.model_dump_json()) == entry
+
+
+def test_o24_derivative_failure_does_not_accept_or_catalog(tmp_path, monkeypatch):
+    _, service, _, catalog, confirmation = _orchestrator(tmp_path)
+    request = service.prepare_request(
+        request_id="production_request_o24_failure",
+        production_confirmation_id=confirmation.confirmation_id,
+        requested_by="local_user",
+    )
+    service.start(request)
+    artifact = service.view().artifacts[0]
+
+    def fail_derivatives(*_args, **_kwargs):
+        raise RuntimeError("synthetic derivative failure")
+
+    monkeypatch.setattr(service.ingest, "_create_derivatives", fail_derivatives)
+    with pytest.raises(MaterialIngestError, match="proxy/transcode"):
+        service.decide_artifact(
+            artifact["artifact_id"],
+            decision="accepted",
+            decided_by="local_user",
+            reason="This must fail before acceptance.",
+        )
+    assert catalog.load(project_id=service.project_id).revision == 0
+    assert service.view().artifacts[0]["decision"] is None
+    assert not catalog.media_root.exists()
+
+
+def test_o24_catalog_manifest_failure_removes_original_and_derivatives(
+    tmp_path,
+    monkeypatch,
+):
+    _, service, _, catalog, confirmation = _orchestrator(tmp_path / "source")
+    request = service.prepare_request(
+        request_id="production_request_o24_atomic",
+        production_confirmation_id=confirmation.confirmation_id,
+        requested_by="local_user",
+    )
+    service.start(request)
+    artifact = service.view().artifacts[0]
+    _, entry = service.decide_artifact(
+        artifact["artifact_id"],
+        decision="accepted",
+        decided_by="local_user",
+        reason="Prepare verified files for the atomic publication test.",
+    )
+    source = catalog.resolve_uri(entry.source_uri)
+    derivatives = {
+        item.role: catalog.resolve_derivative(entry.material_id, item.role)
+        for item in entry.derivatives
+    }
+    replacement_id = "source_fedcba9876543210"
+    replacement_derivatives = tuple(
+        item.model_copy(
+            update={
+                "managed_relative_path": (
+                    f"{replacement_id}/{replacement_id}.{item.role}"
+                    f"{Path(item.managed_relative_path).suffix}"
+                )
+            }
+        )
+        for item in entry.derivatives
+    )
+    replacement = entry.model_copy(
+        update={
+            "material_id": replacement_id,
+            "managed_relative_path": (
+                f"{replacement_id}/{replacement_id}{source.suffix}"
+            ),
+            "derivatives": replacement_derivatives,
+        }
+    )
+    target = MaterialCatalogStore(
+        tmp_path / "failed.catalog.json",
+        media_root=tmp_path / "failed_media",
+    )
+
+    def fail_manifest(*_args, **_kwargs):
+        raise OSError("synthetic manifest failure")
+
+    monkeypatch.setattr(production_store_module, "_atomic_json", fail_manifest)
+    with pytest.raises(OSError, match="manifest failure"):
+        target.register(
+            target.load(project_id=service.project_id),
+            entry=replacement,
+            staged_path=source,
+            derivative_sources={
+                item.managed_relative_path: derivatives[item.role]
+                for item in replacement_derivatives
+            },
+        )
+    assert not target.path.exists()
+    assert not any(item.is_file() for item in target.media_root.rglob("*"))
+
+
+def test_legacy_catalog_migrates_in_memory_without_fabricated_ingest_metadata(tmp_path):
+    _, service, _, catalog, confirmation = _orchestrator(tmp_path)
+    request = service.prepare_request(
+        request_id="production_request_o24_legacy",
+        production_confirmation_id=confirmation.confirmation_id,
+        requested_by="local_user",
+    )
+    service.start(request)
+    artifact = service.view().artifacts[0]
+    _, entry = service.decide_artifact(
+        artifact["artifact_id"],
+        decision="accepted",
+        decided_by="local_user",
+        reason="Create a catalog entry before legacy projection.",
+    )
+    payload = json.loads(catalog.path.read_text(encoding="utf-8"))
+    for item in payload["entries"]:
+        item.pop("derivatives")
+        item.pop("analysis")
+        item.pop("tags")
+        item.pop("quality_report")
+    payload["integrity_digest"] = digest_json(payload["entries"])
+    catalog.path.write_text(json.dumps(payload), encoding="utf-8")
+    migrated = catalog.load(project_id=service.project_id)
+    assert migrated.entries[0].material_id == entry.material_id
+    assert migrated.entries[0].derivatives == ()
+    assert migrated.entries[0].analysis is None
+    assert migrated.entries[0].tags == ()
+    assert migrated.entries[0].quality_report is None
+    assert catalog.resolve_uri(entry.source_uri).is_file()
+
+
+def test_o24_derivative_contract_rejects_managed_path_escape():
+    with pytest.raises(ValidationError, match="managed and relative"):
+        MaterialDerivative(
+            derivative_id="derivative_escape",
+            role="proxy",
+            managed_relative_path="../outside.mp4",
+            sha256="sha256:" + "1" * 64,
+            size_bytes=1,
+            mime_type="video/mp4",
+        )
+
+
+def test_o24_unified_ingest_handles_image_and_audio_without_modifying_sources(tmp_path):
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    image = staging / "source.png"
+    audio = staging / "source.wav"
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+            "color=c=0x305070:s=320x180:r=1", "-frames:v", "1", str(image),
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+            "sine=frequency=440:sample_rate=48000:duration=2", "-c:a",
+            "pcm_s16le", str(audio),
+        ],
+        check=True,
+    )
+    unknown = ProductionEstimate(
+        status="unknown",
+        rationale="No provider cost is associated with this fixture.",
+    )
+    prompt = {
+        "subject": "Synthetic fixture.",
+        "scene": "Local test.",
+        "camera": "Static.",
+        "action": "None.",
+        "lighting": "Uniform.",
+        "style": "Deterministic.",
+    }
+
+    def bundle(path, media_kind):
+        digest = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+        is_image = media_kind == "image"
+        task = MaterialProductionTask(
+            task_id=f"task_{media_kind}_ingest",
+            requirement_item_id="requirement_hero",
+            title=f"Ingest {media_kind}",
+            purpose="Validate unified ingest behavior.",
+            production_method="generate",
+            status="planned",
+            capability_ids=(f"{media_kind}_generation",),
+            prompt_spec=prompt,
+            duration_seconds=None if is_image else 2.0,
+            width=320 if is_image else None,
+            height=180 if is_image else None,
+            aspect_ratio="16:9" if is_image else None,
+            batch_id="batch_o24_ingest",
+            cost_estimate=unknown,
+            time_estimate=unknown,
+            quality_gates=("Full decode succeeds.",),
+            retry_strategy=("Retry after review.",),
+            alternative_strategy="Use manual import.",
+            delivery=DeliveryFileSpecification(
+                media_kind=media_kind,
+                container_or_extension=path.suffix[1:],
+                mime_type="image/png" if is_image else "audio/wav",
+                filename_pattern=f"{media_kind}.{{attempt}}{path.suffix}",
+            ),
+        )
+        validation = ArtifactValidation(
+            validation_id=f"validation_{media_kind}",
+            artifact_id=f"artifact_{media_kind}",
+            run_id="run_o24_ingest",
+            job_id=f"job_{media_kind}",
+            task_id=task.task_id,
+            requirement_item_id=task.requirement_item_id,
+            passed=True,
+            sha256=digest,
+            size_bytes=path.stat().st_size,
+            mime_type=task.delivery.mime_type,
+            width=320 if is_image else None,
+            height=180 if is_image else None,
+            duration_seconds=None if is_image else 2.0,
+            has_audio=not is_image,
+            validated_at=datetime.now(timezone.utc),
+        )
+        return MaterialIngestPipeline(staging).process(
+            staged_path=path,
+            validation=validation,
+            task=task,
+            material_id=f"source_{media_kind}0000000000"[:23],
+        )
+
+    original_image_hash = hashlib.sha256(image.read_bytes()).hexdigest()
+    original_audio_hash = hashlib.sha256(audio.read_bytes()).hexdigest()
+    image_bundle = bundle(image, "image")
+    audio_bundle = bundle(audio, "audio")
+    assert [item.role for item in image_bundle.derivatives] == ["normalized", "proxy"]
+    assert image_bundle.analysis.orientation == "landscape"
+    assert image_bundle.analysis.duration_seconds is None
+    assert [item.role for item in audio_bundle.derivatives] == ["normalized", "proxy"]
+    assert audio_bundle.analysis.audio_sample_rate == 48000
+    assert audio_bundle.analysis.audio_channels == 1
+    assert audio_bundle.analysis.orientation == "not_applicable"
+    assert hashlib.sha256(image.read_bytes()).hexdigest() == original_image_hash
+    assert hashlib.sha256(audio.read_bytes()).hexdigest() == original_audio_hash
 
 
 def test_run_is_idempotent_and_stale_registry_or_unconfirmed_plan_fails(tmp_path):

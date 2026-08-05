@@ -264,11 +264,19 @@ capture, or import succeeded.
 Provider results first enter an ignored, project-scoped staging directory.
 Vistora verifies path confinement, task/requirement linkage, file size and
 hash, MIME/container/codecs, duration, dimensions, frame rate, and audio
-metadata with `ffprobe`. Invalid results cannot enter the catalog. Valid
+metadata with `ffprobe`, then performs a complete decode check. Invalid results
+cannot enter the catalog. Valid
 results still require a separate explicit Accept or Reject action. Acceptance
-atomically copies the artifact into the managed catalog and appends its
-versioned provenance, production IDs, quality result, license/usage status,
-and cost state. Browser payloads contain only opaque `source_*` and
+creates two deterministic managed derivatives without modifying the source: a
+normalized local transcode and a bounded preview proxy (video, audio, and image
+profiles are explicit). It also records a unified technical analysis, stable
+technical/workflow tags, and a digest-bound per-check quality report.
+Acceptance atomically publishes the original and both derivatives into the
+managed catalog and appends their versioned provenance, production IDs,
+quality result, license/usage status, and cost state. Legacy catalogs are
+verified against their original digest and project deterministically with empty
+enrichment fields; Vistora never fabricates historical analysis. Browser
+payloads contain only opaque `source_*` and
 `material://source_*` identities, never staging or managed filesystem paths.
 
 Only accepted catalog entries become observed Director material on a later

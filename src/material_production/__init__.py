@@ -29,6 +29,11 @@ from .models import (
     ArtifactValidation,
     MaterialCatalogDocument,
     MaterialCatalogEntry,
+    MaterialAnalysisSummary,
+    MaterialDerivative,
+    MaterialQualityCheck,
+    MaterialQualityReport,
+    MaterialTag,
     MaterialProductionEvent,
     MaterialProductionLedger,
     MaterialProductionRunRequest,
@@ -37,6 +42,7 @@ from .models import (
     ProductionPlanConfirmationReference,
     ProductionTaskInput,
 )
+from .ingest import MaterialIngestBundle, MaterialIngestError, MaterialIngestPipeline
 from .service import MaterialProductionError, MaterialProductionOrchestrator
 from .store import (
     MaterialCatalogStore,
@@ -63,6 +69,14 @@ __all__ = [
     "ManualImportAdapter",
     "MaterialCatalogDocument",
     "MaterialCatalogEntry",
+    "MaterialAnalysisSummary",
+    "MaterialDerivative",
+    "MaterialIngestBundle",
+    "MaterialIngestError",
+    "MaterialIngestPipeline",
+    "MaterialQualityCheck",
+    "MaterialQualityReport",
+    "MaterialTag",
     "MaterialCatalogStore",
     "MaterialProductionAdapter",
     "MaterialProductionAgent",

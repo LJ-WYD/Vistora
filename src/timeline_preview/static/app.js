@@ -920,6 +920,23 @@ function renderProduct() {
             `${material.media_kind} / ${material.display_name}`,
             `Origin ${material.origin_kind} / requirement ${material.requirement_item_id}`,
             `License ${material.license_status}`,
+            ...(material.analysis
+              ? [
+                  `Analysis ${material.analysis.orientation} · ${material.analysis.width || "?"}x${material.analysis.height || "?"} · ${material.analysis.duration_seconds || "?"}s`,
+                ]
+              : ["Analysis unavailable for this legacy catalog entry."]),
+            ...(material.derivatives || []).map(
+              (item) =>
+                `${item.role} derivative · ${item.mime_type} · ${item.size_bytes} bytes`,
+            ),
+            ...(material.tags || []).map(
+              (item) => `Tag ${item.namespace}:${item.name}=${item.value}`,
+            ),
+            ...(material.quality
+              ? [
+                  `Quality ${material.quality.overall_status} · full decode ${material.quality.full_decode_passed ? "passed" : "failed"}`,
+                ]
+              : ["Quality report unavailable for this legacy catalog entry."]),
             ...(material.usage_restrictions || []),
           ],
         ),

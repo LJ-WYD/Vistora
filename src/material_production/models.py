@@ -332,6 +332,119 @@ class ArtifactDecision(ProductionModel):
     decided_at: AwareDatetime
 
 
+class MaterialDerivative(ProductionModel):
+    schema_name: Literal["vistora.material-catalog.derivative"] = (
+        "vistora.material-catalog.derivative"
+    )
+    derivative_id: StableId
+    role: Literal["proxy", "normalized"]
+    managed_relative_path: str = Field(min_length=1)
+    sha256: Digest
+    size_bytes: int = Field(gt=0)
+    mime_type: str = Field(min_length=3)
+    container: str | None = Field(default=None, min_length=1)
+    video_codec: str | None = Field(default=None, min_length=1)
+    audio_codec: str | None = Field(default=None, min_length=1)
+    duration_seconds: float | None = Field(default=None, gt=0)
+    width: int | None = Field(default=None, gt=0)
+    height: int | None = Field(default=None, gt=0)
+    fps: float | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def derivative_is_safe(self):
+        value = self.managed_relative_path.replace("\\", "/")
+        if value.startswith("/") or ":/" in value or ".." in value.split("/"):
+            raise ValueError("Derivative path must remain managed and relative")
+        if (self.width is None) != (self.height is None):
+            raise ValueError("Derivative dimensions must be paired")
+        return self
+
+
+class MaterialAnalysisSummary(ProductionModel):
+    schema_name: Literal["vistora.material-catalog.analysis"] = (
+        "vistora.material-catalog.analysis"
+    )
+    analysis_id: StableId
+    source_sha256: Digest
+    media_kind: Literal["video", "audio", "image"]
+    duration_seconds: float | None = Field(default=None, gt=0)
+    width: int | None = Field(default=None, gt=0)
+    height: int | None = Field(default=None, gt=0)
+    fps: float | None = Field(default=None, gt=0)
+    video_codec: str | None = Field(default=None, min_length=1)
+    audio_codec: str | None = Field(default=None, min_length=1)
+    audio_sample_rate: int | None = Field(default=None, gt=0)
+    audio_channels: int | None = Field(default=None, gt=0)
+    orientation: Literal["landscape", "portrait", "square", "not_applicable"]
+    technical_digest: Digest
+
+    @model_validator(mode="after")
+    def analysis_shape(self):
+        if (self.width is None) != (self.height is None):
+            raise ValueError("Analysis dimensions must be paired")
+        expected = "not_applicable"
+        if self.width is not None:
+            expected = (
+                "square"
+                if self.width == self.height
+                else "landscape" if self.width > self.height else "portrait"
+            )
+        if self.orientation != expected:
+            raise ValueError("Material orientation does not match dimensions")
+        payload = self.model_dump(mode="json", exclude={"technical_digest"})
+        if self.technical_digest != digest_json(payload):
+            raise ValueError("Material analysis digest mismatched")
+        return self
+
+
+class MaterialTag(ProductionModel):
+    schema_name: Literal["vistora.material-catalog.tag"] = (
+        "vistora.material-catalog.tag"
+    )
+    tag_id: StableId
+    namespace: Literal["technical", "workflow", "user"]
+    name: StableId
+    value: str = Field(min_length=1, max_length=256)
+    source: Literal["deterministic_analysis", "production_plan", "user"]
+
+
+class MaterialQualityCheck(ProductionModel):
+    check_id: StableId
+    status: Literal["passed", "warning", "failed"]
+    message: str = Field(min_length=1)
+
+
+class MaterialQualityReport(ProductionModel):
+    schema_name: Literal["vistora.material-catalog.quality-report"] = (
+        "vistora.material-catalog.quality-report"
+    )
+    report_id: StableId
+    source_sha256: Digest
+    overall_status: Literal["passed", "warning", "failed"]
+    full_decode_passed: bool
+    checks: tuple[MaterialQualityCheck, ...] = Field(min_length=1)
+    report_digest: Digest
+    completed_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def report_is_exact(self):
+        ids = [item.check_id for item in self.checks]
+        if ids != sorted(ids) or len(ids) != len(set(ids)):
+            raise ValueError("Material quality checks must be unique and ordered")
+        statuses = {item.status for item in self.checks}
+        expected = (
+            "failed" if "failed" in statuses else "warning" if "warning" in statuses else "passed"
+        )
+        if self.overall_status != expected:
+            raise ValueError("Material quality status mismatched")
+        if not self.full_decode_passed and self.overall_status != "failed":
+            raise ValueError("Failed full decode must fail material quality")
+        payload = self.model_dump(mode="json", exclude={"report_digest"})
+        if self.report_digest != digest_json(payload):
+            raise ValueError("Material quality report digest mismatched")
+        return self
+
+
 class MaterialCatalogEntry(ProductionModel):
     schema_name: Literal["vistora.material-catalog.entry"] = (
         "vistora.material-catalog.entry"
@@ -379,6 +492,10 @@ class MaterialCatalogEntry(ProductionModel):
     quality_validation_id: StableId
     accepted_decision_id: StableId
     registered_at: AwareDatetime
+    derivatives: tuple[MaterialDerivative, ...] = ()
+    analysis: MaterialAnalysisSummary | None = None
+    tags: tuple[MaterialTag, ...] = ()
+    quality_report: MaterialQualityReport | None = None
 
     @model_validator(mode="after")
     def entry_is_safe(self) -> MaterialCatalogEntry:
@@ -397,6 +514,29 @@ class MaterialCatalogEntry(ProductionModel):
             self.cost_value is not None or self.cost_currency is not None
         ):
             raise ValueError("Unknown catalog cost cannot invent a value")
+        enriched = bool(
+            self.derivatives or self.analysis or self.tags or self.quality_report
+        )
+        if enriched and (
+            not self.derivatives
+            or self.analysis is None
+            or not self.tags
+            or self.quality_report is None
+        ):
+            raise ValueError("Enriched catalog entry requires complete ingest metadata")
+        if enriched:
+            roles = [item.role for item in self.derivatives]
+            if roles != sorted(roles) or len(roles) != len(set(roles)):
+                raise ValueError("Material derivatives must have unique ordered roles")
+            if self.analysis.source_sha256 != self.artifact_sha256:
+                raise ValueError("Material analysis crosses artifact identity")
+            if self.quality_report.source_sha256 != self.artifact_sha256:
+                raise ValueError("Material quality crosses artifact identity")
+            if self.quality_report.overall_status == "failed":
+                raise ValueError("Failed material quality cannot enter the catalog")
+            tag_keys = [(item.namespace, item.name, item.value) for item in self.tags]
+            if tag_keys != sorted(tag_keys) or len(tag_keys) != len(set(tag_keys)):
+                raise ValueError("Material tags must be unique and ordered")
         return self
 
     @property

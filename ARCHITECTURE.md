@@ -361,11 +361,20 @@ Artifacts first land below an ignored project-scoped staging root. Validation
 rejects traversal and verifies request/task/requirement linkage, size/hash/
 MIME, container, codecs, duration, dimensions, frame rate, and audio metadata.
 A failed artifact cannot be accepted. A passing artifact still remains staged
-until a separate human decision. Acceptance atomically registers it in the
-versioned `MaterialCatalog` with an opaque `source_*` ID, production
-provenance, validation and decision IDs, origin, license/usage limitations,
-and explicit cost state. The append-only production ledger and catalog both
-use digest integrity and atomic replacement; tampering fails closed.
+until a separate human decision. Acceptance runs the versioned local ingest
+pipeline: a full FFmpeg decode check, deterministic normalized transcode,
+bounded proxy generation, unified stream/duration/dimension/audio analysis,
+stable technical/workflow tags, and a digest-bound quality report. Video uses
+H.264/AAC MP4 derivatives, audio uses PCM WAV plus AAC/M4A, and images use PNG
+plus bounded JPEG; source artifacts are never modified. The catalog store
+publishes original and derivative files as one create-new set and removes all
+published files if its atomic manifest update fails. It records opaque IDs,
+production provenance, validation/decision IDs, derivative hashes, analysis,
+tags, quality, origin, license/usage limitations, and explicit cost state.
+Legacy catalog payloads first pass their original integrity digest, then gain
+empty enrichment defaults in memory; no historical facts are invented. The
+append-only production ledger and catalog both use digest integrity and atomic
+replacement; tampering fails closed.
 
 Only accepted catalog entries are projected into the Director's next detached
 read context. They use browser-safe `material://source_*` references and

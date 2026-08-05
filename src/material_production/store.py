@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 import shutil
 import uuid
 from contextlib import contextmanager
@@ -168,9 +169,22 @@ class MaterialCatalogStore:
                 )
             return MaterialCatalogDocument.empty(project_id=project_id)
         try:
-            catalog = MaterialCatalogDocument.model_validate_json(
-                self.path.read_text(encoding="utf-8")
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+            entries = payload.get("entries", [])
+            legacy = any(
+                "derivatives" not in entry
+                for entry in entries
             )
+            if legacy:
+                if payload.get("integrity_digest") != digest_json(entries):
+                    raise ValueError("Legacy material catalog digest mismatched")
+                for entry in entries:
+                    entry.setdefault("derivatives", [])
+                    entry.setdefault("analysis", None)
+                    entry.setdefault("tags", [])
+                    entry.setdefault("quality_report", None)
+                payload["integrity_digest"] = digest_json(entries)
+            catalog = MaterialCatalogDocument.model_validate(payload)
         except (OSError, ValueError, ValidationError) as exc:
             raise MaterialProductionIntegrityError(
                 "Material catalog is corrupt or tampered"
@@ -187,6 +201,7 @@ class MaterialCatalogStore:
         *,
         entry: MaterialCatalogEntry,
         staged_path: Path,
+        derivative_sources: dict[str, Path] | None = None,
     ) -> MaterialCatalogDocument:
         try:
             lock = self.lock_path.open("x", encoding="utf-8", newline="\n")
@@ -218,27 +233,58 @@ class MaterialCatalogStore:
                 raise MaterialProductionStoreError(
                     "Material ID is already registered"
                 )
-            target = (
-                self.media_root / entry.managed_relative_path
-            ).resolve()
             root = self.media_root.resolve()
-            if root not in target.parents:
+            derivative_sources = derivative_sources or {}
+            expected_derivatives = {
+                item.managed_relative_path for item in entry.derivatives
+            }
+            if set(derivative_sources) != expected_derivatives:
                 raise MaterialProductionStoreError(
-                    "Catalog target escapes managed media root"
+                    "Derivative source set does not match catalog entry"
                 )
-            if target.exists():
-                raise MaterialProductionIntegrityError(
-                    "Managed catalog target already exists without a record"
-                )
-            target.parent.mkdir(parents=True, exist_ok=True)
-            temporary = target.with_name(
-                f".{target.name}.{uuid.uuid4().hex}.tmp"
-            )
+            sources = {
+                entry.managed_relative_path: staged_path,
+                **derivative_sources,
+            }
+            targets: dict[str, Path] = {}
+            for relative, source in sources.items():
+                target = (self.media_root / relative).resolve()
+                if root not in target.parents:
+                    raise MaterialProductionStoreError(
+                        "Catalog target escapes managed media root"
+                    )
+                if target.exists():
+                    raise MaterialProductionIntegrityError(
+                        "Managed catalog target already exists without a record"
+                    )
+                if not source.is_file():
+                    raise MaterialProductionStoreError(
+                        "Catalog source is missing"
+                    )
+                targets[relative] = target
+            temporaries: dict[str, Path] = {}
+            published: list[Path] = []
             try:
-                shutil.copyfile(staged_path, temporary)
-                os.replace(temporary, target)
+                for relative, source in sources.items():
+                    target = targets[relative]
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    temporary = target.with_name(
+                        f".{target.name}.{uuid.uuid4().hex}.tmp"
+                    )
+                    shutil.copyfile(source, temporary)
+                    with temporary.open("rb+") as copied:
+                        os.fsync(copied.fileno())
+                    temporaries[relative] = temporary
+                for relative in sorted(targets):
+                    os.replace(temporaries[relative], targets[relative])
+                    published.append(targets[relative])
+            except Exception:
+                for target in published:
+                    target.unlink(missing_ok=True)
+                raise
             finally:
-                temporary.unlink(missing_ok=True)
+                for temporary in temporaries.values():
+                    temporary.unlink(missing_ok=True)
             entries = (*catalog.entries, entry)
             updated = MaterialCatalogDocument(
                 project_id=catalog.project_id,
@@ -254,7 +300,8 @@ class MaterialCatalogStore:
             try:
                 _atomic_json(self.path, updated)
             except Exception:
-                target.unlink(missing_ok=True)
+                for target in published:
+                    target.unlink(missing_ok=True)
                 raise
             return updated
         finally:
@@ -274,6 +321,27 @@ class MaterialCatalogStore:
         if len(matches) != 1:
             return None
         target = (self.media_root / matches[0].managed_relative_path).resolve()
+        root = self.media_root.resolve()
+        if root not in target.parents or not target.is_file():
+            return None
+        return target
+
+    def resolve_derivative(self, material_id: str, role: str) -> Path | None:
+        if role not in {"proxy", "normalized"} or not self.path.exists():
+            return None
+        catalog = self.load()
+        matches = [
+            item
+            for entry in catalog.entries
+            if entry.material_id == material_id
+            for item in entry.derivatives
+            if item.role == role
+        ]
+        if len(matches) != 1:
+            return None
+        target = (
+            self.media_root / matches[0].managed_relative_path
+        ).resolve()
         root = self.media_root.resolve()
         if root not in target.parents or not target.is_file():
             return None

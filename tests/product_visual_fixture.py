@@ -494,6 +494,64 @@ def _view(state: str) -> ProductEntryView:
                             "usage_restrictions": [
                                 "Verify usage rights before publishing."
                             ],
+                            "derivatives": [
+                                {
+                                    "derivative_id": "derivative_normalized_visual",
+                                    "role": "normalized",
+                                    "mime_type": "video/mp4",
+                                    "size_bytes": 8192,
+                                    "duration_seconds": 6.0,
+                                    "width": 1080,
+                                    "height": 1920,
+                                    "fps": 30.0,
+                                },
+                                {
+                                    "derivative_id": "derivative_proxy_visual",
+                                    "role": "proxy",
+                                    "mime_type": "video/mp4",
+                                    "size_bytes": 2048,
+                                    "duration_seconds": 6.0,
+                                    "width": 360,
+                                    "height": 640,
+                                    "fps": 30.0,
+                                },
+                            ],
+                            "analysis": {
+                                "analysis_id": "material_analysis_visual",
+                                "media_kind": "video",
+                                "orientation": "portrait",
+                                "duration_seconds": 6.0,
+                                "width": 1080,
+                                "height": 1920,
+                                "fps": 30.0,
+                                "audio_sample_rate": None,
+                                "audio_channels": None,
+                                "technical_digest": "sha256:" + "9" * 64,
+                            },
+                            "tags": [
+                                {
+                                    "namespace": "technical",
+                                    "name": "orientation",
+                                    "value": "portrait",
+                                },
+                                {
+                                    "namespace": "workflow",
+                                    "name": "production_method",
+                                    "value": "generate",
+                                },
+                            ],
+                            "quality": {
+                                "report_id": "material_quality_visual",
+                                "overall_status": "passed",
+                                "full_decode_passed": True,
+                                "checks": [
+                                    {
+                                        "check_id": "check_full_decode",
+                                        "status": "passed",
+                                        "message": "Full media decode succeeded.",
+                                    }
+                                ],
+                            },
                         }
                     ]
                     if state == "material_production_succeeded"

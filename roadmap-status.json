@@ -4,7 +4,7 @@
   "roadmap_id": "vistora-original-optimization-o1-o32",
   "roadmap_digest": "sha256:143850f88a50bf6b43137723cff42c4f1f9132b2a12cceda369c659db5c5d618",
   "definitions_source": "ROADMAP.md",
-  "updated_at": "2026-08-05T09:11:21Z",
+  "updated_at": "2026-08-05T09:12:44Z",
   "change_requests": [
     {
       "change_request_id": "change_request_initial_authoritative_import_20260805",
@@ -259,7 +259,7 @@
     {
       "id": "O24",
       "original_summary": "统一素材入库、代理、转码、分析、标签和质检",
-      "status": "partial",
+      "status": "in_progress",
       "commits": ["acdab74e8badbe84ff19b9aa6a794d997eec3bf9"],
       "remote_verified": true,
       "implementation_paths": ["src/material_production"],

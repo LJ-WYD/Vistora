@@ -11,6 +11,7 @@ from creation_planning import CreationPlanningService
 from director import digest_json
 
 from .adapters import AdapterRegistry
+from .ingest import MaterialIngestPipeline
 from .models import (
     AdapterJobUpdate,
     ArtifactDecision,
@@ -60,6 +61,7 @@ class MaterialProductionOrchestrator:
         project_id: str,
         clock: Callable[[], datetime] = _now,
         id_factory: Callable[[str], str] = _identifier,
+        ingest: MaterialIngestPipeline | None = None,
     ) -> None:
         self.creation_planning = creation_planning
         self.adapters = adapters
@@ -73,6 +75,10 @@ class MaterialProductionOrchestrator:
             self.staging_root,
             clock=clock,
             id_factory=id_factory,
+        )
+        self.ingest = ingest or MaterialIngestPipeline(
+            self.staging_root,
+            clock=clock,
         )
 
     def prepare_request(
@@ -532,6 +538,26 @@ class MaterialProductionOrchestrator:
                 "Failed artifact validation cannot be accepted"
             )
         artifact, job = self._artifact_and_job(ledger, artifact_id)
+        confirmed = None
+        task = None
+        ingest_bundle = None
+        if decision == "accepted":
+            run_request = self._run_request(ledger, validation.run_id)
+            confirmed = self._confirmed(run_request)
+            task = next(
+                item
+                for item in confirmed.proposal.plan.tasks
+                if item.task_id == validation.task_id
+            )
+            staged = self.validator.resolve(artifact)
+            assert validation.sha256 is not None
+            material_id = "source_" + validation.sha256[7:23]
+            ingest_bundle = self.ingest.process(
+                staged_path=staged,
+                validation=validation,
+                task=task,
+                material_id=material_id,
+            )
         decision_record = ArtifactDecision(
             decision_id=self.id_factory("artifact_decision"),
             artifact_id=artifact_id,
@@ -551,13 +577,9 @@ class MaterialProductionOrchestrator:
             )
             entry = None
             if decision == "accepted":
-                run_request = self._run_request(current, validation.run_id)
-                confirmed = self._confirmed(run_request)
-                task = next(
-                    item
-                    for item in confirmed.proposal.plan.tasks
-                    if item.task_id == validation.task_id
-                )
+                assert confirmed is not None
+                assert task is not None
+                assert ingest_bundle is not None
                 staged = self.validator.resolve(artifact)
                 catalog = self.catalog.load(project_id=self.project_id)
                 entry = self._catalog_entry(
@@ -567,11 +589,13 @@ class MaterialProductionOrchestrator:
                     job=job,
                     confirmed=confirmed,
                     task=task,
+                    ingest_bundle=ingest_bundle,
                 )
                 updated_catalog = self.catalog.register(
                     catalog,
                     entry=entry,
                     staged_path=staged,
+                    derivative_sources=ingest_bundle.derivative_sources,
                 )
                 current = self._append(
                     current,
@@ -605,6 +629,7 @@ class MaterialProductionOrchestrator:
         job,
         confirmed,
         task,
+        ingest_bundle,
     ):
         digest = validation.sha256
         assert digest is not None
@@ -655,6 +680,10 @@ class MaterialProductionOrchestrator:
             quality_validation_id=validation.validation_id,
             accepted_decision_id=decision.decision_id,
             registered_at=self.clock(),
+            derivatives=ingest_bundle.derivatives,
+            analysis=ingest_bundle.analysis,
+            tags=ingest_bundle.tags,
+            quality_report=ingest_bundle.quality_report,
         )
 
     def run(self, run_id: str):
@@ -767,6 +796,60 @@ class MaterialProductionOrchestrator:
                     "production_run_id": entry.production_run_id,
                     "license_status": entry.license_status,
                     "usage_restrictions": entry.usage_restrictions,
+                    "derivatives": tuple(
+                        {
+                            "derivative_id": item.derivative_id,
+                            "role": item.role,
+                            "mime_type": item.mime_type,
+                            "size_bytes": item.size_bytes,
+                            "duration_seconds": item.duration_seconds,
+                            "width": item.width,
+                            "height": item.height,
+                            "fps": item.fps,
+                        }
+                        for item in entry.derivatives
+                    ),
+                    "analysis": (
+                        {
+                            "analysis_id": entry.analysis.analysis_id,
+                            "media_kind": entry.analysis.media_kind,
+                            "orientation": entry.analysis.orientation,
+                            "duration_seconds": entry.analysis.duration_seconds,
+                            "width": entry.analysis.width,
+                            "height": entry.analysis.height,
+                            "fps": entry.analysis.fps,
+                            "audio_sample_rate": entry.analysis.audio_sample_rate,
+                            "audio_channels": entry.analysis.audio_channels,
+                            "technical_digest": entry.analysis.technical_digest,
+                        }
+                        if entry.analysis is not None
+                        else None
+                    ),
+                    "tags": tuple(
+                        {
+                            "namespace": item.namespace,
+                            "name": item.name,
+                            "value": item.value,
+                        }
+                        for item in entry.tags
+                    ),
+                    "quality": (
+                        {
+                            "report_id": entry.quality_report.report_id,
+                            "overall_status": entry.quality_report.overall_status,
+                            "full_decode_passed": entry.quality_report.full_decode_passed,
+                            "checks": tuple(
+                                {
+                                    "check_id": check.check_id,
+                                    "status": check.status,
+                                    "message": check.message,
+                                }
+                                for check in entry.quality_report.checks
+                            ),
+                        }
+                        if entry.quality_report is not None
+                        else None
+                    ),
                 }
                 for entry in catalog.entries
             ),
