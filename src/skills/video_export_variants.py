@@ -62,6 +62,7 @@ class VideoExportVariantsInput(BaseModel):
     variants: tuple[VideoExportVariant, ...] = Field(min_length=2, max_length=8)
     subtitle_mode: Literal["none", "burn"] = "none"
     subtitle_track_ids: tuple[str, ...] = ()
+    subtitle_sync_policy: Literal["auto", "require_aligned", "not_applicable"] = "auto"
     output_policy: Literal["create_new"] = "create_new"
 
     @model_validator(mode="after")
@@ -77,6 +78,8 @@ class VideoExportVariantsInput(BaseModel):
             raise ValueError("Variant output paths must be unique")
         if self.subtitle_mode == "none" and self.subtitle_track_ids:
             raise ValueError("Subtitle track IDs require subtitle_mode=burn")
+        if self.subtitle_sync_policy == "require_aligned" and self.subtitle_mode != "burn":
+            raise ValueError("Aligned subtitle export requires subtitle_mode=burn")
         if self.subtitle_track_ids != tuple(sorted(set(self.subtitle_track_ids))):
             raise ValueError("Subtitle track IDs must be unique and stably sorted")
         return self
@@ -121,6 +124,10 @@ class VideoExportVariantsSkill(BaseSkill):
         known_subtitle_ids = set(timeline.subtitle_tracks)
         if selected_subtitle_ids - known_subtitle_ids:
             raise ValueError("Subtitle burn references an unknown track")
+        if params.subtitle_sync_policy == "require_aligned":
+            selected = [track for track in timeline.subtitle_tracks.values() if track.track_id in selected_subtitle_ids]
+            if not selected or any(not cue.words for track in selected for cue in track.cues if track.enabled and cue.enabled):
+                raise ValueError("Aligned subtitle export requires word-timed cues on every selected caption track")
 
         staged: list[
             tuple[VideoExportVariant, Path, tuple[str, ...], tuple[dict[str, Any], ...]]

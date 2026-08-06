@@ -8,6 +8,7 @@ from pathlib import Path
 
 from contracts import DirectorOperation, DirectorPlan
 from delivery_qc import DeliveryQCRequest, DeliveryQCService, QCSubtitleCueEvidence
+from subtitle_alignment import SubtitleSyncQCInput, SubtitleSyncQCService
 from director import digest_json
 from plan_review import (
     PlanDiffRequest,
@@ -120,6 +121,10 @@ class DeliveryWorkflowService:
                 } for variant in plan.variants],
                 "subtitle_mode": plan.preferences.subtitle_mode,
                 "subtitle_track_ids": list(plan.subtitle_track_ids),
+                "subtitle_sync_policy": (
+                    "require_aligned" if plan.subtitle_alignment_report is not None
+                    else "auto"
+                ),
                 "output_policy": "create_new",
             },
             rationale=f"Deliver exact project version {plan.project.version_id} under brand pack {plan.brand.brand_pack_id} and preference profile {plan.preferences.preference_id}.",
@@ -151,7 +156,7 @@ class DeliveryWorkflowService:
             registry_ref=RegistrySchemaReference.from_registry(registry),
         )
 
-    def finalize(self, plan, *, confirmation_id, execution_id, atomic_result):
+    def finalize(self, plan, *, confirmation_id, execution_id, atomic_result, timeline=None):
         if atomic_result.status != "success" or atomic_result.tool_name != "VideoExportVariantsSkill" or atomic_result.execution_id != execution_id:
             raise DeliveryWorkflowError("Delivery execution result is failed or mismatched")
         paths = self._paths(plan)
@@ -182,6 +187,22 @@ class DeliveryWorkflowService:
                     safe_area_status="passed",
                 ))
             subtitle_cues = tuple(sorted(subtitle_cues, key=lambda item: item.cue_id))
+            subtitle_sync = None
+            if plan.subtitle_alignment_report is not None:
+                if timeline is None:
+                    raise DeliveryWorkflowError("Sync-gated delivery requires the exact confirmed timeline")
+                subtitle_sync = SubtitleSyncQCService().analyze(
+                    timeline,
+                    SubtitleSyncQCInput(
+                        report=plan.subtitle_alignment_report,
+                        track_id=plan.subtitle_track_ids[0],
+                        cue_id_prefix=plan.subtitle_cue_id_prefix,
+                        rendered_media_path=str(path),
+                        expected_rendered_sha256=content_digest.removeprefix("sha256:"),
+                    ),
+                )
+                if subtitle_sync.status != "passed":
+                    raise DeliveryWorkflowError("Finished delivery failed subtitle synchronization QC")
             qc = DeliveryQCService(allowlisted_roots=(path.parent,)).analyze(
                 DeliveryQCRequest(
                     request_id=f"qc_request_{plan.delivery_plan_id}_{variant.variant_id}",
@@ -191,6 +212,7 @@ class DeliveryWorkflowService:
                     expected_content_digest=content_digest,
                     profile=variant.qc_profile,
                     subtitle_cues=subtitle_cues,
+                    subtitle_sync_evidence=subtitle_sync,
                 ), source_path=path,
             )
             items.append(DeliveryManifestItem(

@@ -16,11 +16,14 @@ class VideoExportInput(BaseModel):
     clear_timeline_after: bool = Field(False, description="是否在导出成功后清空整个时间线，准备下一个项目")
     subtitle_mode: str = Field("none", pattern=r"^(none|burn)$")
     subtitle_track_ids: tuple[str, ...] = ()
+    subtitle_sync_policy: Literal["auto", "require_aligned", "not_applicable"] = "auto"
 
     @model_validator(mode="after")
     def subtitle_fields(self):
         if self.subtitle_mode == "none" and self.subtitle_track_ids:
             raise ValueError("Subtitle track IDs require subtitle_mode=burn")
+        if self.subtitle_sync_policy == "require_aligned" and self.subtitle_mode != "burn":
+            raise ValueError("Aligned subtitle export requires subtitle_mode=burn")
         if len(self.subtitle_track_ids) != len(set(self.subtitle_track_ids)):
             raise ValueError("Subtitle track IDs must be unique")
         if self.subtitle_track_ids != tuple(sorted(self.subtitle_track_ids)):
@@ -37,6 +40,10 @@ class VideoExportSkill(BaseSkill):
 
     def run(self, params: VideoExportInput) -> Dict[str, Any]:
         timeline = TimelineManager.get_current_timeline()
+        if params.subtitle_sync_policy == "require_aligned":
+            selected = [track for track in timeline.subtitle_tracks.values() if track.track_id in params.subtitle_track_ids]
+            if not selected or any(not cue.words for track in selected for cue in track.cues if track.enabled and cue.enabled):
+                raise ValueError("Aligned subtitle export requires word-timed cues on every selected caption track")
         video_clip_count = sum(
             len(track.clips)
             for track in timeline.tracks.values()

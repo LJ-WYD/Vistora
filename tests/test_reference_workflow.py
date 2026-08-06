@@ -118,8 +118,9 @@ def test_reference_main_workflow_is_traceable_and_repeatable() -> None:
     assert first.delivery_qc_report.status in {"passed", "warning"}
     assert {item.check_id for item in first.delivery_qc_report.checks} == {
         "audio_tracks", "black_frames", "codec", "duration", "frame_size",
-        "freeze_frames", "full_decode", "loudness", "subtitles",
-    }
+            "freeze_frames", "full_decode", "loudness", "subtitles",
+            "subtitle_sync",
+        }
     assert next(
         item for item in first.delivery_qc_report.checks
         if item.check_id == "full_decode"

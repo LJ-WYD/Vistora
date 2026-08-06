@@ -416,6 +416,25 @@ fillback remains the separate O29 Director review → confirmation → EditingAg
 
 ## Finished-media automatic QC (O31)
 
+### Narration-bound subtitle synchronization
+
+Vistora treats subtitle timing as evidence derived from the final narration,
+not as estimated sentence durations. `AudioAlignTranscriptSkill` produces a
+frozen report bound to the exact audio SHA-256, clip playback state, timeline
+position, transcript, provider and word timestamps. After independent review,
+`SubtitleBuildFromAlignmentSkill` atomically replaces one caption track with
+short, non-overlapping cues and exact word timing; Chinese narration uses a
+bounded 0.20-second display lead by default. Any narration replacement, trim,
+speed change or timeline move makes the report stale and blocks mutation.
+
+`SubtitleSyncQCSkill` compares the confirmed caption track against that report
+and can correlate the final encoded audio with the source narration. Delivery
+profiles may set `require_subtitle_sync=true`; those exports fail closed unless
+the evidence passes and is bound to the exact finished-file digest. Production
+alignment is provider-neutral and fail-closed: configure
+`VISTORA_ALIGNMENT_PYTHON` and `VISTORA_ALIGNMENT_MODEL` for the isolated
+faster-whisper adapter. Deterministic fake alignment exists only in tests.
+
 `src/delivery_qc/` provides a strict, frozen `1.0.0` profile/request/report
 boundary for a finished export. The read-only analyzer binds an opaque asset
 ID, exact project revision, source SHA-256 and profile, then uses argument-list

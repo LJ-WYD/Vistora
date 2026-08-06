@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from director import digest_json
 from delivery_qc import DeliveryQCProfile
+from subtitle_alignment import SubtitleAlignmentReport
 
 
 StableId = Annotated[str, Field(min_length=3, max_length=128, pattern=r"^[A-Za-z][A-Za-z0-9._:-]*$")]
@@ -155,6 +156,11 @@ class DeliveryPlan(DeliveryModel):
     preferences: UserPreferenceProfile
     variants: tuple[DeliveryVariantSpecification, ...] = Field(min_length=2, max_length=8)
     subtitle_track_ids: tuple[StableId, ...] = ()
+    subtitle_alignment_report: SubtitleAlignmentReport | None = None
+    subtitle_cue_id_prefix: str | None = Field(
+        default=None, min_length=3, max_length=100,
+        pattern=r"^[A-Za-z][A-Za-z0-9._:-]*$",
+    )
     plan_digest: Digest
 
     @classmethod
@@ -172,6 +178,15 @@ class DeliveryPlan(DeliveryModel):
             raise ValueError("Delivery preferences reference an absent variant")
         if self.subtitle_track_ids != tuple(sorted(set(self.subtitle_track_ids))):
             raise ValueError("Delivery subtitle tracks must be unique and ordered")
+        requires_sync = any(item.qc_profile.require_subtitle_sync for item in self.variants)
+        if requires_sync and (
+            self.subtitle_alignment_report is None
+            or self.subtitle_cue_id_prefix is None
+            or not self.subtitle_track_ids
+        ):
+            raise ValueError("Sync-gated delivery requires aligned captions and their immutable report")
+        if self.subtitle_alignment_report is not None and self.subtitle_cue_id_prefix is None:
+            raise ValueError("Aligned delivery requires a deterministic cue ID prefix")
         payload = self.model_dump(mode="json", exclude={"plan_digest"})
         if self.plan_digest != digest_json(payload):
             raise ValueError("Delivery plan digest mismatched")

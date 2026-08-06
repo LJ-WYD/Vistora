@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from director import digest_json
+from subtitle_alignment import SubtitleSyncQCResult
 
 
 Digest = str
@@ -31,6 +32,7 @@ class DeliveryQCProfile(QCModel):
     minimum_audio_streams: int = Field(default=1, ge=0, le=32)
     maximum_audio_streams: int = Field(default=8, ge=0, le=32)
     require_subtitles: bool = False
+    require_subtitle_sync: bool = False
     black_duration_threshold_seconds: float = Field(default=0.5, gt=0, le=30, allow_inf_nan=False)
     freeze_duration_threshold_seconds: float = Field(default=2.0, gt=0, le=120, allow_inf_nan=False)
     target_lufs: float = Field(default=-14, ge=-36, le=-5, allow_inf_nan=False)
@@ -73,12 +75,22 @@ class DeliveryQCRequest(QCModel):
     expected_content_digest: Digest = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     profile: DeliveryQCProfile
     subtitle_cues: tuple[QCSubtitleCueEvidence, ...] = ()
+    subtitle_sync_evidence: SubtitleSyncQCResult | None = None
 
     @model_validator(mode="after")
     def exact_subtitles(self):
         ids = [item.cue_id for item in self.subtitle_cues]
         if ids != sorted(set(ids)):
             raise ValueError("QC subtitle evidence must have unique ordered IDs")
+        if self.profile.require_subtitle_sync:
+            evidence = self.subtitle_sync_evidence
+            if evidence is None or evidence.status != "passed":
+                raise ValueError("QC requires passed subtitle synchronization evidence")
+            if evidence.rendered_content_sha256 is None or (
+                "sha256:" + evidence.rendered_content_sha256
+                != self.expected_content_digest
+            ):
+                raise ValueError("Subtitle sync evidence is not bound to this finished asset")
         return self
 
     def digest(self):
@@ -90,6 +102,7 @@ class DeliveryQCCheck(QCModel):
     check_id: Literal[
         "audio_tracks", "black_frames", "codec", "duration", "frame_size",
         "freeze_frames", "full_decode", "loudness", "subtitles",
+        "subtitle_sync",
     ]
     status: Literal["passed", "warning", "failed", "not_applicable"]
     message: str = Field(min_length=1, max_length=500)

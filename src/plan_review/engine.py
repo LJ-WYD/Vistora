@@ -39,6 +39,7 @@ from timeline_edit import (
     TrackMixSettings,
 )
 from audio_analysis import clip_audio_state_digest
+from subtitle_alignment import build_aligned_cues
 from subtitles import (
     SubtitleCue,
     SubtitleCodecError,
@@ -986,6 +987,31 @@ class PlanDiffEngine:
                     ),
                 )
                 message = "Read-only loudness analysis is safely previewable."
+            elif step.tool_name in {"AudioAlignTranscriptSkill", "SubtitleSyncQCSkill"}:
+                report = getattr(params, "report", None)
+                target_track_id = report.track_id if report is not None else params.track_id
+                target_clip_id = report.clip_id if report is not None else params.clip_id
+                target = next(
+                    ((track, clip) for track in snapshot.tracks if track.track_id == target_track_id
+                     for clip in track.clips if clip.clip_id == target_clip_id),
+                    None,
+                )
+                if target is None:
+                    raise PlanDiffValidationError("Subtitle alignment target is absent from the snapshot")
+                append_change(
+                    step=step, category="subtitle_alignment", effect_kind="informational",
+                    severity="info", entity=ProposedEntityReference(
+                        entity_kind="clip", entity_id=target_clip_id,
+                        track_id=target_track_id, track_key=target[0].track_key,
+                    ), before=_clip_state(target[1], target[0].track_key, target_track_id),
+                    after=_clip_state(target[1], target[0].track_key, target_track_id),
+                    reason=(
+                        "This read-only step creates narration-bound word timing evidence."
+                        if step.tool_name == "AudioAlignTranscriptSkill" else
+                        "This read-only step verifies exact aligned cues and optional final audio mux synchronization."
+                    ),
+                )
+                message = "Read-only subtitle alignment evidence is safely previewable."
             elif step.tool_name in {
                 "SubtitleManageTrackSkill",
                 "SubtitleEditCueSkill",
@@ -995,6 +1021,11 @@ class PlanDiffEngine:
                     step=step,
                     params=params,
                     timeline=core_timeline,
+                    append_change=append_change,
+                )
+            elif step.tool_name == "SubtitleBuildFromAlignmentSkill":
+                status, message, core_timeline = PlanDiffEngine._preview_alignment_build(
+                    step=step, params=params, timeline=core_timeline,
                     append_change=append_change,
                 )
             elif step.tool_name == "SubtitleExportSidecarSkill":
@@ -1497,6 +1528,54 @@ class PlanDiffEngine:
                 reason="The proposal creates, removes, or precisely changes this subtitle cue.",
             )
         return "previewed", f"Deterministically previews subtitle operation {outcome.operation}.", updated
+
+    @staticmethod
+    def _preview_alignment_build(*, step, params, timeline, append_change):
+        before_tracks, before_cues = _subtitle_maps(timeline)
+        try:
+            _, source_track, source_clip = TimelineEditEngine(timeline).clip_state(
+                params.report.track_id, params.report.clip_id
+            )
+            if clip_audio_state_digest(source_track.id, source_clip) != params.report.analyzed_clip_digest:
+                raise SubtitleEditError("Subtitle alignment is stale for the narration clip")
+            engine = SubtitleEditEngine(timeline)
+            if params.create_track:
+                engine.manage_track(SubtitleManageTrackInput(
+                    action="create", track_id=params.track_id, kind="subtitle",
+                    role="captions", language=params.language,
+                ))
+            key, track = engine._find_track(params.track_id)
+            engine._replace_track(key, track.model_copy(update={"cues": ()}))
+            updated, outcome = engine.edit_cues(SubtitleEditCueInput(
+                action="batch_add", track_id=params.track_id,
+                cues=build_aligned_cues(params.report, params.cue_id_prefix),
+            ))
+        except (SubtitleEditError, TimelineEditError, ValueError) as exc:
+            raise PlanDiffValidationError(str(exc)) from exc
+        after_tracks, after_cues = _subtitle_maps(updated)
+        for track_id in sorted(before_tracks.keys() | after_tracks.keys()):
+            old, new = before_tracks.get(track_id), after_tracks.get(track_id)
+            if old != new:
+                append_change(
+                    step=step, category="subtitle_track", effect_kind="direct",
+                    severity="info", entity=ProposedEntityReference(
+                        entity_kind="subtitle_track", entity_id=track_id, track_id=track_id,
+                    ), before_subtitle_track=old, after_subtitle_track=new,
+                    reason="The proposal replaces this caption track with narration-aligned cues.",
+                )
+        for key in sorted(before_cues.keys() | after_cues.keys()):
+            old, new = before_cues.get(key), after_cues.get(key)
+            if old == new:
+                continue
+            append_change(
+                step=step,
+                category="subtitle_cue_addition" if old is None else "subtitle_cue_removal" if new is None else "subtitle_cue_change",
+                effect_kind="direct", severity="info",
+                entity=ProposedEntityReference(entity_kind="subtitle_cue", entity_id=key[1], track_id=key[0]),
+                before_subtitle_cue=old, after_subtitle_cue=new,
+                reason="The proposal binds this cue and its words to immutable narration timing evidence.",
+            )
+        return "previewed", f"Deterministically previews {len(outcome.created_cue_ids)} aligned subtitle cues.", updated
 
     @staticmethod
     def _preview_core_edit(

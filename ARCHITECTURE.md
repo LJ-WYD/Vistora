@@ -1254,6 +1254,17 @@ review, immutable confirmation, EditingAgent and registered atomic-tool chain.
 
 ### Original O31 finished-media QC
 
+The post-V1 subtitle synchronization extension adds three registry-revision 15
+entries without creating a second editing path. `AudioAlignTranscriptSkill` is
+read-only and returns a versioned report bound to exact narration bytes and
+clip state. `SubtitleBuildFromAlignmentSkill` is a confirmed atomic timeline
+mutation using the existing subtitle transaction/checkpoint/trace boundary.
+`SubtitleSyncQCSkill` is read-only and validates exact cues/words plus optional
+finished-audio correlation. Multi-spec delivery may require that passed result;
+the QC request additionally binds it to the exact finished asset digest. The
+Director may plan these tools, but cannot align, confirm, mutate, or waive the
+gate itself.
+
 `delivery_qc` is a read-only post-render analysis boundary. A versioned profile
 and request bind the opaque delivery asset, exact project revision, content
 SHA-256, expected duration/frame/audio/codec constraints, black/freeze

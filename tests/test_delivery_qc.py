@@ -22,6 +22,7 @@ from delivery_qc import (  # noqa: E402
     DeliveryQCService,
     QCSubtitleCueEvidence,
 )
+from subtitle_alignment import SubtitleSyncQCResult  # noqa: E402
 
 
 def _digest(path):
@@ -94,7 +95,7 @@ def test_qc_contracts_are_versioned_frozen_strict_and_digest_bound(tmp_path):
         type(report).model_validate({**report.model_dump(), "report_id": "qc_report_tampered"})
 
 
-def test_all_nine_checks_are_deterministic_cached_and_browser_safe(tmp_path):
+def test_all_ten_checks_are_deterministic_cached_and_browser_safe(tmp_path):
     media = tmp_path / "delivery.mp4"
     media.write_bytes(b"finished-media")
     runner = FakeRunner()
@@ -111,7 +112,8 @@ def test_all_nine_checks_are_deterministic_cached_and_browser_safe(tmp_path):
     assert first == second and len(runner.calls) == calls
     assert [item.check_id for item in first.checks] == [
         "audio_tracks", "black_frames", "codec", "duration", "frame_size",
-        "freeze_frames", "full_decode", "loudness", "subtitles",
+        "freeze_frames", "full_decode", "loudness", "subtitle_sync",
+        "subtitles",
     ]
     payload = first.model_dump_json()
     assert str(tmp_path) not in payload
@@ -136,6 +138,38 @@ def test_black_freeze_loudness_subtitle_and_decode_failures_are_truthful(tmp_pat
     assert checks["freeze_frames"].status == "warning"
     assert checks["subtitles"].status == "failed"
     assert checks["full_decode"].status == "failed"
+
+
+def test_required_subtitle_sync_is_exact_finished_asset_bound(tmp_path):
+    media = tmp_path / "delivery.mp4"
+    media.write_bytes(b"finished-media")
+    bare_digest = hashlib.sha256(media.read_bytes()).hexdigest()
+    sync = SubtitleSyncQCResult.create(
+        status="passed", sync_qc_id="sync_delivery_0001",
+        report_id="alignment_delivery_0001", report_digest="sha256:" + "1" * 64,
+        track_id="subtitle_delivery", source_sha256="2" * 64,
+        analyzed_clip_digest="3" * 64, timeline_status="passed",
+        maximum_timeline_error_seconds=0, rendered_content_sha256=bare_digest,
+        audio_mux_offset_seconds=0.005, audio_correlation=0.99,
+        checks=("source_binding_passed", "timeline_words_passed", "rendered_audio_sync_passed"),
+    )
+    profile = DeliveryQCProfile(
+        profile_id="qc_profile_sync_0001", expected_width=1920, expected_height=1080,
+        require_subtitle_sync=True,
+    )
+    request = DeliveryQCRequest(
+        request_id="qc_request_sync_0001", project_id="project_qc_sync_0001",
+        project_revision=12, asset_id="delivery_asset_sync_0001",
+        expected_content_digest=_digest(media), profile=profile,
+        subtitle_sync_evidence=sync,
+    )
+    report = DeliveryQCService(allowlisted_roots=(tmp_path,), runner=FakeRunner()).analyze(request, source_path=media)
+    assert {item.check_id: item.status for item in report.checks}["subtitle_sync"] == "passed"
+    with pytest.raises(ValidationError, match="finished asset"):
+        DeliveryQCRequest.model_validate({
+            **request.model_dump(mode="python"),
+            "expected_content_digest": "sha256:" + "f" * 64,
+        })
 
 
 def test_probe_failure_digest_drift_and_path_escape_fail_closed(tmp_path):

@@ -264,7 +264,7 @@ def test_registry_gateway_requires_exact_confirmation_and_replays(
     monkeypatch.setattr(timeline_manager, "PROJECT_FILE", str(project))
     monkeypatch.setattr(timeline_manager, "WORKSPACE_DIR", str(project.parent))
     registry = build_production_registry()
-    assert registry.reference.registry_revision == 14 and len(registry) == 43
+    assert registry.reference.registry_revision == 15 and len(registry) == 46
     request = AtomicToolRequestEnvelope(
         request_id="request_visual_gateway",
         execution_id="execution_visual_gateway",

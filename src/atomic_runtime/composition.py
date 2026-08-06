@@ -8,6 +8,13 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict
 
 from audio_analysis import LoudnessAnalysisResult
+from subtitle_alignment import (
+    SubtitleAlignmentBuildResult,
+    SubtitleAlignmentReport,
+    SubtitleAlignmentService,
+    SubtitleSyncQCResult,
+    SubtitleSyncQCService,
+)
 from skills.audio_timeline_edits import (
     AudioApplyDuckingSkill,
     AudioAnalyzeLoudnessSkill,
@@ -20,6 +27,11 @@ from skills.subtitle_timeline_edits import (
     SubtitleExportSidecarSkill,
     SubtitleImportSkill,
     SubtitleManageTrackSkill,
+)
+from skills.subtitle_alignment import (
+    AudioAlignTranscriptSkill,
+    SubtitleBuildFromAlignmentSkill,
+    SubtitleSyncQCSkill,
 )
 from skills.timeline_transitions import (
     TimelineAddTransitionSkill,
@@ -298,6 +310,8 @@ def _entry(
 def build_production_registry(
     *,
     timeline_id_factory: Callable[[str], str] | None = None,
+    subtitle_alignment_service: SubtitleAlignmentService | None = None,
+    subtitle_sync_qc_service: SubtitleSyncQCService | None = None,
 ) -> AtomicSkillRegistry:
     """Build a fresh immutable registry; no process-global mutable singleton."""
 
@@ -309,7 +323,7 @@ def build_production_registry(
     )
     return AtomicSkillRegistry(
         registry_id="registry_atomic_skills",
-        registry_revision=14,
+        registry_revision=15,
         entries=(
             _entry(
                 VideoAddClipSkill(),
@@ -411,6 +425,26 @@ def build_production_registry(
                 rollback_support="none",
                 required_capabilities=("ffmpeg", "local_media_read"),
             ),
+            _entry(
+                AudioAlignTranscriptSkill(subtitle_alignment_service),
+                SubtitleAlignmentReport,
+                side_effects=(),
+                transactionality="none",
+                retry_safety="intrinsically_idempotent",
+                preview_supported=True,
+                rollback_support="none",
+                required_capabilities=("local_media_read", "word_alignment"),
+            ),
+            _entry(
+                SubtitleSyncQCSkill(subtitle_sync_qc_service),
+                SubtitleSyncQCResult,
+                side_effects=(),
+                transactionality="none",
+                retry_safety="intrinsically_idempotent",
+                preview_supported=True,
+                rollback_support="none",
+                required_capabilities=("ffmpeg", "local_media_read"),
+            ),
             *tuple(
                 _entry(
                     skill,
@@ -449,6 +483,16 @@ def build_production_registry(
                     SubtitleEditCueSkill(),
                     SubtitleImportSkill(),
                 )
+            ),
+            _entry(
+                SubtitleBuildFromAlignmentSkill(),
+                SubtitleAlignmentBuildResult,
+                side_effects=("files", "timeline"),
+                transactionality="atomic_project_state",
+                retry_safety="gateway_replay_only",
+                preview_supported=True,
+                rollback_support="checkpoint_restore",
+                required_capabilities=(),
             ),
             _entry(
                 SubtitleExportSidecarSkill(),

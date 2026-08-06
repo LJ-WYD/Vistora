@@ -124,6 +124,7 @@ class DeliveryQCService:
             ) for check_id in (
                 "audio_tracks", "black_frames", "codec", "duration", "frame_size",
                 "freeze_frames", "full_decode", "loudness", "subtitles",
+                "subtitle_sync",
             )]
             return self._finish(request, content_digest, probe, checks, cache_key)
         profile = request.profile
@@ -158,6 +159,28 @@ class DeliveryQCService:
         subtitles_present = bool(cues) or probe.subtitle_streams > 0
         subtitle_ok = (not profile.require_subtitles or subtitles_present) and not overlap and not unsafe
         checks.append(DeliveryQCCheck(check_id="subtitles", status="passed" if subtitle_ok else "failed", message="Subtitle presence, timing and safe-area evidence pass." if subtitle_ok else "Subtitles are missing, overlapping or outside the safe area.", observed={"cue_count": len(cues), "stream_count": probe.subtitle_streams, "overlaps": overlap, "unsafe_cues": unsafe}))
+        sync = request.subtitle_sync_evidence
+        if sync is None:
+            checks.append(DeliveryQCCheck(
+                check_id="subtitle_sync",
+                status="failed" if profile.require_subtitle_sync else "not_applicable",
+                message=(
+                    "Passed narration-to-caption synchronization evidence is required."
+                    if profile.require_subtitle_sync else
+                    "This QC profile does not require narration-to-caption synchronization evidence."
+                ),
+            ))
+        else:
+            checks.append(DeliveryQCCheck(
+                check_id="subtitle_sync", status="passed" if sync.status == "passed" else "failed",
+                message="Narration, timed words, and final audio mux are synchronized." if sync.status == "passed" else "Narration-to-caption synchronization failed.",
+                observed={
+                    "sync_qc_id": sync.sync_qc_id,
+                    "maximum_timeline_error_seconds": sync.maximum_timeline_error_seconds,
+                    "audio_mux_offset_seconds": sync.audio_mux_offset_seconds,
+                    "audio_correlation": sync.audio_correlation,
+                },
+            ))
         decode = self._command(["ffmpeg", "-v", "error", "-nostdin", "-i", str(path), "-map", "0", "-f", "null", os.devnull])
         checks.append(DeliveryQCCheck(check_id="full_decode", status="passed" if decode.returncode == 0 else "failed", message="Every encoded stream decoded completely." if decode.returncode == 0 else "Complete media decode failed."))
         return self._finish(request, content_digest, probe, checks, cache_key)
