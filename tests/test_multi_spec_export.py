@@ -28,7 +28,13 @@ from contracts import (  # noqa: E402
     PlanReference,
 )
 from core import timeline_manager  # noqa: E402
-from core.timeline import ClipConfig, TimelineConfig, TimelineRenderer, TrackConfig  # noqa: E402
+from core.timeline import (  # noqa: E402
+    ClipConfig,
+    TimelineConfig,
+    TimelineRenderer,
+    TrackConfig,
+    _bounded_ffmpeg_export_timeout_seconds,
+)
 from plan_review import (  # noqa: E402
     PlanDiffEngine,
     PlanDiffRequest,
@@ -44,6 +50,27 @@ from timeline_query import TimelineSnapshotReference, TimelineSnapshotService  #
 
 
 NOW = datetime(2026, 8, 5, tzinfo=timezone.utc)
+
+
+def test_multitrack_ffmpeg_timeout_scales_with_declared_render_work() -> None:
+    assert _bounded_ffmpeg_export_timeout_seconds(
+        duration_seconds=1,
+        width=320,
+        height=180,
+        video_layer_count=1,
+    ) == 60
+    assert _bounded_ffmpeg_export_timeout_seconds(
+        duration_seconds=62,
+        width=1080,
+        height=1920,
+        video_layer_count=5,
+    ) == 930
+    assert _bounded_ffmpeg_export_timeout_seconds(
+        duration_seconds=3600,
+        width=3840,
+        height=2160,
+        video_layer_count=8,
+    ) == 3600
 
 
 def _timeline(source: str = "source.mp4") -> TimelineConfig:

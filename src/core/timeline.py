@@ -1,9 +1,31 @@
+import math
 import os
 from typing import Any, List, Dict, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from moviepy import VideoFileClip, AudioFileClip, CompositeVideoClip, CompositeAudioClip
 
 TIMELINE_MODEL_VERSION = "2.0.0"
+
+
+def _bounded_ffmpeg_export_timeout_seconds(
+    *,
+    duration_seconds: float,
+    width: int,
+    height: int,
+    video_layer_count: int,
+) -> int:
+    """Return a deterministic timeout scaled to declared render work.
+
+    A fixed 30-second process timeout incorrectly rejects normal long-form or
+    multi-layer exports.  This bound scales with duration, canvas area, and
+    layer count while retaining a hard one-hour ceiling for fail-closed
+    recovery.
+    """
+
+    canvas_factor = max(1.0, (width * height) / (1920 * 1080))
+    layer_factor = max(1.0, video_layer_count / 2)
+    estimated = math.ceil(duration_seconds * 6 * canvas_factor * layer_factor)
+    return max(60, min(3600, estimated))
 
 
 class FreezeFrameSettings(BaseModel):
@@ -1818,13 +1840,19 @@ class TimelineRenderer:
         output_dir = os.path.dirname(output_path)
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)
+        render_timeout_seconds = _bounded_ffmpeg_export_timeout_seconds(
+            duration_seconds=duration,
+            width=self.config.width,
+            height=self.config.height,
+            video_layer_count=len(video_items),
+        )
         try:
             subprocess.run(
                 command,
                 check=True,
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=render_timeout_seconds,
             )
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(
