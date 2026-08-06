@@ -727,7 +727,7 @@ def test_registry_replaces_only_configured_capabilities_without_path_leaks(tmp_p
     )
     projected = build_creation_capability_reference(registry)
     by_id = {item.capability_id: item for item in projected.capabilities}
-    assert registry.reference().registry_revision == 3
+    assert registry.reference().registry_revision == 4
     assert by_id["voice_synthesis"].availability == "available"
     assert by_id["video_generation"].availability == "unconfigured"
     serialized = registry.reference().model_dump_json()
@@ -748,6 +748,129 @@ def test_registry_exposes_configured_comfyui_image_generation(tmp_path):
     assert by_id["video_generation"].availability == "unconfigured"
     serialized = registry.reference().model_dump_json()
     assert "image workflow.json" not in serialized
+
+
+def test_wan_image_to_video_binds_integer_controls_and_reference(tmp_path):
+    workflow_path = tmp_path / "wan2.2-i2v.json"
+    workflow_path.write_text(
+        json.dumps(
+            {
+                "97": {"class_type": "LoadImage", "inputs": {"image": "start.png"}},
+                "108": {
+                    "class_type": "SaveVideo",
+                    "inputs": {"filename_prefix": "video/ComfyUI", "video": ["152", 0]},
+                },
+                "124": {"class_type": "Prompt", "inputs": {"positive": "old"}},
+                "139": {"class_type": "CLIPTextEncode", "inputs": {"text": "old"}},
+                "149": {"class_type": "KSamplerAdvanced", "inputs": {"noise_seed": 1}},
+                "170": {"class_type": "PrimitiveInt", "inputs": {"value": 480}},
+                "171": {"class_type": "PrimitiveInt", "inputs": {"value": 832}},
+                "172": {"class_type": "PrimitiveInt", "inputs": {"value": 5}},
+                "173": {"class_type": "PrimitiveInt", "inputs": {"value": 16}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = ComfyUIProviderConfig.model_validate(
+        {
+            "workflows": [
+                {
+                    "workflow_id": "wan_2_2_i2v",
+                    "capability_ids": [
+                        "image_to_video_generation",
+                        "video_generation",
+                    ],
+                    "workflow_path": str(workflow_path),
+                    "output_node_ids": ["108"],
+                    "bindings": [
+                        {
+                            "node_id": "97",
+                            "input_name": "image",
+                            "source": "reference_asset",
+                            "reference_index": 0,
+                            "reference_kind": "image",
+                        },
+                        {"node_id": "124", "input_name": "positive", "source": "prompt_text"},
+                        {"node_id": "139", "input_name": "text", "source": "negative_prompt"},
+                        {"node_id": "170", "input_name": "value", "source": "width", "value_transform": "integer"},
+                        {"node_id": "171", "input_name": "value", "source": "height", "value_transform": "integer"},
+                        {"node_id": "172", "input_name": "value", "source": "duration_seconds", "value_transform": "integer"},
+                        {"node_id": "173", "input_name": "value", "source": "fps", "value_transform": "integer"},
+                        {"node_id": "149", "input_name": "noise_seed", "source": "seed", "value_transform": "integer"},
+                    ],
+                    "unload_models_after": True,
+                }
+            ]
+        }
+    )
+    source = tmp_path / "start image.png"
+    source.write_bytes(b"image")
+    transport = FakeTransport()
+    adapter = ComfyUIMaterialProductionAdapter(
+        config,
+        asset_resolver=lambda _material_id: source,
+        transport=transport,
+        clock=lambda: NOW,
+    )
+    unknown = ProductionEstimate(status="unknown", rationale="Local render.")
+    task = MaterialProductionTask(
+        task_id="task_wan_i2v",
+        requirement_item_id="requirement_wan_i2v",
+        title="Animate one accepted still",
+        purpose="Create a short motion shot from the accepted image.",
+        production_method="generate",
+        status="planned",
+        capability_ids=("image_to_video_generation",),
+        prompt_spec=PromptSpecification(
+            subject="A presenter",
+            scene="A clean editorial studio",
+            camera="Slow forward push",
+            action="Subtle breathing and a slow camera push",
+            lighting="Soft natural key light",
+            style="Photorealistic and restrained",
+            negative_constraints=("No text",),
+        ),
+        reference_asset_ids=("source_1111111111111111",),
+        duration_seconds=4.6,
+        width=480,
+        height=832,
+        fps=16,
+        seed=20260806,
+        batch_id="batch_wan_i2v",
+        cost_estimate=unknown,
+        time_estimate=unknown,
+        quality_gates=("The clip decodes",),
+        retry_strategy=("Retry after review",),
+        alternative_strategy="Use HyperFrames motion on the still.",
+        delivery=DeliveryFileSpecification(
+            media_kind="video",
+            container_or_extension="mp4",
+            mime_type="video/mp4",
+            filename_pattern="wan_{attempt}.mp4",
+        ),
+    )
+    request = ProductionJobRequest(
+        job_id="production_job_wan_i2v",
+        run_id="production_run_wan_i2v",
+        task_id=task.task_id,
+        requirement_item_id=task.requirement_item_id,
+        adapter_id="comfyui_local",
+        capability_id="image_to_video_generation",
+        task_spec=task,
+        attempt=1,
+        idempotency_key="job_key_wan_i2v",
+        requested_at=NOW,
+    )
+    update = adapter.submit(request, staging_root=tmp_path / "staging")
+    assert update.status == "submitted"
+    prepared = transport.submissions[0][1]
+    assert prepared["97"]["inputs"]["image"].endswith("start image.png")
+    assert prepared["170"]["inputs"]["value"] == 480
+    assert prepared["171"]["inputs"]["value"] == 832
+    assert prepared["172"]["inputs"]["value"] == 5
+    assert prepared["173"]["inputs"]["value"] == 16
+    assert prepared["149"]["inputs"]["noise_seed"] == 20260806
+    serialized = update.model_dump_json()
     assert str(tmp_path) not in serialized
 
 

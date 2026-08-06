@@ -113,6 +113,26 @@ class WorkflowStore:
     def _process_is_alive(pid: int) -> bool:
         if pid <= 0:
             return False
+        if os.name == "nt":
+            # ``os.kill(pid, 0)`` is not a reliable liveness probe for a
+            # Python process launched with CREATE_NO_WINDOW/DETACHED_PROCESS:
+            # Windows can report EINVAL for the current, healthy process and
+            # make a live workflow lock look stale.  Query a process handle
+            # instead, which is also how the packaged desktop app runs work.
+            import ctypes
+
+            process_query_limited_information = 0x1000
+            handle = ctypes.windll.kernel32.OpenProcess(
+                process_query_limited_information,
+                False,
+                pid,
+            )
+            if handle:
+                ctypes.windll.kernel32.CloseHandle(handle)
+                return True
+            # Access denied means the process exists but is protected from
+            # this caller; it must never be treated as a dead lock owner.
+            return ctypes.get_last_error() == 5
         try:
             os.kill(pid, 0)
         except ProcessLookupError:

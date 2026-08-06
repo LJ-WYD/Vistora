@@ -69,6 +69,8 @@ class CapabilityRequirement(CreationPlanningModel):
     capability_id: StableId
     capability_kind: Literal[
         "video_generation",
+        "image_to_video_generation",
+        "motion_graphics_generation",
         "image_generation",
         "audio_generation",
         "voice_synthesis",

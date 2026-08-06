@@ -27,13 +27,18 @@ PRODUCTION_CAPABILITY_KINDS = {
     "asset_search": "asset_search",
     "audio_generation": "audio_generation",
     "image_generation": "image_generation",
+    "image_to_video_generation": "image_to_video_generation",
     "local_capture": "capture",
     "manual_import": "manual_import",
     "music_generation": "music_generation",
+    "motion_graphics_generation": "motion_graphics_generation",
     "user_material_request": "user_material_request",
     "video_generation": "video_generation",
     "voice_synthesis": "voice_synthesis",
 }
+
+
+PROVIDER_ADAPTER_PARAMETER = "material_provider_adapter_id"
 
 
 def _now():
@@ -101,7 +106,7 @@ class AdapterRegistry:
             ),
         )
 
-    def select(self, capability_id: str):
+    def select(self, capability_id: str, task_spec=None):
         candidates = [
             adapter
             for adapter in self.adapters.values()
@@ -111,6 +116,23 @@ class AdapterRegistry:
                 and adapter.capability().configured
             )
         ]
+        requested_adapter = None
+        if task_spec is not None:
+            parameters = {
+                item.name: item.value
+                for item in task_spec.reproducibility_parameters
+            }
+            requested_adapter = parameters.get(PROVIDER_ADAPTER_PARAMETER)
+            if requested_adapter is not None and not isinstance(
+                requested_adapter, str
+            ):
+                return None
+        if requested_adapter is not None:
+            candidates = [
+                adapter
+                for adapter in candidates
+                if adapter.capability().adapter_id == requested_adapter
+            ]
         return sorted(
             candidates,
             key=lambda item: item.capability().adapter_id,
@@ -228,10 +250,11 @@ def build_material_production_registry(
     *,
     import_resolver: Callable[[str], Path | None] | None = None,
     comfyui_config=None,
+    hyperframes_config=None,
     asset_resolver: Callable[[str], Path | None] | None = None,
-    registry_revision: int = 3,
+    registry_revision: int = 4,
 ) -> AdapterRegistry:
-    """Build the only production adapter set with optional local ComfyUI."""
+    """Build the production adapter set with optional local providers."""
 
     resolver = import_resolver or (lambda _token: None)
     provider_adapters: tuple[MaterialProductionAdapter, ...] = ()
@@ -245,6 +268,15 @@ def build_material_production_registry(
         )
         provider_adapters = (comfyui,)
         provided_capabilities.update(comfyui.capability().capability_ids)
+    if hyperframes_config is not None:
+        from .hyperframes import HyperFramesMaterialProductionAdapter
+
+        hyperframes = HyperFramesMaterialProductionAdapter(
+            hyperframes_config,
+            asset_resolver=asset_resolver or (lambda _material_id: None),
+        )
+        provider_adapters = (*provider_adapters, hyperframes)
+        provided_capabilities.update(hyperframes.capability().capability_ids)
     provider_capabilities = tuple(
         capability_id
         for capability_id in sorted(PRODUCTION_CAPABILITY_KINDS)

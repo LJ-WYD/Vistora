@@ -80,6 +80,80 @@
       ],
       "unload_models_after": true,
       "supports_targeted_interrupt": false
+    },
+    {
+      "workflow_id": "wan_2_2_image_to_video",
+      "capability_ids": [
+        "image_to_video_generation",
+        "video_generation"
+      ],
+      "workflow_path": "workflows/wan2.2-i2v-api.json",
+      "output_node_ids": [
+        "108"
+      ],
+      "bindings": [
+        {
+          "node_id": "97",
+          "input_name": "image",
+          "source": "reference_asset",
+          "reference_index": 0,
+          "reference_kind": "image",
+          "required": true
+        },
+        {
+          "node_id": "124",
+          "input_name": "positive",
+          "source": "prompt_text",
+          "required": true
+        },
+        {
+          "node_id": "139",
+          "input_name": "text",
+          "source": "negative_prompt",
+          "required": false
+        },
+        {
+          "node_id": "170",
+          "input_name": "value",
+          "source": "width",
+          "value_transform": "integer",
+          "required": true
+        },
+        {
+          "node_id": "171",
+          "input_name": "value",
+          "source": "height",
+          "value_transform": "integer",
+          "required": true
+        },
+        {
+          "node_id": "172",
+          "input_name": "value",
+          "source": "duration_seconds",
+          "value_transform": "integer",
+          "required": true
+        },
+        {
+          "node_id": "173",
+          "input_name": "value",
+          "source": "fps",
+          "value_transform": "integer",
+          "required": true
+        },
+        {
+          "node_id": "149",
+          "input_name": "noise_seed",
+          "source": "seed",
+          "value_transform": "integer",
+          "required": true
+        }
+      ],
+      "default_for_capabilities": [
+        "image_to_video_generation",
+        "video_generation"
+      ],
+      "unload_models_after": true,
+      "supports_targeted_interrupt": false
     }
   ]
 }

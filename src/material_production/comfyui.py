@@ -40,7 +40,7 @@ from .models import (
 )
 
 
-COMFYUI_PROVIDER_VERSION = "1.1.0"
+COMFYUI_PROVIDER_VERSION = "1.2.0"
 COMFYUI_WORKFLOW_PARAMETER = "comfyui_workflow_id"
 _ID = re.compile(r"^[A-Za-z][A-Za-z0-9._:-]{2,127}$")
 _MIME_BY_SUFFIX = {
@@ -100,6 +100,7 @@ class ComfyUIWorkflowBinding(ComfyUIModel):
     reference_index: int | None = Field(default=None, ge=0, le=31)
     reference_kind: Literal["image", "audio", "video"] | None = None
     parameter_name: str | None = Field(default=None, min_length=1, max_length=128)
+    value_transform: Literal["identity", "integer"] = "identity"
     required: bool = True
 
     @model_validator(mode="after")
@@ -639,6 +640,10 @@ class ComfyUIMaterialProductionAdapter(MaterialProductionAdapter):
                     value = self.transport.upload(source, subfolder=upload_subfolder)
         if value is None and binding.required:
             raise ValueError("A required ComfyUI workflow input is unavailable")
+        if value is not None and binding.value_transform == "integer":
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError("ComfyUI integer binding requires a number")
+            value = int(round(value))
         return value
 
     def _prepare_prompt(

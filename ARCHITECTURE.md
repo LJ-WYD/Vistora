@@ -367,7 +367,8 @@ contracts with opaque job/provider references, idempotency keys, attempts,
 progress, explicit cost state, timeout/rate-limit/failure/partial/recovery
 states, and bounded capability metadata. Domain contracts contain no vendor
 SDK types. The single production factory registers the provider-neutral
-capability names `image_generation`, `video_generation`, `voice_synthesis`,
+capability names `image_generation`, `video_generation`,
+`image_to_video_generation`, `motion_graphics_generation`, `voice_synthesis`,
 `music_generation`, `audio_generation`, `asset_search`, `local_capture`,
 `user_material_request`, and `manual_import`. All provider-backed capabilities
 are explicit unconfigured placeholders; manual import is unconfigured without
@@ -376,6 +377,20 @@ an opaque-token resolver. The local user-request adapter records only
 after the user supplies media. Deterministic local image/video/audio adapters
 are exported for tests only and are never registered by the production
 factory. No credentials are collected or submitted.
+
+Optional production composition registers two local providers without adding
+a parallel acceptance path. `ComfyUIMaterialProductionAdapter` maps confirmed
+tasks to digested API-format workflows on a credential-free loopback server;
+Wan2.2 image-to-video uses an accepted catalog image, one GPU queue slot, and
+explicit model unload plus memory release before terminal success. The
+`HyperFramesMaterialProductionAdapter` compiles short confirmed motion-graphic
+briefs into isolated deterministic HTML projects, validates and renders them
+with pinned `hyperframes@0.7.94`, a local GSAP asset, and a non-system-drive
+runtime/cache root. If both adapters expose generic `video_generation`, the
+confirmed `material_provider_adapter_id` parameter binds the exact adapter;
+specialized tasks use `image_to_video_generation` or
+`motion_graphics_generation`. Provider choice therefore participates in plan,
+registry, job, and idempotency digests and cannot drift after confirmation.
 
 Artifacts first land below an ignored project-scoped staging root. Validation
 rejects traversal and verifies request/task/requirement linkage, size/hash/
@@ -409,8 +424,7 @@ The loopback product state machine adds production start/poll/cancel/retry,
 artifact accept/reject, catalog status, and return-to-Director actions. The
 browser calls only this application service and receives path-redacted views.
 Real online AI adapters, provider credentials, automatic license approval,
-external artifact cleanup, complex AI effects, and more mature atomic editing
-capabilities remain unimplemented.
+external artifact cleanup, and commercial deployment remain unimplemented.
 
 ### Provider-neutral AI packaging plan boundary (O27)
 

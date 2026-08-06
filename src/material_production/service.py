@@ -170,7 +170,10 @@ class MaterialProductionOrchestrator:
                     )
                     latest_status[task.task_id] = "failed"
                     continue
-                adapter = self.adapters.select(task.capability_ids[0])
+                adapter = self.adapters.select(
+                    task.capability_ids[0],
+                    task_spec=task,
+                )
                 if adapter is None:
                     current = self._record_blocked_job(
                         current,

@@ -1,0 +1,32 @@
+{
+  "schema_name": "vistora.hyperframes-provider",
+  "schema_version": "1.0.0",
+  "runtime_root": "../provider-cache/hyperframes",
+  "gsap_path": "../provider-cache/hyperframes/vendor/gsap.min.js",
+  "npx_command": "npx.cmd",
+  "cli_package": "hyperframes@0.7.94",
+  "render_timeout_seconds": 600,
+  "require_non_system_drive": true,
+  "workflows": [
+    {
+      "workflow_id": "kinetic_brief",
+      "capability_ids": [
+        "motion_graphics_generation",
+        "video_generation"
+      ],
+      "default_for_capabilities": [
+        "motion_graphics_generation",
+        "video_generation"
+      ],
+      "template_kind": "kinetic_brief",
+      "render_quality": "standard",
+      "min_duration_seconds": 2,
+      "max_duration_seconds": 12,
+      "allowed_fps": [
+        24,
+        30,
+        60
+      ]
+    }
+  ]
+}

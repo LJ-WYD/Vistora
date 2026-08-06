@@ -309,6 +309,34 @@ selection, the declared default is deterministic. The workflow ID becomes part
 of the prompt identity, so switching models cannot silently reuse another
 workflow's queued job or cached result.
 
+For dynamic video, Vistora supports two deliberately different production
+routes. A configured Wan2.2 API-format ComfyUI workflow exposes
+`image_to_video_generation` (and may also expose generic `video_generation`):
+it requires an accepted image reference, runs in ComfyUI's single local GPU
+slot, reports queue state, and unloads models plus releases memory after every
+terminal job. This is the slower route for generated scene motion. The example
+provider file maps prompt, negative prompt, image, dimensions, duration, FPS,
+and seed onto `wan2.2-i2v.json`; its integer controls use an explicit
+`value_transform` instead of relying on implicit ComfyUI coercion.
+
+The optional `HyperFramesMaterialProductionAdapter` is the fast deterministic
+route for title cards, data cards, charts, overlays, and other motion-graphics
+B-roll. Set `VISTORA_HYPERFRAMES_CONFIG` or place a
+`<project-stem>.hyperframes-provider.json` sidecar beside the timeline. It
+compiles only confirmed task fields into a path-confined HyperFrames project,
+uses a pinned `hyperframes@0.7.94` CLI and local GSAP asset, runs HyperFrames
+checks before render, and returns an MP4 through the same staging, full-decode,
+quality-review, explicit-acceptance, and catalog path as ComfyUI. Runtime jobs
+and npm cache belong under the configured non-system-drive root; no generated
+project or browser cache is written into the Vistora repository.
+
+When adapters overlap on generic `video_generation`, the confirmed task must
+set the provider-neutral `material_provider_adapter_id` reproducibility
+parameter to `hyperframes_local` or `comfyui_local`. HyperFrames-specific tasks
+should request `motion_graphics_generation`; Wan image-to-video tasks should
+request `image_to_video_generation`. This prevents silent provider selection
+drift while still allowing an explicitly reviewed fallback strategy.
+
 Provider results first enter an ignored, project-scoped staging directory.
 Vistora verifies path confinement, task/requirement linkage, file size and
 hash, MIME/container/codecs, duration, dimensions, frame rate, and audio
@@ -340,9 +368,12 @@ attempts, progress,
 failure/recovery status, validated artifacts, explicit acceptance controls,
 catalog records, and “Return to Director.” Deterministic fake image/video/
 audio generation is used only by tests and reference workflows. Local ComfyUI
-is the only production generation Provider currently implemented and remains
-fail-closed until a valid project sidecar is present. Online/paid adapters,
-credentials, mature cost enforcement, and plugin hosting are not implemented.
+and the local pinned HyperFrames renderer are the implemented production
+generation Providers; each remains fail-closed until its valid project sidecar
+and local runtime are present. The installed HeyGen plugin supplies the
+HyperFrames authoring rules, while Vistora invokes the pinned CLI instead of
+pretending that the skill package is a remote generation API. Online/paid
+adapters, credentials, and mature cost enforcement are not implemented.
 
 ## AI packaging task model (O27)
 
