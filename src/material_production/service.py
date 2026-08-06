@@ -160,23 +160,6 @@ class MaterialProductionOrchestrator:
             inputs = {item.task_id: item.input_token for item in request.task_inputs}
             latest_status: dict[str, str] = {}
             for task in confirmed.proposal.plan.tasks:
-                dependency_states = [
-                    latest_status.get(dependency)
-                    for dependency in task.dependency_task_ids
-                ]
-                if any(
-                    status not in {"succeeded"}
-                    for status in dependency_states
-                ):
-                    current = self._record_blocked_job(
-                        current,
-                        run_id=run_id,
-                        task=task,
-                        code="production_dependency_blocked",
-                        message="A production dependency did not succeed.",
-                    )
-                    latest_status[task.task_id] = "failed"
-                    continue
                 if task.status != "planned":
                     current = self._record_blocked_job(
                         current,
@@ -208,6 +191,7 @@ class MaterialProductionOrchestrator:
                     requirement_item_id=task.requirement_item_id,
                     adapter_id=adapter.capability().adapter_id,
                     capability_id=task.capability_ids[0],
+                    task_spec=task,
                     attempt=1,
                     idempotency_key=self._job_key(
                         request,
@@ -217,6 +201,47 @@ class MaterialProductionOrchestrator:
                     input_token=inputs.get(task.task_id),
                     requested_at=self.clock(),
                 )
+                dependency_states = [
+                    latest_status.get(dependency)
+                    for dependency in task.dependency_task_ids
+                ]
+                dependency_failures = {
+                    "failed",
+                    "timed_out",
+                    "cancelled",
+                    "recovery_required",
+                }
+                if any(status in dependency_failures for status in dependency_states):
+                    current = self._record_blocked_job(
+                        current,
+                        run_id=run_id,
+                        task=task,
+                        code="production_dependency_blocked",
+                        message="A production dependency did not succeed.",
+                    )
+                    latest_status[task.task_id] = "failed"
+                    continue
+                if any(status != "succeeded" for status in dependency_states):
+                    update = AdapterJobUpdate(
+                        job_id=job.job_id,
+                        adapter_id=job.adapter_id,
+                        provider_opaque_ref=f"deferred_{job.job_id}",
+                        status="rate_limited",
+                        progress=0,
+                        error_code="production_dependency_pending",
+                        retry_after_seconds=1,
+                        message=(
+                            "The confirmed dependency must finish before this "
+                            "production task can be submitted."
+                        ),
+                        updated_at=self.clock(),
+                    )
+                    current = self._append(
+                        current,
+                        ProductionJobState(request=job, update=update),
+                    )
+                    latest_status[task.task_id] = update.status
+                    continue
                 try:
                     update = adapter.submit(
                         job,
@@ -269,6 +294,7 @@ class MaterialProductionOrchestrator:
             requirement_item_id=task.requirement_item_id,
             adapter_id="unconfigured_adapter",
             capability_id=task.capability_ids[0],
+            task_spec=task,
             attempt=1,
             idempotency_key=f"job_key_{digest_json([run_id, task.task_id])[7:31]}",
             requested_at=self.clock(),
@@ -325,7 +351,31 @@ class MaterialProductionOrchestrator:
                 adapter = self.adapters.adapters.get(
                     state.request.adapter_id
                 )
-                if adapter is None:
+                dependency_states = [
+                    latest_jobs[dependency].update.status
+                    for dependency in tasks[state.request.task_id].dependency_task_ids
+                    if dependency in latest_jobs
+                ]
+                dependency_failures = {
+                    "failed",
+                    "timed_out",
+                    "cancelled",
+                    "recovery_required",
+                }
+                if any(status in dependency_failures for status in dependency_states):
+                    update = AdapterJobUpdate(
+                        job_id=state.request.job_id,
+                        adapter_id=state.request.adapter_id,
+                        provider_opaque_ref=state.update.provider_opaque_ref,
+                        status="failed",
+                        progress=0,
+                        error_code="production_dependency_blocked",
+                        message="A production dependency did not succeed.",
+                        updated_at=self.clock(),
+                    )
+                elif any(status != "succeeded" for status in dependency_states):
+                    continue
+                elif adapter is None:
                     update = state.update.model_copy(
                         update={
                             "status": "recovery_required",
@@ -336,6 +386,11 @@ class MaterialProductionOrchestrator:
                             ),
                             "updated_at": self.clock(),
                         }
+                    )
+                elif state.update.error_code == "production_dependency_pending":
+                    update = adapter.submit(
+                        state.request,
+                        staging_root=self.staging_root,
                     )
                 else:
                     update = adapter.poll(
@@ -351,6 +406,10 @@ class MaterialProductionOrchestrator:
                         request=state.request,
                         update=update,
                     ),
+                )
+                latest_jobs[state.request.task_id] = ProductionJobState(
+                    request=state.request,
+                    update=update,
                 )
                 if update.status == "succeeded":
                     current = self._validate_update(

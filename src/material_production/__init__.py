@@ -19,6 +19,17 @@ from .agent import (
     MaterialProductionAgentReport,
     MaterialProductionAgentRequest,
 )
+from .comfyui import (
+    COMFYUI_PROVIDER_VERSION,
+    ComfyUIHTTPTransport,
+    ComfyUIMaterialProductionAdapter,
+    ComfyUIProviderConfig,
+    ComfyUITransport,
+    ComfyUIWorkflowBinding,
+    ComfyUIWorkflowSpec,
+    load_comfyui_provider_config,
+    provider_config_path,
+)
 from .models import (
     MATERIAL_PRODUCTION_VERSION,
     AdapterCapability,
@@ -63,6 +74,13 @@ __all__ = [
     "ArtifactDecision",
     "ArtifactValidation",
     "ArtifactValidator",
+    "COMFYUI_PROVIDER_VERSION",
+    "ComfyUIHTTPTransport",
+    "ComfyUIMaterialProductionAdapter",
+    "ComfyUIProviderConfig",
+    "ComfyUITransport",
+    "ComfyUIWorkflowBinding",
+    "ComfyUIWorkflowSpec",
     "DeterministicLocalMediaAdapter",
     "DeterministicLocalVideoAdapter",
     "MATERIAL_PRODUCTION_AGENT_VERSION",
@@ -101,4 +119,6 @@ __all__ = [
     "UserMaterialRequestAdapter",
     "build_creation_capability_reference",
     "build_material_production_registry",
+    "load_comfyui_provider_config",
+    "provider_config_path",
 ]

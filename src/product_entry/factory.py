@@ -36,6 +36,7 @@ from material_production import (
     MaterialProductionStore,
     build_creation_capability_reference,
     build_material_production_registry,
+    load_comfyui_provider_config,
 )
 from effect_workflow import build_effect_adapter_registry
 from effect_jobs import EffectJobLifecycleService, EffectJobStore
@@ -190,7 +191,15 @@ def build_current_product_entry(
         project_id=initial.project_id,
     )
 
-    production_adapters = build_material_production_registry()
+    comfyui_config = load_comfyui_provider_config(
+        timeline_manager.PROJECT_FILE
+    )
+    production_adapters = build_material_production_registry(
+        comfyui_config=comfyui_config,
+        asset_resolver=lambda material_id: catalog_store.resolve_uri(
+            f"material://{material_id}"
+        ),
+    )
     effect_adapters = build_effect_adapter_registry()
     effect_job_store = EffectJobStore.for_project_file(
         timeline_manager.PROJECT_FILE

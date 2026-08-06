@@ -1,0 +1,38 @@
+{
+  "schema_name": "vistora.comfyui-provider",
+  "schema_version": "1.0.0",
+  "base_url": "http://127.0.0.1:8188",
+  "request_timeout_seconds": 15,
+  "max_upload_bytes": 2147483648,
+  "max_download_bytes": 4294967296,
+  "workflows": [
+    {
+      "workflow_id": "voice_synthesis_local",
+      "capability_ids": [
+        "voice_synthesis"
+      ],
+      "workflow_path": "workflows/voice-api.json",
+      "output_node_ids": [
+        "6"
+      ],
+      "bindings": [
+        {
+          "node_id": "2",
+          "input_name": "target_text",
+          "source": "prompt_action",
+          "required": true
+        },
+        {
+          "node_id": "3",
+          "input_name": "audio",
+          "source": "reference_asset",
+          "reference_index": 0,
+          "reference_kind": "audio",
+          "required": true
+        }
+      ],
+      "unload_models_after": true,
+      "supports_targeted_interrupt": false
+    }
+  ]
+}

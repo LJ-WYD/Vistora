@@ -7,7 +7,10 @@ from typing import Annotated, Any, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
-from creation_planning import ConfirmedMaterialProductionPlan
+from creation_planning import (
+    ConfirmedMaterialProductionPlan,
+    MaterialProductionTask,
+)
 from director import digest_json
 
 
@@ -180,10 +183,23 @@ class ProductionJobRequest(ProductionModel):
     requirement_item_id: StableId
     adapter_id: StableId
     capability_id: StableId
+    task_spec: MaterialProductionTask | None = None
     attempt: int = Field(ge=1, le=20)
     idempotency_key: StableId
     input_token: StableId | None = None
     requested_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def task_linkage_is_exact(self) -> ProductionJobRequest:
+        if self.task_spec is None:
+            return self
+        if (
+            self.task_spec.task_id != self.task_id
+            or self.task_spec.requirement_item_id != self.requirement_item_id
+            or self.capability_id not in self.task_spec.capability_ids
+        ):
+            raise ValueError("Production task specification crosses job linkage")
+        return self
 
 
 class ArtifactCandidate(ProductionModel):

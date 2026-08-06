@@ -60,7 +60,7 @@ from tests.test_creation_planning import (  # noqa: E402
 )
 
 
-def _production_draft(*, two_tasks=False, manual=False):
+def _production_draft(*, two_tasks=False, manual=False, dependent=False):
     unknown = ProductionEstimate(
         status="unknown",
         rationale="The deterministic fake provider has no billable cost.",
@@ -122,7 +122,13 @@ def _production_draft(*, two_tasks=False, manual=False):
     tasks = (
         task("task_fixture_primary", "requirement_hero"),
         *(
-            (task("task_fixture_secondary", "requirement_voice"),)
+            (
+                task(
+                    "task_fixture_secondary",
+                    "requirement_voice",
+                    ("task_fixture_primary",) if dependent else (),
+                ),
+            )
             if two_tasks
             else ()
         ),
@@ -156,7 +162,13 @@ def _production_registry():
     )
 
 
-def _confirmed_planning(tmp_path, *, two_tasks=False, manual=False):
+def _confirmed_planning(
+    tmp_path,
+    *,
+    two_tasks=False,
+    manual=False,
+    dependent=False,
+):
     deterministic, materials, material_confirmation, planning = (
         planning_fixture.__wrapped__(tmp_path)
     )
@@ -170,6 +182,7 @@ def _confirmed_planning(tmp_path, *, two_tasks=False, manual=False):
             plan_draft=_production_draft(
                 two_tasks=two_tasks,
                 manual=manual,
+                dependent=dependent,
             ),
         ).model_dump(mode="json")
 
@@ -202,10 +215,12 @@ def _orchestrator(
     two_tasks=False,
     fail_task_ids=(),
     corrupt_task_ids=(),
+    dependent=False,
 ):
     deterministic, _, planning, confirmation = _confirmed_planning(
         tmp_path,
         two_tasks=two_tasks,
+        dependent=dependent,
     )
     adapter = DeterministicLocalVideoAdapter(
         clock=deterministic.clock,
@@ -844,6 +859,75 @@ def test_partial_failure_retry_restart_and_rejection_are_auditable(tmp_path):
         reason="Accept the validated retry.",
     )
     assert restarted.view().catalog_revision == 1
+
+
+def test_async_dependency_is_deferred_then_submitted_after_predecessor_succeeds(
+    tmp_path,
+):
+    deterministic, _, planning, confirmation = _confirmed_planning(
+        tmp_path,
+        two_tasks=True,
+        dependent=True,
+    )
+
+    class AsyncAdapter(DeterministicLocalVideoAdapter):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.pending = set()
+
+        def submit(self, request, *, staging_root):
+            if request.job_id not in self.pending:
+                self.pending.add(request.job_id)
+                return AdapterJobUpdate(
+                    job_id=request.job_id,
+                    adapter_id=self.capability().adapter_id,
+                    provider_opaque_ref=f"async_{request.job_id}",
+                    status="submitted",
+                    progress=0.1,
+                    message="The synthetic asynchronous job was submitted.",
+                    updated_at=self.clock(),
+                )
+            return super().submit(request, staging_root=staging_root)
+
+        def poll(self, request, *, provider_opaque_ref, staging_root):
+            return super().submit(request, staging_root=staging_root)
+
+    adapter = AsyncAdapter(clock=deterministic.clock)
+    service = MaterialProductionOrchestrator(
+        creation_planning=planning,
+        adapters=AdapterRegistry((adapter,)),
+        store=MaterialProductionStore(tmp_path / "async.production.json"),
+        catalog=MaterialCatalogStore(
+            tmp_path / "async.catalog.json",
+            media_root=tmp_path / "async_media",
+        ),
+        staging_root=tmp_path / "async_staging",
+        project_id="project_creation_planning",
+        clock=deterministic.clock,
+        id_factory=deterministic.identifier,
+    )
+    request = service.prepare_request(
+        request_id="production_request_async_dependency",
+        production_confirmation_id=confirmation.confirmation_id,
+        requested_by="local_user",
+    )
+    assert service.start(request)["status"] == "running"
+    by_task = {item["task_id"]: item for item in service.view().jobs}
+    assert by_task["task_fixture_primary"]["status"] == "submitted"
+    assert by_task["task_fixture_secondary"]["status"] == "rate_limited"
+    assert by_task["task_fixture_secondary"]["error_code"] == (
+        "production_dependency_pending"
+    )
+
+    assert service.poll(by_task["task_fixture_primary"]["run_id"])["status"] == (
+        "running"
+    )
+    by_task = {item["task_id"]: item for item in service.view().jobs}
+    assert by_task["task_fixture_primary"]["status"] == "succeeded"
+    assert by_task["task_fixture_secondary"]["status"] == "submitted"
+    assert service.poll(by_task["task_fixture_primary"]["run_id"])["status"] == (
+        "awaiting_review"
+    )
 
 
 def test_rejected_valid_artifact_can_be_retried_without_cataloging_it(

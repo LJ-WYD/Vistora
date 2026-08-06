@@ -227,15 +227,29 @@ class UserMaterialRequestAdapter:
 def build_material_production_registry(
     *,
     import_resolver: Callable[[str], Path | None] | None = None,
-    registry_revision: int = 2,
+    comfyui_config=None,
+    asset_resolver: Callable[[str], Path | None] | None = None,
+    registry_revision: int = 3,
 ) -> AdapterRegistry:
-    """Build the only production adapter set; online providers remain absent."""
+    """Build the only production adapter set with optional local ComfyUI."""
 
     resolver = import_resolver or (lambda _token: None)
+    provider_adapters: tuple[MaterialProductionAdapter, ...] = ()
+    provided_capabilities: set[str] = set()
+    if comfyui_config is not None:
+        from .comfyui import ComfyUIMaterialProductionAdapter
+
+        comfyui = ComfyUIMaterialProductionAdapter(
+            comfyui_config,
+            asset_resolver=asset_resolver or (lambda _material_id: None),
+        )
+        provider_adapters = (comfyui,)
+        provided_capabilities.update(comfyui.capability().capability_ids)
     provider_capabilities = tuple(
         capability_id
         for capability_id in sorted(PRODUCTION_CAPABILITY_KINDS)
         if capability_id not in {"manual_import", "user_material_request"}
+        and capability_id not in provided_capabilities
     )
     return AdapterRegistry(
         (
@@ -244,6 +258,7 @@ def build_material_production_registry(
                 configured=import_resolver is not None,
             ),
             UserMaterialRequestAdapter(),
+            *provider_adapters,
             *tuple(
                 UnconfiguredProviderAdapter(capability_id)
                 for capability_id in provider_capabilities

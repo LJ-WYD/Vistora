@@ -281,6 +281,21 @@ resolver. A user-material request is the sole always-local action: it records
 configured/unconfigured state and never pretends that generation, search,
 capture, or import succeeded.
 
+An optional production `ComfyUIMaterialProductionAdapter` connects a local
+loopback ComfyUI server without creating a parallel generation path. Put a
+`<project-stem>.comfyui-provider.json` sidecar beside the active timeline, or
+set `VISTORA_COMFYUI_CONFIG` to an equivalent file. The strict configuration
+maps confirmed task fields and accepted catalog references onto API-format
+workflow nodes; `comfyui-provider.example.json` shows the schema. Only
+credential-free `http://127.0.0.1`, `localhost`, or `::1` endpoints are
+accepted. Workflow files are loaded and digested at composition time, and
+their absolute paths never enter public state. The adapter uses deterministic
+prompt identities, idempotent queue/history recovery, bounded upload/download,
+path-safe staging, explicit poll/retry states, and exact cancellation when the
+server declares targeted interruption support. After every terminal workflow
+it requests both model unload and memory release before reporting success, so
+sequential voice/video jobs do not retain the previous model in VRAM.
+
 Provider results first enter an ignored, project-scoped staging directory.
 Vistora verifies path confinement, task/requirement linkage, file size and
 hash, MIME/container/codecs, duration, dimensions, frame rate, and audio
@@ -311,9 +326,10 @@ The `studio` surface displays capability configuration, the production queue,
 attempts, progress,
 failure/recovery status, validated artifacts, explicit acceptance controls,
 catalog records, and “Return to Director.” Deterministic fake image/video/
-audio generation is used only by tests and reference workflows. Real online AI provider
-adapters, credentials, mature cost enforcement, complex AI packaging/effects,
-and richer editing skills are not implemented.
+audio generation is used only by tests and reference workflows. Local ComfyUI
+is the only production generation Provider currently implemented and remains
+fail-closed until a valid project sidecar is present. Online/paid adapters,
+credentials, mature cost enforcement, and plugin hosting are not implemented.
 
 ## AI packaging task model (O27)
 

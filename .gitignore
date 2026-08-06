@@ -35,6 +35,7 @@ venv/
 *.production.json.lock
 *.material-catalog.json
 *.material-catalog.json.lock
+*.comfyui-provider.json
 *.effect-jobs.json
 *.effect-jobs.json.lock
 *.deliveries.json
