@@ -178,13 +178,19 @@ class DeliveryPlan(DeliveryModel):
             raise ValueError("Delivery preferences reference an absent variant")
         if self.subtitle_track_ids != tuple(sorted(set(self.subtitle_track_ids))):
             raise ValueError("Delivery subtitle tracks must be unique and ordered")
-        requires_sync = any(item.qc_profile.require_subtitle_sync for item in self.variants)
-        if requires_sync and (
+        captioned_delivery = bool(self.subtitle_track_ids)
+        requires_sync = all(item.qc_profile.require_subtitle_sync for item in self.variants)
+        if captioned_delivery and (
             self.subtitle_alignment_report is None
             or self.subtitle_cue_id_prefix is None
-            or not self.subtitle_track_ids
+            or not requires_sync
+            or self.preferences.subtitle_mode != "burn"
         ):
-            raise ValueError("Sync-gated delivery requires aligned captions and their immutable report")
+            raise ValueError(
+                "Captioned delivery requires burned aligned captions, their immutable report, and sync QC on every variant"
+            )
+        if not captioned_delivery and self.subtitle_alignment_report is not None:
+            raise ValueError("Subtitle alignment evidence requires an explicit caption track")
         if self.subtitle_alignment_report is not None and self.subtitle_cue_id_prefix is None:
             raise ValueError("Aligned delivery requires a deterministic cue ID prefix")
         payload = self.model_dump(mode="json", exclude={"plan_digest"})
