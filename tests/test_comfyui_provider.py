@@ -19,8 +19,10 @@ from creation_planning import (
     MaterialProductionTask,
     ProductionEstimate,
     PromptSpecification,
+    ReproducibilityParameter,
 )
 from material_production import (
+    COMFYUI_WORKFLOW_PARAMETER,
     ComfyUIMaterialProductionAdapter,
     ComfyUIProviderConfig,
     ProductionJobRequest,
@@ -221,6 +223,21 @@ def _voice_and_image_config(tmp_path: Path):
     return ComfyUIProviderConfig.model_validate(base)
 
 
+def _multi_image_config(tmp_path: Path):
+    base = _voice_and_image_config(tmp_path).model_dump(mode="json")
+    fast_path = tmp_path / "fast image workflow.json"
+    _image_workflow(fast_path)
+    base["workflows"].append(
+        {
+            **base["workflows"][1],
+            "workflow_id": "image_fast",
+            "workflow_path": str(fast_path),
+            "default_for_capabilities": ["image_generation"],
+        }
+    )
+    return ComfyUIProviderConfig.model_validate(base)
+
+
 def _task():
     unknown = ProductionEstimate(
         status="unknown",
@@ -276,7 +293,7 @@ def _request():
     )
 
 
-def _image_request():
+def _image_request(workflow_id=None):
     unknown = ProductionEstimate(
         status="unknown",
         rationale="Local generation cost is not monetized.",
@@ -301,6 +318,16 @@ def _image_request():
         width=1080,
         height=1920,
         seed=20260806,
+        reproducibility_parameters=(
+            (
+                ReproducibilityParameter(
+                    name=COMFYUI_WORKFLOW_PARAMETER,
+                    value=workflow_id,
+                ),
+            )
+            if workflow_id is not None
+            else ()
+        ),
         batch_id="batch_image_local",
         cost_estimate=unknown,
         time_estimate=unknown,
@@ -368,6 +395,12 @@ def test_loopback_config_is_strict_relative_and_path_private(tmp_path):
     payload["base_url"] = "http://127.0.0.1:8188"
     payload["workflows"].append(dict(payload["workflows"][0]))
     with pytest.raises(ValueError, match="workflow ID"):
+        ComfyUIProviderConfig.model_validate(payload)
+
+    duplicate_capability = json.loads(json.dumps(payload["workflows"][0]))
+    duplicate_capability["workflow_id"] = "voice_second"
+    payload["workflows"] = [payload["workflows"][0], duplicate_capability]
+    with pytest.raises(ValueError, match="exactly one default"):
         ComfyUIProviderConfig.model_validate(payload)
 
     payload["workflows"] = [dict(payload["workflows"][0])]
@@ -454,6 +487,54 @@ def test_image_generation_binds_prompt_dimensions_seed_and_stages_png(tmp_path):
     assert len(result.artifacts) == 1
     assert result.artifacts[0].claimed_mime_type == "image/png"
     assert transport.unload_count == 1
+
+
+def test_multiple_image_workflows_use_default_or_exact_confirmed_selector(tmp_path):
+    transport = FakeTransport()
+    adapter = ComfyUIMaterialProductionAdapter(
+        _multi_image_config(tmp_path),
+        asset_resolver=lambda _material_id: None,
+        transport=transport,
+        clock=lambda: NOW,
+    )
+    default_request = _image_request()
+    default_update = adapter.submit(
+        default_request,
+        staging_root=tmp_path / "staging",
+    )
+    assert default_update.status == "submitted"
+    default_id, default_prompt = transport.submissions[-1]
+    assert default_prompt["90"]["inputs"]["filename_prefix"] == (
+        f"vistora/{default_id}/image_fast"
+    )
+
+    transport.queue_value = {"queue_running": [], "queue_pending": []}
+    selected_request = _image_request("image_local").model_copy(
+        update={
+            "job_id": "production_job_image_selected",
+            "idempotency_key": "job_key_image_selected",
+        }
+    )
+    selected_update = adapter.submit(
+        selected_request,
+        staging_root=tmp_path / "staging",
+    )
+    assert selected_update.status == "submitted"
+    selected_id, selected_prompt = transport.submissions[-1]
+    assert selected_prompt["90"]["inputs"]["filename_prefix"] == (
+        f"vistora/{selected_id}/image_local"
+    )
+    assert selected_id != default_id
+
+    unavailable = _image_request("not_configured").model_copy(
+        update={
+            "job_id": "production_job_image_unavailable",
+            "idempotency_key": "job_key_image_unavailable",
+        }
+    )
+    rejected = adapter.submit(unavailable, staging_root=tmp_path / "staging")
+    assert rejected.status == "failed"
+    assert rejected.error_code == "comfyui_capability_unavailable"
 
 
 def test_poll_stages_only_declared_outputs_then_unloads_models(tmp_path):

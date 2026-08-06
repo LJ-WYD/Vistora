@@ -301,9 +301,13 @@ API-format image workflow. Bind `prompt_text` and, when the workflow supports
 them, `negative_prompt`, `width`, `height`, and `seed`; declare only the real
 save-image node as an output. Generated PNG/WebP/JPEG files follow the same
 staging, decode, quality-review, explicit acceptance, and catalog-ingest path
-as every other produced material. A local configuration may expose one image
-workflow for the provider-neutral capability; alternate model workflows remain
-ordinary ComfyUI presets until deliberately selected in that configuration.
+as every other produced material. A local configuration may expose multiple
+workflows for the same provider-neutral capability when exactly one declares
+`default_for_capabilities`. A confirmed plan can select a non-default workflow
+with the `comfyui_workflow_id` reproducibility parameter; absent that explicit
+selection, the declared default is deterministic. The workflow ID becomes part
+of the prompt identity, so switching models cannot silently reuse another
+workflow's queued job or cached result.
 
 Provider results first enter an ignored, project-scoped staging directory.
 Vistora verifies path confinement, task/requirement linkage, file size and

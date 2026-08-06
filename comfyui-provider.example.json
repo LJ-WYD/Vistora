@@ -75,6 +75,9 @@
           "required": false
         }
       ],
+      "default_for_capabilities": [
+        "image_generation"
+      ],
       "unload_models_after": true,
       "supports_targeted_interrupt": false
     }

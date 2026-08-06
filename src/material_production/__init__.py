@@ -21,6 +21,7 @@ from .agent import (
 )
 from .comfyui import (
     COMFYUI_PROVIDER_VERSION,
+    COMFYUI_WORKFLOW_PARAMETER,
     ComfyUIHTTPTransport,
     ComfyUIMaterialProductionAdapter,
     ComfyUIProviderConfig,
@@ -75,6 +76,7 @@ __all__ = [
     "ArtifactValidation",
     "ArtifactValidator",
     "COMFYUI_PROVIDER_VERSION",
+    "COMFYUI_WORKFLOW_PARAMETER",
     "ComfyUIHTTPTransport",
     "ComfyUIMaterialProductionAdapter",
     "ComfyUIProviderConfig",

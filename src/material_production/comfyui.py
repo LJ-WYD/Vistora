@@ -40,7 +40,8 @@ from .models import (
 )
 
 
-COMFYUI_PROVIDER_VERSION = "1.0.0"
+COMFYUI_PROVIDER_VERSION = "1.1.0"
+COMFYUI_WORKFLOW_PARAMETER = "comfyui_workflow_id"
 _ID = re.compile(r"^[A-Za-z][A-Za-z0-9._:-]{2,127}$")
 _MIME_BY_SUFFIX = {
     ".aac": "audio/aac",
@@ -120,6 +121,7 @@ class ComfyUIWorkflowSpec(ComfyUIModel):
     workflow_path: Path
     output_node_ids: tuple[str, ...] = Field(min_length=1)
     bindings: tuple[ComfyUIWorkflowBinding, ...] = Field(min_length=1)
+    default_for_capabilities: tuple[str, ...] = ()
     unload_models_after: bool = True
     supports_targeted_interrupt: bool = False
 
@@ -132,6 +134,16 @@ class ComfyUIWorkflowSpec(ComfyUIModel):
             raise ValueError("Workflow capabilities must be unique and ordered")
         if len(self.output_node_ids) != len(set(self.output_node_ids)):
             raise ValueError("Workflow output nodes must be unique")
+        if (
+            tuple(sorted(self.default_for_capabilities))
+            != self.default_for_capabilities
+            or len(self.default_for_capabilities)
+            != len(set(self.default_for_capabilities))
+            or not set(self.default_for_capabilities).issubset(self.capability_ids)
+        ):
+            raise ValueError(
+                "Default workflow capabilities must be unique, ordered, and declared"
+            )
         targets = [(item.node_id, item.input_name) for item in self.bindings]
         if len(targets) != len(set(targets)):
             raise ValueError("Workflow binding targets must be unique")
@@ -168,13 +180,26 @@ class ComfyUIProviderConfig(ComfyUIModel):
             for workflow in self.workflows
             for capability in workflow.capability_ids
         ]
-        if len(capabilities) != len(set(capabilities)):
-            raise ValueError("A ComfyUI capability can map to only one workflow")
         unsupported = set(capabilities) - set(PRODUCTION_CAPABILITY_KINDS)
         if unsupported or set(capabilities).intersection(
             {"manual_import", "user_material_request"}
         ):
             raise ValueError("ComfyUI workflow declares an unsupported capability")
+        for capability in set(capabilities):
+            choices = [
+                workflow
+                for workflow in self.workflows
+                if capability in workflow.capability_ids
+            ]
+            defaults = [
+                workflow
+                for workflow in choices
+                if capability in workflow.default_for_capabilities
+            ]
+            if len(choices) > 1 and len(defaults) != 1:
+                raise ValueError(
+                    "Multiple ComfyUI workflows require exactly one default"
+                )
         return self
 
 
@@ -428,7 +453,10 @@ class ComfyUIMaterialProductionAdapter(MaterialProductionAdapter):
         self.asset_resolver = asset_resolver
         self.transport = transport or ComfyUIHTTPTransport(config)
         self.clock = clock
-        self._workflows: dict[str, tuple[ComfyUIWorkflowSpec, dict[str, Any]]] = {}
+        self._workflows: dict[
+            str, dict[str, tuple[ComfyUIWorkflowSpec, dict[str, Any]]]
+        ] = {}
+        self._default_workflows: dict[str, str] = {}
         workflow_digests = []
         for spec in config.workflows:
             workflow = self._load_workflow(spec)
@@ -439,7 +467,18 @@ class ComfyUIMaterialProductionAdapter(MaterialProductionAdapter):
             workflow_digest = digest_json({"spec": public_spec, "workflow": workflow})
             workflow_digests.append(workflow_digest)
             for capability_id in spec.capability_ids:
-                self._workflows[capability_id] = (spec, workflow)
+                self._workflows.setdefault(capability_id, {})[spec.workflow_id] = (
+                    spec,
+                    workflow,
+                )
+                if capability_id in spec.default_for_capabilities:
+                    self._default_workflows[capability_id] = spec.workflow_id
+        for capability_id, choices in self._workflows.items():
+            if len(choices) == 1:
+                self._default_workflows.setdefault(
+                    capability_id,
+                    next(iter(choices)),
+                )
         self.workflow_digest = digest_json(workflow_digests)
         self._unloaded: set[str] = set()
 
@@ -490,9 +529,33 @@ class ComfyUIMaterialProductionAdapter(MaterialProductionAdapter):
             result_schema_digest=_schema_digest(AdapterJobUpdate),
         )
 
-    @staticmethod
-    def _prompt_id(request: ProductionJobRequest) -> str:
-        return str(uuid.uuid5(uuid.NAMESPACE_URL, "vistora:" + request.idempotency_key))
+    def _workflow_choice(
+        self,
+        request: ProductionJobRequest,
+    ) -> tuple[ComfyUIWorkflowSpec, dict[str, Any]]:
+        choices = self._workflows.get(request.capability_id)
+        if not choices:
+            raise ValueError("ComfyUI capability is unavailable")
+        requested = None
+        if request.task_spec is not None:
+            parameters = {
+                item.name: item.value
+                for item in request.task_spec.reproducibility_parameters
+            }
+            requested = parameters.get(COMFYUI_WORKFLOW_PARAMETER)
+        if requested is not None and not isinstance(requested, str):
+            raise ValueError("ComfyUI workflow selector must be a workflow ID")
+        workflow_id = requested or self._default_workflows.get(request.capability_id)
+        selected = choices.get(workflow_id or "")
+        if selected is None:
+            raise ValueError("Requested ComfyUI workflow is unavailable")
+        return selected
+
+    def _prompt_id(self, request: ProductionJobRequest, workflow_id: str) -> str:
+        identity = f"vistora:{request.idempotency_key}"
+        if len(self._workflows.get(request.capability_id, {})) > 1:
+            identity += f":{workflow_id}"
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, identity))
 
     @staticmethod
     def _provider_ref(prompt_id: str) -> str:
@@ -583,9 +646,11 @@ class ComfyUIMaterialProductionAdapter(MaterialProductionAdapter):
         request: ProductionJobRequest,
         spec: ComfyUIWorkflowSpec,
         workflow: dict[str, Any],
+        *,
+        prompt_id: str,
     ) -> dict[str, Any]:
         prepared = copy.deepcopy(workflow)
-        subfolder = f"vistora/{self._prompt_id(request)}"
+        subfolder = f"vistora/{prompt_id}"
         for binding in spec.bindings:
             value = self._binding_value(
                 binding,
@@ -594,7 +659,7 @@ class ComfyUIMaterialProductionAdapter(MaterialProductionAdapter):
             )
             if value is not None:
                 prepared[binding.node_id]["inputs"][binding.input_name] = value
-        prefix = f"vistora/{self._prompt_id(request)}/{spec.workflow_id}"
+        prefix = f"vistora/{prompt_id}/{spec.workflow_id}"
         for node_id in spec.output_node_ids:
             inputs = prepared[node_id]["inputs"]
             if "filename_prefix" in inputs:
@@ -662,8 +727,16 @@ class ComfyUIMaterialProductionAdapter(MaterialProductionAdapter):
         )
 
     def submit(self, request, *, staging_root):
-        spec_and_workflow = self._workflows.get(request.capability_id)
-        prompt_id = self._prompt_id(request)
+        try:
+            spec_and_workflow = self._workflow_choice(request)
+        except ValueError:
+            spec_and_workflow = None
+        workflow_id = (
+            spec_and_workflow[0].workflow_id
+            if spec_and_workflow is not None
+            else "unavailable"
+        )
+        prompt_id = self._prompt_id(request, workflow_id)
         provider_ref = self._provider_ref(prompt_id)
         if spec_and_workflow is None:
             return self._error(
@@ -699,7 +772,12 @@ class ComfyUIMaterialProductionAdapter(MaterialProductionAdapter):
                 )
             if self._queue_has_work(queue):
                 return self._queue_wait(request, provider_ref=provider_ref)
-            prompt = self._prepare_prompt(request, spec, workflow)
+            prompt = self._prepare_prompt(
+                request,
+                spec,
+                workflow,
+                prompt_id=prompt_id,
+            )
         except (OSError, RuntimeError, ValueError):
             return self._error(
                 request,
@@ -884,11 +962,11 @@ class ComfyUIMaterialProductionAdapter(MaterialProductionAdapter):
 
     def poll(self, request, *, provider_opaque_ref, staging_root):
         try:
+            spec, _ = self._workflow_choice(request)
             prompt_id = self._prompt_from_ref(provider_opaque_ref)
-            expected = self._prompt_id(request)
+            expected = self._prompt_id(request, spec.workflow_id)
             if prompt_id != expected:
                 raise ValueError("ComfyUI prompt identity mismatched")
-            spec, _ = self._workflows[request.capability_id]
             history = self.transport.history(prompt_id)
             if prompt_id in history:
                 return self._poll_history(
@@ -928,10 +1006,10 @@ class ComfyUIMaterialProductionAdapter(MaterialProductionAdapter):
 
     def cancel(self, request, *, provider_opaque_ref):
         try:
+            spec, _ = self._workflow_choice(request)
             prompt_id = self._prompt_from_ref(provider_opaque_ref)
-            if prompt_id != self._prompt_id(request):
+            if prompt_id != self._prompt_id(request, spec.workflow_id):
                 raise ValueError("ComfyUI prompt identity mismatched")
-            spec, _ = self._workflows[request.capability_id]
             history = self.transport.history(prompt_id)
             if prompt_id in history:
                 try:
@@ -979,6 +1057,7 @@ class ComfyUIMaterialProductionAdapter(MaterialProductionAdapter):
 
 __all__ = [
     "COMFYUI_PROVIDER_VERSION",
+    "COMFYUI_WORKFLOW_PARAMETER",
     "ComfyUIHTTPTransport",
     "ComfyUIMaterialProductionAdapter",
     "ComfyUIProviderConfig",
