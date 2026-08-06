@@ -296,6 +296,15 @@ server declares targeted interruption support. After every terminal workflow
 it requests both model unload and memory release before reporting success, so
 sequential voice/video jobs do not retain the previous model in VRAM.
 
+The same provider can expose confirmed `image_generation` tasks through an
+API-format image workflow. Bind `prompt_text` and, when the workflow supports
+them, `negative_prompt`, `width`, `height`, and `seed`; declare only the real
+save-image node as an output. Generated PNG/WebP/JPEG files follow the same
+staging, decode, quality-review, explicit acceptance, and catalog-ingest path
+as every other produced material. A local configuration may expose one image
+workflow for the provider-neutral capability; alternate model workflows remain
+ordinary ComfyUI presets until deliberately selected in that configuration.
+
 Provider results first enter an ignored, project-scoped staging directory.
 Vistora verifies path confinement, task/requirement linkage, file size and
 hash, MIME/container/codecs, duration, dimensions, frame rate, and audio

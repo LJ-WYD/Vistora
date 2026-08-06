@@ -33,6 +33,50 @@
       ],
       "unload_models_after": true,
       "supports_targeted_interrupt": false
+    },
+    {
+      "workflow_id": "image_generation_local",
+      "capability_ids": [
+        "image_generation"
+      ],
+      "workflow_path": "workflows/image-api.json",
+      "output_node_ids": [
+        "90"
+      ],
+      "bindings": [
+        {
+          "node_id": "105",
+          "input_name": "text",
+          "source": "prompt_text",
+          "required": true
+        },
+        {
+          "node_id": "108",
+          "input_name": "text",
+          "source": "negative_prompt",
+          "required": false
+        },
+        {
+          "node_id": "107",
+          "input_name": "width",
+          "source": "width",
+          "required": false
+        },
+        {
+          "node_id": "107",
+          "input_name": "height",
+          "source": "height",
+          "required": false
+        },
+        {
+          "node_id": "111",
+          "input_name": "seed",
+          "source": "seed",
+          "required": false
+        }
+      ],
+      "unload_models_after": true,
+      "supports_targeted_interrupt": false
     }
   ]
 }
