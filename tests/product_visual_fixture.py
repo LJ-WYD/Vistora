@@ -485,6 +485,25 @@ def _view(state: str) -> ProductEntryView:
                             "fps": 30.0,
                             "has_audio": False,
                             "issues": [],
+                            "source_provenance": {
+                                "schema_name": "vistora.material-production.artifact-source-provenance",
+                                "schema_version": "1.0.0",
+                                "provider_id": "pexels",
+                                "provider_asset_id": "314159",
+                                "source_page_url": "https://www.pexels.com/video/market-314159/",
+                                "creator_name": "Editorial Creator",
+                                "creator_url": "https://www.pexels.com/@editorial-creator/",
+                                "license_name": "Pexels License",
+                                "license_url": "https://www.pexels.com/license/",
+                                "attribution_required": False,
+                                "attribution_text": None,
+                                "usage_restrictions": [
+                                    "Do not imply endorsement by depicted people or brands."
+                                ],
+                                "source_file_url_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                                "retrieved_at": "2026-08-07T04:00:00Z",
+                                "provenance_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                            },
                             "decision": (
                                 "accepted"
                                 if state
@@ -517,14 +536,33 @@ def _view(state: str) -> ProductEntryView:
                             "height": 1920,
                             "fps": 30.0,
                             "has_audio": False,
-                            "origin_kind": "generated",
+                            "origin_kind": "library",
                             "requirement_item_id": "material_need_visual",
                             "production_task_id": "production_task_visual",
                             "production_run_id": "production_run_visual",
-                            "license_status": "unknown",
+                            "license_status": "provider_terms",
                             "usage_restrictions": [
-                                "Verify usage rights before publishing."
+                                "Do not imply endorsement by depicted people or brands."
                             ],
+                            "source_provenance": {
+                                "schema_name": "vistora.material-production.artifact-source-provenance",
+                                "schema_version": "1.0.0",
+                                "provider_id": "pexels",
+                                "provider_asset_id": "314159",
+                                "source_page_url": "https://www.pexels.com/video/market-314159/",
+                                "creator_name": "Editorial Creator",
+                                "creator_url": "https://www.pexels.com/@editorial-creator/",
+                                "license_name": "Pexels License",
+                                "license_url": "https://www.pexels.com/license/",
+                                "attribution_required": False,
+                                "attribution_text": None,
+                                "usage_restrictions": [
+                                    "Do not imply endorsement by depicted people or brands."
+                                ],
+                                "source_file_url_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                                "retrieved_at": "2026-08-07T04:00:00Z",
+                                "provenance_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                            },
                             "derivatives": [
                                 {
                                     "derivative_id": "derivative_normalized_visual",

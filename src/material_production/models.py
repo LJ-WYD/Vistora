@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Annotated, Any, Literal
+from urllib.parse import urlparse
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
@@ -22,6 +23,20 @@ StableId = Annotated[
 ]
 Digest = Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
 GENESIS_DIGEST = "sha256:" + ("0" * 64)
+
+
+def _without_absent_provenance(value):
+    """Reconstruct pre-provider hashes without weakening non-null evidence."""
+
+    if isinstance(value, dict):
+        return {
+            key: _without_absent_provenance(item)
+            for key, item in value.items()
+            if not (key == "source_provenance" and item is None)
+        }
+    if isinstance(value, list):
+        return [_without_absent_provenance(item) for item in value]
+    return value
 
 
 class ProductionModel(BaseModel):
@@ -202,6 +217,49 @@ class ProductionJobRequest(ProductionModel):
         return self
 
 
+class ArtifactSourceProvenance(ProductionModel):
+    """Browser-safe origin and licence evidence for a provider artifact."""
+
+    schema_name: Literal[
+        "vistora.material-production.artifact-source-provenance"
+    ] = "vistora.material-production.artifact-source-provenance"
+    provider_id: StableId
+    provider_asset_id: str = Field(min_length=1, max_length=128)
+    source_page_url: str = Field(min_length=8, max_length=2048)
+    creator_name: str | None = Field(default=None, min_length=1, max_length=256)
+    creator_url: str | None = Field(default=None, min_length=8, max_length=2048)
+    license_name: str = Field(min_length=1, max_length=128)
+    license_url: str = Field(min_length=8, max_length=2048)
+    attribution_required: bool
+    attribution_text: str | None = Field(default=None, min_length=1, max_length=512)
+    usage_restrictions: tuple[str, ...] = Field(min_length=1)
+    source_file_url_digest: Digest
+    retrieved_at: AwareDatetime
+    provenance_digest: Digest
+
+    @model_validator(mode="after")
+    def provenance_is_safe_and_exact(self) -> "ArtifactSourceProvenance":
+        for value in (self.source_page_url, self.license_url, self.creator_url):
+            if value is None:
+                continue
+            parsed = urlparse(value)
+            if (
+                parsed.scheme != "https"
+                or not parsed.hostname
+                or parsed.username is not None
+                or parsed.password is not None
+            ):
+                raise ValueError("Provider provenance requires credential-free HTTPS URLs")
+        if self.attribution_required != (self.attribution_text is not None):
+            raise ValueError("Required attribution must include exact attribution text")
+        if len(self.usage_restrictions) != len(set(self.usage_restrictions)):
+            raise ValueError("Provider usage restrictions must be unique")
+        payload = self.model_dump(mode="json", exclude={"provenance_digest"})
+        if self.provenance_digest != digest_json(payload):
+            raise ValueError("Provider provenance digest mismatched")
+        return self
+
+
 class ArtifactCandidate(ProductionModel):
     schema_name: Literal["vistora.material-production.artifact-candidate"] = (
         "vistora.material-production.artifact-candidate"
@@ -212,6 +270,7 @@ class ArtifactCandidate(ProductionModel):
     requirement_item_id: StableId
     staging_relative_path: str = Field(min_length=1)
     claimed_mime_type: str = Field(min_length=3)
+    source_provenance: ArtifactSourceProvenance | None = None
 
     @model_validator(mode="after")
     def relative_path_only(self) -> ArtifactCandidate:
@@ -502,6 +561,7 @@ class MaterialCatalogEntry(ProductionModel):
         "unknown",
     ]
     usage_restrictions: tuple[str, ...] = ()
+    source_provenance: ArtifactSourceProvenance | None = None
     cost_status: Literal["known", "unknown"]
     cost_value: float | None = Field(default=None, ge=0)
     cost_currency: str | None = Field(default=None, min_length=3)
@@ -530,6 +590,11 @@ class MaterialCatalogEntry(ProductionModel):
             self.cost_value is not None or self.cost_currency is not None
         ):
             raise ValueError("Unknown catalog cost cannot invent a value")
+        if self.source_provenance is not None:
+            if self.origin_kind != "library" or self.license_status != "provider_terms":
+                raise ValueError("Provider provenance is reserved for licensed library media")
+            if self.usage_restrictions != self.source_provenance.usage_restrictions:
+                raise ValueError("Catalog restrictions must match provider provenance")
         enriched = bool(
             self.derivatives or self.analysis or self.tags or self.quality_report
         )
@@ -585,9 +650,10 @@ class MaterialCatalogDocument(ProductionModel):
         ids = [entry.material_id for entry in self.entries]
         if len(ids) != len(set(ids)):
             raise ValueError("Catalog material ID is duplicated")
-        if self.integrity_digest != digest_json(
-            [entry.model_dump(mode="json") for entry in self.entries]
-        ):
+        entries = [entry.model_dump(mode="json") for entry in self.entries]
+        current = digest_json(entries)
+        legacy = digest_json(_without_absent_provenance(entries))
+        if self.integrity_digest not in {current, legacy}:
             raise ValueError("Catalog integrity digest mismatched")
         return self
 
@@ -672,7 +738,9 @@ class MaterialProductionEvent(ProductionModel):
     @model_validator(mode="after")
     def event_digest_is_exact(self) -> MaterialProductionEvent:
         payload = self.model_dump(mode="json", exclude={"event_digest"})
-        if self.event_digest != digest_json(payload):
+        current = digest_json(payload)
+        legacy = digest_json(_without_absent_provenance(payload))
+        if self.event_digest not in {current, legacy}:
             raise ValueError("Material-production event digest mismatched")
         return self
 

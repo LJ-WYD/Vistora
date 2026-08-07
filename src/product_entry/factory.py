@@ -38,6 +38,7 @@ from material_production import (
     build_material_production_registry,
     load_comfyui_provider_config,
     load_hyperframes_provider_config,
+    load_stock_video_provider_config,
 )
 from effect_workflow import build_effect_adapter_registry
 from effect_jobs import EffectJobLifecycleService, EffectJobStore
@@ -198,9 +199,13 @@ def build_current_product_entry(
     hyperframes_config = load_hyperframes_provider_config(
         timeline_manager.PROJECT_FILE
     )
+    stock_video_config = load_stock_video_provider_config(
+        timeline_manager.PROJECT_FILE
+    )
     production_adapters = build_material_production_registry(
         comfyui_config=comfyui_config,
         hyperframes_config=hyperframes_config,
+        stock_video_config=stock_video_config,
         asset_resolver=lambda material_id: catalog_store.resolve_uri(
             f"material://{material_id}"
         ),

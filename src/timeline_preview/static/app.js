@@ -588,7 +588,29 @@ function workflowEvent(title, status, details) {
     textElement("span", `workflow-event-status ${status}`, status),
   );
   for (const detail of details) {
-    article.append(textElement("small", "", detail));
+    if (typeof detail === "object" && detail?.href && detail?.label) {
+      try {
+        const url = new URL(detail.href);
+        const allowedHosts = new Set([
+          "pexels.com",
+          "www.pexels.com",
+          "pixabay.com",
+          "www.pixabay.com",
+        ]);
+        if (url.protocol !== "https:" || !allowedHosts.has(url.hostname)) {
+          throw new Error("Provider link is not allowlisted");
+        }
+        const link = textElement("a", "workflow-provider-link", detail.label);
+        link.href = url.href;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        article.append(link);
+      } catch (_error) {
+        article.append(textElement("small", "", detail.label));
+      }
+    } else {
+      article.append(textElement("small", "", detail));
+    }
   }
   return article;
 }
@@ -921,6 +943,7 @@ function renderProduct() {
       );
     }
     for (const artifact of production.artifacts || []) {
+      const provenance = artifact.source_provenance;
       ui.productSummary.append(
         workflowEvent(
           `Artifact ${artifact.artifact_id}`,
@@ -929,12 +952,30 @@ function renderProduct() {
             `${artifact.mime_type || "unknown"} / ${artifact.size_bytes || 0} bytes`,
             `${artifact.width || "?"}x${artifact.height || "?"} / ${artifact.duration_seconds || "?"}s`,
             ...(artifact.issues || []),
+            ...(provenance
+              ? [
+                  `Source ${provenance.provider_id} / asset ${provenance.provider_asset_id}`,
+                  {
+                    label: `View original on ${provenance.provider_id}`,
+                    href: provenance.source_page_url,
+                  },
+                  ...(provenance.creator_name
+                    ? [`Creator ${provenance.creator_name}`]
+                    : []),
+                  {
+                    label: provenance.license_name,
+                    href: provenance.license_url,
+                  },
+                  ...(provenance.usage_restrictions || []),
+                ]
+              : []),
             "Acceptance is required before this becomes Director-observable.",
           ],
         ),
       );
     }
     for (const material of production.catalog || []) {
+      const provenance = material.source_provenance;
       ui.productSummary.append(
         workflowEvent(
           `Catalog material ${material.material_id}`,
@@ -943,6 +984,19 @@ function renderProduct() {
             `${material.media_kind} / ${material.display_name}`,
             `Origin ${material.origin_kind} / requirement ${material.requirement_item_id}`,
             `License ${material.license_status}`,
+            ...(provenance
+              ? [
+                  `Source ${provenance.provider_id} / asset ${provenance.provider_asset_id}`,
+                  {
+                    label: `View original on ${provenance.provider_id}`,
+                    href: provenance.source_page_url,
+                  },
+                  {
+                    label: provenance.license_name,
+                    href: provenance.license_url,
+                  },
+                ]
+              : []),
             ...(material.analysis
               ? [
                   `Analysis ${material.analysis.orientation} · ${material.analysis.width || "?"}x${material.analysis.height || "?"} · ${material.analysis.duration_seconds || "?"}s`,

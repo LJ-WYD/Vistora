@@ -392,6 +392,20 @@ specialized tasks use `image_to_video_generation` or
 `motion_graphics_generation`. Provider choice therefore participates in plan,
 registry, job, and idempotency digests and cannot drift after confirmation.
 
+The same production composition can optionally register the licensed
+`StockVideoMaterialProductionAdapter` for real-world B-roll. It searches
+Pexels first and can fall back to Pixabay, but only for an exact confirmed
+`asset_search` task carrying the stock query and provider binding. API keys
+are read from process environment variables and never enter contracts,
+schemas, caches, logs, or browser views. Search and download hosts are
+allowlisted, responses and files are bounded, metadata caching is limited to
+24 hours, and the default cache is project-relative with a Windows
+system-drive production block. Every staged candidate carries digest-bound
+provider asset, source page, creator, licence, attribution, and usage
+restriction evidence. Human acceptance then uses the same ingest, catalog,
+Director review, independent confirmation, Editing Agent, and atomic timeline
+path as generated media; provider search or download never mutates a timeline.
+
 Artifacts first land below an ignored project-scoped staging root. Validation
 rejects traversal and verifies request/task/requirement linkage, size/hash/
 MIME, container, codecs, duration, dimensions, frame rate, and audio metadata.

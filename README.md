@@ -16,6 +16,11 @@ The architecture keeps creative planning separate from execution: the production
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the implemented runtime and responsibility contracts. The exact, user-approved O1–O32 definitions and evidence-based status are governed by [ROADMAP.md](ROADMAP.md) and [roadmap-status.json](roadmap-status.json); internal implementation batches never redefine or renumber those original items.
 
+Licensed supporting footage can be acquired through the optional Pexels-first,
+Pixabay-fallback provider described in
+[docs/stock-video-provider.md](docs/stock-video-provider.md). Candidates keep
+source and licence evidence and still require explicit human acceptance.
+
 ## Requirements
 
 - Python 3.10 or newer

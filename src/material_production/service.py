@@ -705,6 +705,13 @@ class MaterialProductionOrchestrator:
             "library_search": "library",
             "manual": "manual_import",
         }[task.production_method]
+        provenance = artifact.source_provenance
+        license_status = "provider_terms" if provenance is not None else "unknown"
+        usage_restrictions = (
+            provenance.usage_restrictions
+            if provenance is not None
+            else ("User must verify license and usage rights before publishing.",)
+        )
         return MaterialCatalogEntry(
             material_id=material_id,
             display_name=f"{task.title}{extension}",
@@ -732,10 +739,9 @@ class MaterialProductionOrchestrator:
             production_job_id=validation.job_id,
             adapter_id=job.request.adapter_id,
             origin_kind=origin,
-            license_status="unknown",
-            usage_restrictions=(
-                "User must verify license and usage rights before publishing.",
-            ),
+            license_status=license_status,
+            usage_restrictions=usage_restrictions,
+            source_provenance=provenance,
             cost_status=job.update.cost_status,
             cost_value=job.update.cost_value,
             cost_currency=job.update.cost_currency,
@@ -763,12 +769,15 @@ class MaterialProductionOrchestrator:
         latest_jobs = {}
         validations = {}
         decisions = {}
+        artifact_candidates = {}
         for event in ledger.events:
             record = event.record
             if isinstance(record, ProductionRunState):
                 latest_runs[record.run_id] = record
             elif isinstance(record, ProductionJobState):
                 latest_jobs[record.request.job_id] = record
+                for artifact in record.update.artifacts:
+                    artifact_candidates[artifact.artifact_id] = artifact
             elif isinstance(record, ProductionValidationState):
                 validations[record.validation.artifact_id] = (
                     record.validation
@@ -821,6 +830,14 @@ class MaterialProductionOrchestrator:
                 "fps": validation.fps,
                 "has_audio": validation.has_audio,
                 "issues": validation.issues,
+                "source_provenance": (
+                    artifact_candidates[artifact_id].source_provenance.model_dump(
+                        mode="json"
+                    )
+                    if artifact_id in artifact_candidates
+                    and artifact_candidates[artifact_id].source_provenance is not None
+                    else None
+                ),
                 "decision": (
                     decisions[artifact_id].decision
                     if artifact_id in decisions
@@ -858,6 +875,11 @@ class MaterialProductionOrchestrator:
                     "production_run_id": entry.production_run_id,
                     "license_status": entry.license_status,
                     "usage_restrictions": entry.usage_restrictions,
+                    "source_provenance": (
+                        entry.source_provenance.model_dump(mode="json")
+                        if entry.source_provenance is not None
+                        else None
+                    ),
                     "derivatives": tuple(
                         {
                             "derivative_id": item.derivative_id,

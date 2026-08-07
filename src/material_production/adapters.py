@@ -251,8 +251,9 @@ def build_material_production_registry(
     import_resolver: Callable[[str], Path | None] | None = None,
     comfyui_config=None,
     hyperframes_config=None,
+    stock_video_config=None,
     asset_resolver: Callable[[str], Path | None] | None = None,
-    registry_revision: int = 4,
+    registry_revision: int = 5,
 ) -> AdapterRegistry:
     """Build the production adapter set with optional local providers."""
 
@@ -277,6 +278,12 @@ def build_material_production_registry(
         )
         provider_adapters = (*provider_adapters, hyperframes)
         provided_capabilities.update(hyperframes.capability().capability_ids)
+    if stock_video_config is not None:
+        from .stock_video import StockVideoMaterialProductionAdapter
+
+        stock_video = StockVideoMaterialProductionAdapter(stock_video_config)
+        provider_adapters = (*provider_adapters, stock_video)
+        provided_capabilities.update(stock_video.capability().capability_ids)
     provider_capabilities = tuple(
         capability_id
         for capability_id in sorted(PRODUCTION_CAPABILITY_KINDS)

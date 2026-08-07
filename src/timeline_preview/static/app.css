@@ -1633,6 +1633,21 @@ button.track-label-row:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.workflow-provider-link {
+  grid-column: 1 / -1;
+  color: var(--accent);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+  text-decoration: underline;
+  text-decoration-color: rgba(84, 240, 255, 0.45);
+  text-underline-offset: 3px;
+}
+
+.workflow-provider-link:hover,
+.workflow-provider-link:focus-visible {
+  color: var(--text);
+}
+
 .workflow-event-status {
   align-self: start;
   color: var(--accent);
@@ -1686,13 +1701,15 @@ button.track-label-row:focus-visible {
   }
 
   .workflow-event-status,
-  .workflow-event small {
+  .workflow-event small,
+  .workflow-provider-link {
     grid-column: 1;
   }
 
   .workflow-event h3,
   .workflow-event-status,
   .workflow-event small,
+  .workflow-provider-link,
   .review-boundary {
     min-width: 0;
     overflow-wrap: anywhere;

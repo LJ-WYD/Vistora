@@ -727,7 +727,7 @@ def test_registry_replaces_only_configured_capabilities_without_path_leaks(tmp_p
     )
     projected = build_creation_capability_reference(registry)
     by_id = {item.capability_id: item for item in projected.capabilities}
-    assert registry.reference().registry_revision == 4
+    assert registry.reference().registry_revision == 5
     assert by_id["voice_synthesis"].availability == "available"
     assert by_id["video_generation"].availability == "unconfigured"
     serialized = registry.reference().model_dump_json()
